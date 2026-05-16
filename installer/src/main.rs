@@ -7,7 +7,9 @@ fn main() {
 #[cfg(windows)]
 fn main() {
     std::panic::set_hook(Box::new(|panic_info| {
-        let _ = windows_installer::write_emergency_log(&format!("Unexpected setup crash: {panic_info}"));
+        let _ = windows_installer::write_emergency_log(&format!(
+            "Unexpected setup crash: {panic_info}"
+        ));
     }));
 
     if let Err(error) = windows_installer::run() {
@@ -34,12 +36,12 @@ fn pause() {
 
 #[cfg(windows)]
 mod windows_installer {
+    use chrono::Local;
     use std::env;
     use std::error::Error;
     use std::fs;
     use std::io::Write;
     use std::path::{Path, PathBuf};
-    use chrono::Local;
 
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -51,40 +53,7 @@ mod windows_installer {
         bytes: &'static [u8],
     }
 
-    const FILES: &[FileEntry] = &[
-        FileEntry {
-            relative_path: "index.html",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/index.html"),
-        },
-        FileEntry {
-            relative_path: "INSTALL.txt",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/INSTALL.txt"),
-        },
-        FileEntry {
-            relative_path: "CSXS/manifest.xml",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/CSXS/manifest.xml"),
-        },
-        FileEntry {
-            relative_path: "css/styles.css",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/css/styles.css"),
-        },
-        FileEntry {
-            relative_path: "js/CSInterface.js",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/js/CSInterface.js"),
-        },
-        FileEntry {
-            relative_path: "js/main.js",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/js/main.js"),
-        },
-        FileEntry {
-            relative_path: "jsx/host.jsx",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/jsx/host.jsx"),
-        },
-        FileEntry {
-            relative_path: "bin/beat_analyzer.exe",
-            bytes: include_bytes!("../../dist/com.beatdetect.spikemarker/bin/beat_analyzer.exe"),
-        },
-    ];
+    include!(concat!(env!("OUT_DIR"), "/generated_files.rs"));
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let mut log = InstallLog::new()?;
@@ -110,7 +79,9 @@ mod windows_installer {
         } else {
             println!("Installed files correctly, but registry setup reported warnings.");
             println!("If the panel does not appear, run this as your Windows user:");
-            println!(r#"reg add "HKCU\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f"#);
+            println!(
+                r#"reg add "HKCU\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f"#
+            );
         }
         println!("Install log:");
         println!("{}", log.path.display());

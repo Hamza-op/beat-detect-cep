@@ -5,5 +5,7 @@ BeatDetectSetup.exe
 BeatDetect-CEP-Windows.zip
 bin/beat_analyzer.exe
 bin/beat_analyzer
+bin/essentia_beats.exe
+bin/essentia_beats
 *.log
-o-rangrez-*.txt
+

@@ -194,6 +194,180 @@
     });
   }
 
+  function getEssentiaExePath() {
+    var req = getNodeRequire();
+    if (!req) {
+      return "";
+    }
+    var path = req("path");
+    var fs = req("fs");
+    var root = getExtensionRoot();
+    var isWindows = req("os").platform() === "win32";
+    var exeName = isWindows ? "essentia_beats.exe" : "essentia_beats";
+    var exePath = path.join(root, "bin", exeName);
+    return fs.existsSync(exePath) ? exePath : "";
+  }
+
+  function describeEssentiaAvailability() {
+    if (isBrowserPreview()) {
+      return "Essentia: skipped in browser preview";
+    }
+    if (!getNodeRequire()) {
+      return "Essentia: optional, CEP Node unavailable";
+    }
+    if (getEssentiaExePath()) {
+      return "Essentia: bundled runner available";
+    }
+    return "Essentia: not bundled";
+  }
+
+  function runEssentiaAnalyzer(mediaPath, focus) {
+    if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
+      return Promise.resolve({ events: [], used: false, reason: "preview" });
+    }
+
+    var req = getNodeRequire();
+    if (!req) {
+      return Promise.resolve({ events: [], used: false, reason: "node unavailable" });
+    }
+
+    var childProcess = req("child_process");
+    var exePath = getEssentiaExePath();
+    if (exePath) {
+      return execEssentiaCommand(childProcess, exePath, ["--mode", focus || "music", mediaPath], "native runner", focus);
+    }
+
+    return Promise.resolve({ events: [], used: false, reason: "not bundled" });
+  }
+
+  function execEssentiaCommand(childProcess, command, args, label, focus) {
+    return new Promise(function (resolve) {
+      childProcess.execFile(
+        command,
+        args,
+        { windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 15 * 60 * 1000 },
+        function (error, stdout, stderr) {
+          if (error) {
+            appendLog("Essentia optional analyzer skipped (" + label + "): " + (stderr || error.message || "unknown error").trim());
+            resolve({ events: [], used: false, reason: label + " failed" });
+            return;
+          }
+          resolve(parseEssentiaOutput(stdout, stderr, label, focus));
+        }
+      );
+    });
+  }
+
+  function parseEssentiaOutput(stdout, stderr, label, focus) {
+    try {
+      var cleanStdout = String(stdout || "").trim();
+      if (!cleanStdout) {
+        throw new Error("no stdout" + (stderr ? ": " + stderr.trim() : ""));
+      }
+      var parsed = JSON.parse(cleanStdout);
+      var events = normalizeEssentiaEvents(parsed, focus);
+      return {
+        events: events,
+        used: events.length > 0,
+        reason: label,
+        bpm: parsed && parsed.bpm
+      };
+    } catch (error) {
+      appendLog("Essentia optional analyzer returned invalid output (" + label + "): " + error.message);
+      return { events: [], used: false, reason: "invalid output" };
+    }
+  }
+
+  function normalizeEssentiaEvents(parsed, focus) {
+    var confidence = parsed && isFinite(Number(parsed.confidence)) ? Number(parsed.confidence) : 0.45;
+    var rawEvents = [];
+    if (Array.isArray(parsed)) {
+      rawEvents = parsed;
+    } else if (parsed && Array.isArray(parsed.events)) {
+      rawEvents = parsed.events;
+    } else if (parsed && Array.isArray(parsed.beats)) {
+      rawEvents = parsed.beats;
+    }
+
+    return rawEvents
+      .map(function (event) {
+        if (typeof event === "number") {
+          return { time: event, score: essentiaScore(confidence, focus) };
+        }
+        return {
+          time: Number(event.time !== undefined ? event.time : event.beat),
+          score: isFinite(Number(event.score)) ? Number(event.score) : essentiaScore(confidence, focus)
+        };
+      })
+      .filter(function (event) {
+        return isFinite(event.time) && event.time >= 0 && isFinite(event.score);
+      })
+      .sort(function (a, b) {
+        return a.time - b.time;
+      });
+  }
+
+  function essentiaScore(confidence, focus) {
+    var c = Math.max(0, Math.min(1, Number(confidence) || 0));
+    if (focus === "vocal") {
+      return 0.34 + c * 0.22;
+    }
+    if (focus === "music") {
+      return 0.52 + c * 0.26;
+    }
+    return 0.48 + c * 0.24;
+  }
+
+  function mergeAnalyzerEvents(primaryEvents, essentiaEvents, focus) {
+    var merged = sanitizeEvents(primaryEvents).map(function (event) {
+      return { time: event.time, score: event.score };
+    });
+    var supportWindow = focus === "vocal" ? 0.24 : focus === "music" ? 0.15 : 0.11;
+    var addThreshold = focus === "vocal" ? 0.54 : focus === "music" ? 0.50 : 0.48;
+
+    for (var i = 0; i < essentiaEvents.length; i++) {
+      var event = essentiaEvents[i];
+      var nearest = null;
+      var nearestDistance = Infinity;
+      for (var j = 0; j < merged.length; j++) {
+        var distance = Math.abs(merged[j].time - event.time);
+        if (distance < nearestDistance) {
+          nearest = merged[j];
+          nearestDistance = distance;
+        }
+      }
+
+      if (nearest && nearestDistance <= supportWindow) {
+        nearest.score = Math.min(0.995, Math.max(nearest.score, nearest.score * 0.88 + event.score * 0.18));
+      } else if (event.score >= addThreshold && focus !== "vocal") {
+        merged.push({
+          time: event.time,
+          score: Math.min(0.82, event.score)
+        });
+      }
+    }
+
+    return merged.sort(function (a, b) {
+      return a.time - b.time;
+    });
+  }
+
+  function runHybridAnalyzer(mediaPath, focus) {
+    return Promise.all([
+      runAnalyzer(mediaPath, focus),
+      runEssentiaAnalyzer(mediaPath, focus)
+    ]).then(function (results) {
+      var primaryEvents = results[0];
+      var essentia = results[1] || { events: [], used: false };
+      return {
+        events: mergeAnalyzerEvents(primaryEvents, essentia.events || [], focus),
+        primaryCount: primaryEvents.length,
+        essentiaCount: essentia.events ? essentia.events.length : 0,
+        essentiaUsed: Boolean(essentia.used)
+      };
+    });
+  }
+
   function makePreviewEvents(focus) {
     var times = [
       0.42, 0.78, 1.11, 1.62, 2.05, 2.48, 3.02, 3.44, 4.01, 4.39,
@@ -221,8 +395,8 @@
 
   function spacingForFilter(threshold, focus) {
     var density = Math.max(0, Math.min(1, (threshold - 0.2) / 0.45));
-    var minGap = focus === "vocal" ? 0.65 : 0.22;
-    var maxGap = focus === "vocal" ? 2.0 : 1.5;
+    var minGap = focus === "vocal" ? 0.42 : focus === "music" ? 0.16 : 0.12;
+    var maxGap = focus === "vocal" ? 1.3 : focus === "music" ? 0.62 : 0.44;
     return minGap + density * (maxGap - minGap);
   }
 
@@ -271,23 +445,47 @@
     });
   }
 
-  function keepStrongestPerSecond(events) {
-    var bySecond = {};
+  function keepStrongestPerWindow(events, windowSeconds) {
+    if (!events.length || !windowSeconds || windowSeconds <= 0) {
+      return events;
+    }
+
+    var byWindow = {};
     for (var i = 0; i < events.length; i++) {
       var event = events[i];
-      var second = Math.floor(event.time);
-      if (!bySecond[second] || event.score > bySecond[second].score) {
-        bySecond[second] = event;
+      var bucket = Math.floor(event.time / windowSeconds);
+      if (!byWindow[bucket] || event.score > byWindow[bucket].score) {
+        byWindow[bucket] = event;
       }
     }
 
     var kept = [];
-    Object.keys(bySecond).forEach(function (second) {
-      kept.push(bySecond[second]);
+    Object.keys(byWindow).forEach(function (bucket) {
+      kept.push(byWindow[bucket]);
     });
     return kept.sort(function (a, b) {
       return a.time - b.time;
     });
+  }
+
+  function keepStrongestPerSecond(events) {
+    return keepStrongestPerWindow(events, 1.0);
+  }
+
+  function finalDensityPass(events, threshold, focus) {
+    var filtered = keepStrongestPerSecond(events);
+    if (threshold < 0.68) {
+      return filtered;
+    }
+
+    var pressure = Math.max(0, Math.min(1, (threshold - 0.68) / 0.12));
+    var windowSeconds = focus === "vocal"
+      ? 0.75 + pressure * 0.35
+      : focus === "music"
+        ? 0.34 + pressure * 0.18
+        : 0.24 + pressure * 0.14;
+
+    return keepStrongestPerWindow(filtered, windowSeconds);
   }
 
   function filterEvents() {
@@ -296,8 +494,10 @@
     var thresholded = state.allEvents.filter(function (event) {
       return Number(event.score) >= threshold;
     });
-    state.filteredEvents = keepStrongestPerSecond(
-      suppressCloseEvents(thresholded, spacingForFilter(threshold, focus), focus)
+    state.filteredEvents = finalDensityPass(
+      suppressCloseEvents(thresholded, spacingForFilter(threshold, focus), focus),
+      threshold,
+      focus
     );
 
     dom.thresholdLabel.textContent = threshold.toFixed(2);
@@ -343,13 +543,17 @@
         var focus = getDetectionFocus();
         var label = focus === "vocal" ? "vocal phrase starts and melodic entries" : focus === "music" ? "music spikes and vocal phrase starts" : "sharp percussion hits, drops, and accents";
         setStatus("Analyzing " + state.clip.name + " for " + label + "...");
-        return runAnalyzer(state.clip.mediaPath, focus);
+        return runHybridAnalyzer(state.clip.mediaPath, focus);
       })
-      .then(function (events) {
-        state.allEvents = sanitizeEvents(events);
+      .then(function (analysis) {
+        state.allEvents = sanitizeEvents(analysis.events || []);
         filterEvents();
         dom.densityPanel.classList.remove("is-hidden");
-        setStatus((isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") + "found " + state.allEvents.length + " total rhythmic events.");
+        setStatus(
+          (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
+          "found " + state.allEvents.length + " total rhythmic events" +
+          (analysis.essentiaUsed ? " using Rust + Essentia support." : " using Rust analyzer.")
+        );
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -433,8 +637,10 @@
       } catch (error) {
         checks.push("Analyzer: FAIL - " + error.message);
       }
+      checks.push(describeEssentiaAvailability());
     } else if (isBrowserPreview()) {
       checks.push("Analyzer: simulated demo events");
+      checks.push(describeEssentiaAvailability());
     }
 
     cepEval("BeatDetect.runDiagnostics()")

@@ -32,9 +32,9 @@ enum DetectionMode {
 #[derive(Clone, Copy)]
 struct FrameEnergy {
     time: f64,
-    low: f32,
-    mid: f32,
-    high: f32,
+    bass: f32,
+    body: f32,
+    attack: f32,
     vocal: f32,
     wide: f32,
     rms: f32,
@@ -113,8 +113,7 @@ fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>
         .tracks()
         .iter()
         .find(|track| {
-            track.codec_params.codec != CODEC_TYPE_NULL
-                && track.codec_params.sample_rate.is_some()
+            track.codec_params.codec != CODEC_TYPE_NULL && track.codec_params.sample_rate.is_some()
         })
         .ok_or("no audio track found in media container")?;
 
@@ -153,45 +152,71 @@ fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>
 
 fn push_decoded_as_mono(decoded: AudioBufferRef<'_>, mono: &mut Vec<f32>) {
     match decoded {
-        AudioBufferRef::F32(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            buffer.chan(ch)[frame]
-        }, mono),
-        AudioBufferRef::U8(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::U16(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::U24(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::U32(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::S8(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::S16(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::S24(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::S32(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
-        AudioBufferRef::F64(buffer) => push_planar_as_mono(buffer.spec().channels.count(), buffer.frames(), |ch, frame| {
-            f32::from_sample(buffer.chan(ch)[frame])
-        }, mono),
+        AudioBufferRef::F32(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| buffer.chan(ch)[frame],
+            mono,
+        ),
+        AudioBufferRef::U8(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::U16(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::U24(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::U32(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::S8(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::S16(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::S24(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::S32(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
+        AudioBufferRef::F64(buffer) => push_planar_as_mono(
+            buffer.spec().channels.count(),
+            buffer.frames(),
+            |ch, frame| f32::from_sample(buffer.chan(ch)[frame]),
+            mono,
+        ),
     }
 }
 
-fn push_planar_as_mono<F>(
-    channels: usize,
-    frames: usize,
-    mut read: F,
-    mono: &mut Vec<f32>,
-) where
+fn push_planar_as_mono<F>(channels: usize, frames: usize, mut read: F, mono: &mut Vec<f32>)
+where
     F: FnMut(usize, usize) -> f32,
 {
     if channels == 0 {
@@ -230,16 +255,16 @@ fn detect_events(samples: &[f32], sample_rate: u32, mode: DetectionMode) -> Vec<
     calibrate_peak_scores(&mut peak_candidates);
 
     let duplicate_gap = match mode {
-        DetectionMode::Spikes => 0.280,
-        DetectionMode::Music => 0.340,
-        DetectionMode::Vocal => 0.750,
+        DetectionMode::Spikes => 0.150,
+        DetectionMode::Music => 0.260,
+        DetectionMode::Vocal => 0.850,
     };
 
     suppress_duplicates(peak_candidates, duplicate_gap)
         .into_iter()
-        .filter(|(_, score)| *score >= 0.10)
+        .filter(|(_, score)| *score >= 0.08)
         .map(|(time, score)| Event {
-            time: round_to_millis(time),
+            time: round_to_millis(snap_event_time(samples, sample_rate, time, mode)),
             score: round_score(score),
         })
         .collect()
@@ -251,8 +276,7 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
     }
 
     let sr = sample_rate as f32;
-    let desired = (sr * 0.046).round() as usize;
-    let window_size = desired.next_power_of_two().clamp(1024, 4096);
+    let window_size = analysis_window_size(sample_rate);
     let hop = (window_size / 4).max(256);
 
     if samples.len() < window_size {
@@ -288,39 +312,49 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
 
         fft.process(&mut buffer);
 
-        let mut low = 0.0;
-        let mut mid = 0.0;
-        let mut high = 0.0;
+        let mut bass = 0.0;
+        let mut body = 0.0;
+        let mut attack = 0.0;
         let mut vocal = 0.0;
         let mut wide = 0.0;
+        let mut bass_bins = 0;
+        let mut body_bins = 0;
+        let mut attack_bins = 0;
+        let mut vocal_bins = 0;
+        let mut wide_bins = 0;
 
         for (bin, value) in buffer.iter().take(window_size / 2).enumerate().skip(1) {
             let freq = bin as f32 * sr / window_size as f32;
             let power = value.norm_sqr();
-            if (40.0..=140.0).contains(&freq) {
-                low += power;
+            if (45.0..=180.0).contains(&freq) {
+                bass += power;
+                bass_bins += 1;
             }
-            if (140.0..=900.0).contains(&freq) {
-                mid += power;
+            if (180.0..=950.0).contains(&freq) {
+                body += power;
+                body_bins += 1;
             }
-            if (2_000.0..=6_000.0).contains(&freq) {
-                high += power;
+            if (1_200.0..=8_000.0).contains(&freq) {
+                attack += power;
+                attack_bins += 1;
             }
-            if (200.0..=3_000.0).contains(&freq) {
+            if (250.0..=4_000.0).contains(&freq) {
                 vocal += power;
+                vocal_bins += 1;
             }
-            if (40.0..=8_000.0).contains(&freq) {
+            if (40.0..=10_000.0).contains(&freq) {
                 wide += power;
+                wide_bins += 1;
             }
         }
 
         out.push(FrameEnergy {
             time: (start + window_size / 2) as f64 / sample_rate as f64,
-            low: energy_scale(low),
-            mid: energy_scale(mid),
-            high: energy_scale(high),
-            vocal: energy_scale(vocal),
-            wide: energy_scale(wide),
+            bass: band_energy(bass, bass_bins),
+            body: band_energy(body, body_bins),
+            attack: band_energy(attack, attack_bins),
+            vocal: band_energy(vocal, vocal_bins),
+            wide: band_energy(wide, wide_bins),
             rms: energy_scale(sum_squares / window_size as f32),
             peak: energy_scale(peak),
         });
@@ -331,41 +365,85 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
     out
 }
 
+fn analysis_window_size(sample_rate: u32) -> usize {
+    let desired = (sample_rate as f32 * 0.046).round().max(1.0) as usize;
+    nearest_power_of_two(desired).clamp(1024, 4096)
+}
+
+fn nearest_power_of_two(value: usize) -> usize {
+    if value <= 1 {
+        return 1;
+    }
+
+    let upper = value.next_power_of_two();
+    let lower = upper / 2;
+    if value - lower <= upper - value {
+        lower
+    } else {
+        upper
+    }
+}
+
+fn band_energy(power: f32, bins: usize) -> f32 {
+    if bins == 0 {
+        return 0.0;
+    }
+    energy_scale(power / bins as f32)
+}
+
 fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32> {
     let mut scores = Vec::with_capacity(frames.len());
-    let mut low_base = frames[0].low;
-    let mut mid_base = frames[0].mid;
-    let mut high_base = frames[0].high;
+    let mut bass_base = frames[0].bass;
+    let mut body_base = frames[0].body;
+    let mut attack_base = frames[0].attack;
     let mut vocal_base = frames[0].vocal;
     let mut wide_base = frames[0].wide;
 
-    for frame in frames {
-        let low_rise = positive_rise(frame.low, low_base);
-        let mid_rise = positive_rise(frame.mid, mid_base);
-        let high_rise = positive_rise(frame.high, high_base);
+    for i in 0..frames.len() {
+        let frame = frames[i];
+        let previous = if i == 0 { frame } else { frames[i - 1] };
+        let bass_rise = positive_rise(frame.bass, bass_base);
+        let body_rise = positive_rise(frame.body, body_base);
+        let attack_rise = positive_rise(frame.attack, attack_base);
         let vocal_rise = positive_rise(frame.vocal, vocal_base);
         let wide_rise = positive_rise(frame.wide, wide_base);
+        let bass_snap = positive_rise(frame.bass, previous.bass);
+        let body_snap = positive_rise(frame.body, previous.body);
+        let attack_snap = positive_rise(frame.attack, previous.attack);
+        let vocal_snap = positive_rise(frame.vocal, previous.vocal);
+        let wide_snap = positive_rise(frame.wide, previous.wide);
 
-        let percussion = low_rise * 0.34 + mid_rise * 0.18 + high_rise * 0.34 + wide_rise * 0.14;
-        let quiet_zone = if percussion < 0.16 { 1.0 } else { 0.35 };
-        let section_jump = wide_rise * 0.32;
-        let vocal_or_melodic = vocal_rise * (0.18 + 0.32 * quiet_zone);
+        let percussion =
+            bass_rise * 0.32 + body_rise * 0.24 + attack_rise * 0.34 + wide_rise * 0.10;
+        let transient = bass_snap * 0.28 + body_snap * 0.18 + attack_snap * 0.42 + wide_snap * 0.12;
+        let section_jump = wide_rise * 0.38 + wide_snap * 0.18 + bass_rise * 0.10;
+        let quiet_zone = if percussion + transient < 0.18 {
+            1.0
+        } else {
+            0.38
+        };
+        let vocal_or_melodic =
+            vocal_rise * (0.30 + 0.42 * quiet_zone) + vocal_snap * (0.14 + 0.18 * quiet_zone);
         let score = match mode {
-            DetectionMode::Spikes => percussion * 0.88 + section_jump * 0.55,
-            DetectionMode::Music => percussion * 0.46 + vocal_or_melodic * 1.15 + section_jump * 0.82,
+            DetectionMode::Spikes => percussion * 0.76 + transient * 0.82 + section_jump * 0.36,
+            DetectionMode::Music => {
+                percussion * 0.34 + transient * 0.42 + vocal_or_melodic * 1.08 + section_jump * 0.78
+            }
             DetectionMode::Vocal => {
-                let phrase_entry = vocal_rise * 0.82 + wide_rise * 0.22 + mid_rise * 0.18;
-                let percussion_penalty = (low_rise * 0.34 + high_rise * 0.26).min(0.38);
-                (phrase_entry - percussion_penalty * 0.42).max(0.0)
+                let phrase_entry =
+                    vocal_rise * 0.92 + vocal_snap * 0.30 + wide_rise * 0.20 + body_rise * 0.10;
+                let percussion_penalty =
+                    (bass_snap * 0.34 + attack_snap * 0.42 + percussion * 0.18).min(0.62);
+                (phrase_entry - percussion_penalty * 0.46).max(0.0)
             }
         };
         scores.push(score.max(0.0));
 
-        low_base = ema(low_base, frame.low, 0.045);
-        mid_base = ema(mid_base, frame.mid, 0.045);
-        high_base = ema(high_base, frame.high, 0.045);
-        vocal_base = ema(vocal_base, frame.vocal, 0.040);
-        wide_base = ema(wide_base, frame.wide, 0.035);
+        bass_base = ema(bass_base, frame.bass, 0.072);
+        body_base = ema(body_base, frame.body, 0.078);
+        attack_base = ema(attack_base, frame.attack, 0.092);
+        vocal_base = ema(vocal_base, frame.vocal, 0.062);
+        wide_base = ema(wide_base, frame.wide, 0.058);
     }
 
     scores
@@ -376,18 +454,24 @@ fn envelope_onset_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32
     let mut rms_base = frames[0].rms;
     let mut peak_base = frames[0].peak;
 
-    for frame in frames {
+    for i in 0..frames.len() {
+        let frame = frames[i];
+        let previous = if i == 0 { frame } else { frames[i - 1] };
         let rms_rise = positive_rise(frame.rms, rms_base);
         let peak_rise = positive_rise(frame.peak, peak_base);
+        let rms_snap = positive_rise(frame.rms, previous.rms);
+        let peak_snap = positive_rise(frame.peak, previous.peak);
         let score = match mode {
-            DetectionMode::Spikes => peak_rise * 0.74 + rms_rise * 0.36,
-            DetectionMode::Music => peak_rise * 0.42 + rms_rise * 0.62,
-            DetectionMode::Vocal => rms_rise * 0.76 + peak_rise * 0.18,
+            DetectionMode::Spikes => peak_rise * 0.54 + peak_snap * 0.44 + rms_rise * 0.28,
+            DetectionMode::Music => {
+                peak_rise * 0.26 + peak_snap * 0.22 + rms_rise * 0.52 + rms_snap * 0.20
+            }
+            DetectionMode::Vocal => rms_rise * 0.72 + rms_snap * 0.18 + peak_rise * 0.06,
         };
         scores.push(score.max(0.0));
 
-        rms_base = ema(rms_base, frame.rms, 0.035);
-        peak_base = ema(peak_base, frame.peak, 0.050);
+        rms_base = ema(rms_base, frame.rms, 0.068);
+        peak_base = ema(peak_base, frame.peak, 0.090);
     }
 
     scores
@@ -399,22 +483,40 @@ fn fuse_detector_scores(spectral: &[f32], envelope: &[f32], mode: DetectionMode)
     let mut fused = Vec::with_capacity(spectral.len().min(envelope.len()));
 
     for i in 0..spectral_norm.len().min(envelope_norm.len()) {
-        let spec = local_max(&spectral_norm, i, 1);
-        let env = local_max(&envelope_norm, i, 1);
+        let spec = spectral_norm[i];
+        let env = envelope_norm[i];
         let agreement = spec.min(env);
         let support = (spec * env).sqrt();
         let strong_single = spec.max(env);
 
         let mut score = match mode {
-            DetectionMode::Spikes => agreement * 0.88 + support * 0.22,
-            DetectionMode::Music => agreement * 0.78 + support * 0.24 + spec * 0.08,
-            DetectionMode::Vocal => agreement * 0.70 + support * 0.22 + spec * 0.12,
+            DetectionMode::Spikes => agreement * 0.78 + support * 0.28 + strong_single * 0.08,
+            DetectionMode::Music => agreement * 0.66 + support * 0.24 + spec * 0.14,
+            DetectionMode::Vocal => agreement * 0.56 + support * 0.18 + spec * 0.26,
         };
 
-        if agreement < 0.25 {
-            score *= if strong_single > 0.92 { 0.62 } else { 0.35 };
-        } else if agreement < 0.42 {
-            score *= 0.78;
+        match mode {
+            DetectionMode::Spikes => {
+                if agreement < 0.15 {
+                    score *= if strong_single > 0.92 { 0.48 } else { 0.22 };
+                } else if agreement < 0.32 {
+                    score *= 0.62;
+                }
+            }
+            DetectionMode::Music => {
+                if agreement < 0.10 {
+                    score *= if strong_single > 0.85 { 0.62 } else { 0.35 };
+                } else if agreement < 0.25 {
+                    score *= 0.78;
+                }
+            }
+            DetectionMode::Vocal => {
+                if agreement < 0.08 {
+                    score *= if strong_single > 0.80 { 0.68 } else { 0.40 };
+                } else if agreement < 0.20 {
+                    score *= 0.82;
+                }
+            }
         }
 
         fused.push(score.max(0.0));
@@ -427,13 +529,17 @@ fn normalize_series(values: &[f32], percentile: f32) -> Vec<f32> {
     let normalizer = robust_percentile(values, percentile).max(0.000_001);
     values
         .iter()
-        .map(|value| soft_unit(*value / normalizer))
+        .map(|value| soft_compress(*value / normalizer))
         .collect()
 }
 
-fn soft_unit(value: f32) -> f32 {
+fn soft_compress(value: f32) -> f32 {
     let x = value.max(0.0);
-    1.0 - (-x).exp()
+    if x <= 1.0 {
+        x
+    } else {
+        1.0 + x.ln() * 0.4
+    }
 }
 
 fn calibrate_peak_scores(peaks: &mut [(f64, f32)]) {
@@ -442,29 +548,16 @@ fn calibrate_peak_scores(peaks: &mut [(f64, f32)]) {
     }
 
     let raw = peaks.iter().map(|(_, score)| *score).collect::<Vec<_>>();
-    let p25 = robust_percentile(&raw, 0.25);
-    let p88 = robust_percentile(&raw, 0.88).max(p25 + 0.000_001);
-    let p995 = robust_percentile(&raw, 0.995).max(p88 + 0.000_001);
+    let max_raw = raw.iter().copied().fold(0.0_f32, f32::max).max(0.000_001);
+    let p15 = robust_percentile(&raw, 0.15);
+    let range = (max_raw - p15).max(0.000_001);
 
     for (_, score) in peaks {
-        let normalized = if *score <= p88 {
-            let position = ((*score - p25) / (p88 - p25)).clamp(0.0, 1.0);
-            0.18 + position.powf(0.85) * 0.62
-        } else {
-            let position = ((*score - p88) / (p995 - p88)).clamp(0.0, 1.0);
-            0.80 + position.powf(0.60) * 0.19
-        };
-        *score = normalized.clamp(0.0, 0.99);
+        let ratio = ((*score - p15) / range).clamp(0.0, 1.0);
+        // Power curve: gentle lift for weak events, natural spread for strong ones
+        let shaped = ratio.powf(0.72);
+        *score = (0.10 + shaped * 0.87).clamp(0.0, 0.97);
     }
-}
-
-fn local_max(values: &[f32], center: usize, radius: usize) -> f32 {
-    let start = center.saturating_sub(radius);
-    let end = (center + radius + 1).min(values.len());
-    values[start..end]
-        .iter()
-        .copied()
-        .fold(0.0_f32, f32::max)
 }
 
 fn pick_local_peaks(
@@ -472,21 +565,34 @@ fn pick_local_peaks(
     scores: &[f32],
     mode: DetectionMode,
 ) -> Vec<(f64, f32)> {
-    let mut nonzero = scores.iter().copied().filter(|v| *v > 0.0).collect::<Vec<_>>();
+    let mut nonzero = scores
+        .iter()
+        .copied()
+        .filter(|v| *v > 0.0)
+        .collect::<Vec<_>>();
     if nonzero.is_empty() {
         return Vec::new();
     }
     nonzero.sort_by(|a, b| a.total_cmp(b));
     let floor_percentile = match mode {
-        DetectionMode::Spikes => 0.70,
-        DetectionMode::Music => 0.66,
-        DetectionMode::Vocal => 0.72,
+        DetectionMode::Spikes => 0.55,
+        DetectionMode::Music => 0.58,
+        DetectionMode::Vocal => 0.70,
     };
     let floor = robust_percentile(&nonzero, floor_percentile).max(0.035);
+
+    let mut wide_values: Vec<f32> = frames.iter().map(|f| f.wide).collect();
+    wide_values.sort_by(|a, b| a.total_cmp(b));
+    let wide_median = wide_values[wide_values.len() / 2];
+    let silence_floor = wide_median * 0.06;
+
     let mut peaks = Vec::new();
 
     for i in 1..scores.len() - 1 {
         if scores[i] < floor {
+            continue;
+        }
+        if frames[i].wide < silence_floor {
             continue;
         }
         if scores[i] >= scores[i - 1] && scores[i] > scores[i + 1] {
@@ -534,12 +640,89 @@ fn refine_peak_time(frames: &[FrameEnergy], scores: &[f32], index: usize) -> f64
     frames[index].time + offset_frames * frame_step
 }
 
+fn snap_event_time(
+    samples: &[f32],
+    sample_rate: u32,
+    estimated_time: f64,
+    mode: DetectionMode,
+) -> f64 {
+    if samples.is_empty() || sample_rate == 0 {
+        return estimated_time.max(0.0);
+    }
+
+    let sr = sample_rate as f64;
+    let estimated = (estimated_time * sr).round() as isize;
+    let look_back = match mode {
+        DetectionMode::Spikes => 0.050,
+        DetectionMode::Music => 0.055,
+        DetectionMode::Vocal => 0.090,
+    };
+    let look_forward = match mode {
+        DetectionMode::Spikes => 0.080,
+        DetectionMode::Music => 0.090,
+        DetectionMode::Vocal => 0.150,
+    };
+    let start = (estimated - (look_back * sr) as isize).max(1) as usize;
+    let end = (estimated + (look_forward * sr) as isize)
+        .max(start as isize + 1)
+        .min(samples.len().saturating_sub(1) as isize) as usize;
+
+    if start >= end {
+        return estimated_time.max(0.0);
+    }
+
+    let local_mean = local_abs_mean(samples, start, end);
+    let mut best_index = start;
+    let mut best_score = 0.0_f32;
+    for i in start..=end {
+        let diff = (samples[i] - samples[i - 1]).abs();
+        let amp = samples[i].abs();
+        let score = diff * 0.72 + amp * 0.28;
+        if score > best_score {
+            best_score = score;
+            best_index = i;
+        }
+    }
+
+    if best_score <= local_mean.max(1.0e-6) * 1.8 {
+        return estimated_time.max(0.0);
+    }
+
+    let pre_roll = match mode {
+        DetectionMode::Spikes => 0.006,
+        DetectionMode::Music => 0.008,
+        DetectionMode::Vocal => 0.018,
+    };
+    ((best_index as f64 / sr) - pre_roll).max(0.0)
+}
+
+fn local_abs_mean(samples: &[f32], start: usize, end: usize) -> f32 {
+    if start >= end || samples.is_empty() {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    let mut count = 0;
+    for sample in &samples[start..=end.min(samples.len() - 1)] {
+        sum += sample.abs();
+        count += 1;
+    }
+    if count == 0 {
+        0.0
+    } else {
+        sum / count as f32
+    }
+}
+
 fn energy_scale(value: f32) -> f32 {
     (value + 1.0e-12).ln_1p()
 }
 
 fn positive_rise(current: f32, baseline: f32) -> f32 {
-    (current - baseline).max(0.0)
+    let diff = current - baseline;
+    if diff <= 0.0 {
+        return 0.0;
+    }
+    diff / baseline.max(0.10)
 }
 
 fn ema(previous: f32, current: f32, alpha: f32) -> f32 {
@@ -569,4 +752,115 @@ fn round_to_millis(value: f64) -> f64 {
 
 fn round_score(value: f32) -> f32 {
     (value * 1000.0).round() / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chooses_nearest_analysis_window_at_common_video_rates() {
+        assert_eq!(analysis_window_size(44_100), 2048);
+        assert_eq!(analysis_window_size(48_000), 2048);
+    }
+
+    #[test]
+    fn detects_dense_dhol_like_hits() {
+        let sample_rate = 48_000;
+        let expected = [0.50, 1.00, 1.50, 2.00, 2.50];
+        let mut samples = synthetic_ambient(sample_rate, 3.5);
+        add_dhol_hits(&mut samples, sample_rate, &expected);
+        let events = detect_events(&samples, sample_rate, DetectionMode::Spikes);
+        assert!(
+            events.len() >= 3,
+            "expected at least 3 events from 5 hits, got {:?}",
+            events
+        );
+
+        let mut matched = 0;
+        for target in expected {
+            if events
+                .iter()
+                .any(|event| (event.time - target).abs() <= 0.065)
+            {
+                matched += 1;
+            }
+        }
+        assert!(
+            matched >= 3,
+            "matched only {matched}/5 expected hits; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn music_mode_keeps_phrase_like_entry_after_percussion() {
+        let sample_rate = 48_000;
+        let mut samples = synthetic_ambient(sample_rate, 5.0);
+        add_dhol_hits(&mut samples, sample_rate, &[0.50, 1.00, 1.50, 2.00]);
+        add_phrase_entry(&mut samples, sample_rate, 3.20);
+        let events = detect_events(&samples, sample_rate, DetectionMode::Music);
+        assert!(
+            events
+                .iter()
+                .any(|event| (event.time - 3.20).abs() <= 0.100),
+            "missing phrase entry near 3.200; events: {events:?}"
+        );
+    }
+
+    fn synthetic_ambient(sample_rate: u32, duration_seconds: f64) -> Vec<f32> {
+        let len = (duration_seconds * sample_rate as f64).round() as usize;
+        let mut samples = Vec::with_capacity(len);
+        for i in 0..len {
+            let t = i as f32 / sample_rate as f32;
+            let hum = (std::f32::consts::TAU * 120.0 * t).sin() * 0.04
+                + (std::f32::consts::TAU * 240.0 * t).sin() * 0.025
+                + (std::f32::consts::TAU * 500.0 * t).sin() * 0.015
+                + (std::f32::consts::TAU * 800.0 * t).sin() * 0.012
+                + (std::f32::consts::TAU * 1500.0 * t).sin() * 0.008
+                + (std::f32::consts::TAU * 3000.0 * t).sin() * 0.005;
+            let noise = ((i as f32 * 17.3).sin() * 43.7).sin() * 0.020;
+            samples.push(hum + noise);
+        }
+        samples
+    }
+
+    fn add_dhol_hits(samples: &mut [f32], sample_rate: u32, times: &[f64]) {
+        for &time in times {
+            let start = (time * sample_rate as f64).round() as usize;
+            let hit_len = (0.120 * sample_rate as f64).round() as usize;
+            for offset in 0..hit_len {
+                let index = start + offset;
+                if index >= samples.len() {
+                    break;
+                }
+                let t = offset as f32 / sample_rate as f32;
+                let low = (std::f32::consts::TAU * 82.0 * t).sin() * (-t * 28.0).exp();
+                let body = (std::f32::consts::TAU * 420.0 * t).sin() * (-t * 38.0).exp();
+                let attack_noise = if offset < 120 {
+                    (((offset * 37) % 31) as f32 / 15.5 - 1.0) * (1.0 - offset as f32 / 120.0)
+                } else {
+                    0.0
+                };
+                samples[index] += (low * 0.85 + body * 0.40 + attack_noise * 0.30) * 1.8;
+            }
+        }
+    }
+
+    fn add_phrase_entry(samples: &mut [f32], sample_rate: u32, time: f64) {
+        let start = (time * sample_rate as f64).round() as usize;
+        let len = (0.600 * sample_rate as f64).round() as usize;
+        for offset in 0..len {
+            let index = start + offset;
+            if index >= samples.len() {
+                break;
+            }
+            let t = offset as f32 / sample_rate as f32;
+            let fade = (t * 12.0).min(1.0) * (-t * 1.2).exp();
+            let tone = (std::f32::consts::TAU * 310.0 * t).sin() * 0.50
+                + (std::f32::consts::TAU * 620.0 * t).sin() * 0.35
+                + (std::f32::consts::TAU * 1240.0 * t).sin() * 0.22
+                + (std::f32::consts::TAU * 2480.0 * t).sin() * 0.12;
+            samples[index] += tone * fade * 2.4;
+        }
+    }
 }

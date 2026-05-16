@@ -28,9 +28,46 @@ jobs:
             analyzer
             installer
 
+      - name: Test analyzer
+        shell: pwsh
+        working-directory: analyzer
+        run: cargo test
+
+      - name: Lint analyzer
+        shell: pwsh
+        working-directory: analyzer
+        run: cargo clippy --all-targets -- -D warnings
+
       - name: Build setup executable
         shell: pwsh
         run: .\scripts\build-setup-exe.ps1
+
+      - name: Test installer
+        shell: pwsh
+        working-directory: installer
+        run: cargo test
+
+      - name: Lint installer
+        shell: pwsh
+        working-directory: installer
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Verify packaged runtime
+        shell: pwsh
+        run: |
+          $required = @(
+            ".\BeatDetectSetup.exe",
+            ".\dist\com.beatdetect.spikemarker\CSXS\manifest.xml",
+            ".\dist\com.beatdetect.spikemarker\index.html",
+            ".\dist\com.beatdetect.spikemarker\js\main.js",
+            ".\dist\com.beatdetect.spikemarker\jsx\host.jsx",
+            ".\dist\com.beatdetect.spikemarker\bin\beat_analyzer.exe"
+          )
+          foreach ($path in $required) {
+            if (!(Test-Path -LiteralPath $path)) {
+              throw "Missing packaged file: $path"
+            }
+          }
 
       - name: Create extension zip
         shell: pwsh

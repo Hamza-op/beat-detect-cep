@@ -4,12 +4,9 @@ $root = Split-Path -Parent $PSScriptRoot
 $extensionId = "com.beatdetect.spikemarker"
 $distRoot = Join-Path $root "dist"
 $packageDir = Join-Path $distRoot $extensionId
-$analyzerExe = Join-Path $root "bin\beat_analyzer.exe"
 
-if (!(Test-Path -LiteralPath $analyzerExe)) {
-  Write-Host "Analyzer executable missing. Building it first..."
-  & (Join-Path $PSScriptRoot "build-windows.ps1")
-}
+Write-Host "Building analyzer..."
+& (Join-Path $PSScriptRoot "build-windows.ps1")
 
 if (Test-Path -LiteralPath $packageDir) {
   Remove-Item -LiteralPath $packageDir -Recurse -Force

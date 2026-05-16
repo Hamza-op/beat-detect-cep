@@ -1,0 +1,8 @@
+[package]
+name = "beat_detect_setup"
+version = "0.1.0"
+edition = "2021"
+
+[target.'cfg(windows)'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+winreg = "0.52"

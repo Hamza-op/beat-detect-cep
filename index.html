@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Beat Detect</title>
+    <link rel="stylesheet" href="./css/styles.css">
+  </head>
+  <body>
+    <main class="panel-shell">
+      <header class="panel-header">
+        <div>
+          <p class="eyebrow">Premiere Pro CEP</p>
+          <h1>Beat Detect</h1>
+          <p class="version-tag">v1.0.0 verified</p>
+        </div>
+        <div class="pulse-meter" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </header>
+
+      <section class="control-stack" aria-label="Beat marker controls">
+        <label class="field">
+          <span>Marker Target</span>
+          <select id="markerTarget">
+            <option value="sequence">Sequence Markers</option>
+            <option value="clip">Clip Markers</option>
+          </select>
+        </label>
+
+        <section class="mode-group" aria-label="Detection focus">
+          <div class="field-label">Detection Focus</div>
+          <div class="mode-grid">
+            <label class="mode-option mode-spikes">
+              <input type="radio" name="detectionFocus" value="spikes" checked>
+              <span class="mode-swatch"></span>
+              <span class="mode-text">
+                <strong>Spikes</strong>
+                <small>Dhol, drops, hits</small>
+              </span>
+            </label>
+            <label class="mode-option mode-music">
+              <input type="radio" name="detectionFocus" value="music">
+              <span class="mode-swatch"></span>
+              <span class="mode-text">
+                <strong>Music</strong>
+                <small>Spikes + phrases</small>
+              </span>
+            </label>
+            <label class="mode-option mode-vocal">
+              <input type="radio" name="detectionFocus" value="vocal">
+              <span class="mode-swatch"></span>
+              <span class="mode-text">
+                <strong>Vocal</strong>
+                <small>Phrase entries</small>
+              </span>
+            </label>
+          </div>
+        </section>
+
+        <button id="analyzeButton" class="primary-button" type="button">
+          Analyze Track
+        </button>
+
+        <button id="diagnosticsButton" class="utility-button" type="button">
+          Run Diagnostics
+        </button>
+
+        <div id="status" class="status" role="status">
+          Select one audio or linked clip in the active sequence.
+        </div>
+
+        <section id="densityPanel" class="density-panel is-hidden" aria-label="Marker density">
+          <div class="density-head">
+            <span>Marker Density</span>
+            <strong id="thresholdLabel">0.75</strong>
+          </div>
+          <input id="densitySlider" type="range" min="20" max="80" value="75" step="1">
+          <div class="density-scale">
+            <span>Show All Micro-Beats</span>
+            <span>Major Beats Only</span>
+          </div>
+          <div class="event-counter">
+            <strong id="filteredCount">0</strong>
+            <span id="totalCount">of 0 events selected</span>
+          </div>
+        </section>
+
+        <button id="applyButton" class="secondary-button" type="button" disabled>
+          Apply Markers to Timeline
+        </button>
+
+        <button id="removeButton" class="danger-button" type="button">
+          Remove Beat Detect Markers
+        </button>
+      </section>
+    </main>
+
+    <script src="./js/CSInterface.js"></script>
+    <script src="./js/main.js"></script>
+  </body>
+</html>

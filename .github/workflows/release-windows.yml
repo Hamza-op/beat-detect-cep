@@ -1,0 +1,60 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows setup
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            analyzer
+            installer
+
+      - name: Build setup executable
+        shell: pwsh
+        run: .\scripts\build-setup-exe.ps1
+
+      - name: Create extension zip
+        shell: pwsh
+        run: |
+          Compress-Archive `
+            -Path .\dist\com.beatdetect.spikemarker `
+            -DestinationPath .\BeatDetect-CEP-Windows.zip `
+            -Force
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: BeatDetect-Windows
+          path: |
+            BeatDetectSetup.exe
+            BeatDetect-CEP-Windows.zip
+          if-no-files-found: error
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "build-${{ github.run_number }}"
+          name: "Auto-Release Build ${{ github.run_number }}"
+          files: |
+            BeatDetectSetup.exe
+            BeatDetect-CEP-Windows.zip
+          generate_release_notes: true

@@ -1,0 +1,9 @@
+analyzer/target/
+installer/target/
+dist/
+BeatDetectSetup.exe
+BeatDetect-CEP-Windows.zip
+bin/beat_analyzer.exe
+bin/beat_analyzer
+*.log
+o-rangrez-*.txt

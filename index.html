@@ -94,6 +94,22 @@
           Apply Markers to Timeline
         </button>
 
+        <section id="zoomPanel" class="density-panel" aria-label="Zoom Amount">
+          <div class="density-head">
+            <span>Gimbal Zoom Amount</span>
+            <strong id="zoomLabel">110%</strong>
+          </div>
+          <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
+          <div class="density-scale">
+            <span>Subtle</span>
+            <span>Intense</span>
+          </div>
+        </section>
+
+        <button id="gimbalZoomButton" class="secondary-button" type="button" style="margin-top: 8px;">
+          Apply Gimbal Zoom (Selected Clips)
+        </button>
+
         <button id="removeButton" class="danger-button" type="button">
           Remove Beat Detect Markers
         </button>

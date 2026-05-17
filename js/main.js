@@ -15,13 +15,16 @@
     diagnosticsButton: document.getElementById("diagnosticsButton"),
     applyButton: document.getElementById("applyButton"),
     removeButton: document.getElementById("removeButton"),
+    gimbalZoomButton: document.getElementById("gimbalZoomButton"),
     status: document.getElementById("status"),
     densityPanel: document.getElementById("densityPanel"),
     densitySlider: document.getElementById("densitySlider"),
     thresholdLabel: document.getElementById("thresholdLabel"),
     filteredCount: document.getElementById("filteredCount"),
     totalCount: document.getElementById("totalCount"),
-    markerTarget: document.getElementById("markerTarget")
+    markerTarget: document.getElementById("markerTarget"),
+    zoomSlider: document.getElementById("zoomSlider"),
+    zoomLabel: document.getElementById("zoomLabel")
   };
 
   function getDetectionFocus() {
@@ -42,6 +45,7 @@
     dom.analyzeButton.disabled = isBusy;
     dom.diagnosticsButton.disabled = isBusy;
     dom.removeButton.disabled = isBusy;
+    if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
   }
 
@@ -617,6 +621,29 @@
       });
   }
 
+  function applyGimbalZoom() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    var zoomValue = dom.zoomSlider ? Number(dom.zoomSlider.value) : 110.0;
+    setStatus("Applying smooth gimbal zoom to selected clips (" + zoomValue + "%)...");
+
+    var payload = { zoom: zoomValue };
+    cepEval("BeatDetect.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
+      .then(function (result) {
+        setStatus("Applied gimbal zoom to " + result.applied + " clips.");
+      })
+      .catch(function (error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function () {
+        setBusy(false);
+      });
+  }
+
   function runDiagnostics() {
     if (state.isBusy) {
       return;
@@ -664,7 +691,13 @@
   dom.diagnosticsButton.addEventListener("click", runDiagnostics);
   dom.applyButton.addEventListener("click", applyMarkers);
   dom.removeButton.addEventListener("click", removeMarkers);
+  if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
   dom.densitySlider.addEventListener("input", filterEvents);
+  if (dom.zoomSlider) {
+    dom.zoomSlider.addEventListener("input", function() {
+      if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
+    });
+  }
 
   var modeInputs = document.querySelectorAll("input[name='detectionFocus']");
   for (var modeIndex = 0; modeIndex < modeInputs.length; modeIndex++) {

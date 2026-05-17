@@ -37,6 +37,7 @@ struct FrameEnergy {
     attack: f32,
     vocal: f32,
     wide: f32,
+    flux: f32,
     rms: f32,
     peak: f32,
 }
@@ -293,6 +294,7 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(window_size);
     let mut buffer = vec![Complex::new(0.0, 0.0); window_size];
+    let mut prev_mags = vec![0.0_f32; window_size / 2];
     let mut out = Vec::new();
 
     let mut start = 0;
@@ -322,10 +324,20 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
         let mut attack_bins = 0;
         let mut vocal_bins = 0;
         let mut wide_bins = 0;
+        let mut flux = 0.0;
 
         for (bin, value) in buffer.iter().take(window_size / 2).enumerate().skip(1) {
+            let mag = value.norm();
+            let diff = mag - prev_mags[bin];
+            if diff > 0.0 {
+                // High-frequency content (HFC) weighting for flux: multiply by a mild frequency factor
+                let freq_weight = 1.0 + (bin as f32 / (window_size / 2) as f32);
+                flux += diff * freq_weight;
+            }
+            prev_mags[bin] = mag;
+
             let freq = bin as f32 * sr / window_size as f32;
-            let power = value.norm_sqr();
+            let power = mag * mag;
             if (45.0..=180.0).contains(&freq) {
                 bass += power;
                 bass_bins += 1;
@@ -355,6 +367,7 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
             attack: band_energy(attack, attack_bins),
             vocal: band_energy(vocal, vocal_bins),
             wide: band_energy(wide, wide_bins),
+            flux: energy_scale(flux / (window_size / 2) as f32),
             rms: energy_scale(sum_squares / window_size as f32),
             peak: energy_scale(peak),
         });
@@ -398,6 +411,7 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
     let mut attack_base = frames[0].attack;
     let mut vocal_base = frames[0].vocal;
     let mut wide_base = frames[0].wide;
+    let mut flux_base = frames[0].flux;
 
     for i in 0..frames.len() {
         let frame = frames[i];
@@ -407,16 +421,24 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
         let attack_rise = positive_rise(frame.attack, attack_base);
         let vocal_rise = positive_rise(frame.vocal, vocal_base);
         let wide_rise = positive_rise(frame.wide, wide_base);
+        let flux_rise = positive_rise(frame.flux, flux_base);
+        
         let bass_snap = positive_rise(frame.bass, previous.bass);
         let body_snap = positive_rise(frame.body, previous.body);
         let attack_snap = positive_rise(frame.attack, previous.attack);
         let vocal_snap = positive_rise(frame.vocal, previous.vocal);
         let wide_snap = positive_rise(frame.wide, previous.wide);
+        let flux_snap = positive_rise(frame.flux, previous.flux);
 
-        let percussion =
-            bass_rise * 0.32 + body_rise * 0.24 + attack_rise * 0.34 + wide_rise * 0.10;
-        let transient = bass_snap * 0.28 + body_snap * 0.18 + attack_snap * 0.42 + wide_snap * 0.12;
-        let section_jump = wide_rise * 0.38 + wide_snap * 0.18 + bass_rise * 0.10;
+        let percussion = match mode {
+            DetectionMode::Spikes => bass_rise * 0.48 + body_rise * 0.28 + attack_rise * 0.12 + wide_rise * 0.05 + flux_rise * 0.08,
+            _ => bass_rise * 0.28 + body_rise * 0.18 + attack_rise * 0.24 + wide_rise * 0.10 + flux_rise * 0.45,
+        };
+        let transient = match mode {
+            DetectionMode::Spikes => bass_snap * 0.42 + body_snap * 0.22 + attack_snap * 0.18 + wide_snap * 0.05 + flux_snap * 0.12,
+            _ => bass_snap * 0.22 + body_snap * 0.14 + attack_snap * 0.28 + wide_snap * 0.12 + flux_snap * 0.50,
+        };
+        let section_jump = wide_rise * 0.32 + wide_snap * 0.16 + bass_rise * 0.10 + flux_rise * 0.25;
         let quiet_zone = if percussion + transient < 0.18 {
             1.0
         } else {
@@ -439,11 +461,13 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
         };
         scores.push(score.max(0.0));
 
-        bass_base = ema(bass_base, frame.bass, 0.072);
-        body_base = ema(body_base, frame.body, 0.078);
-        attack_base = ema(attack_base, frame.attack, 0.092);
-        vocal_base = ema(vocal_base, frame.vocal, 0.062);
-        wide_base = ema(wide_base, frame.wide, 0.058);
+        // Use dual-rate EMA for baseline tracking: resists peaks (slow up), tracks noise floor (fast down, but not too fast to avoid ghost notes)
+        bass_base = dual_rate_ema(bass_base, frame.bass, 0.015, 0.06);
+        body_base = dual_rate_ema(body_base, frame.body, 0.015, 0.06);
+        attack_base = dual_rate_ema(attack_base, frame.attack, 0.020, 0.08);
+        vocal_base = dual_rate_ema(vocal_base, frame.vocal, 0.012, 0.05);
+        wide_base = dual_rate_ema(wide_base, frame.wide, 0.010, 0.05);
+        flux_base = dual_rate_ema(flux_base, frame.flux, 0.025, 0.10);
     }
 
     scores
@@ -470,8 +494,8 @@ fn envelope_onset_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32
         };
         scores.push(score.max(0.0));
 
-        rms_base = ema(rms_base, frame.rms, 0.068);
-        peak_base = ema(peak_base, frame.peak, 0.090);
+        rms_base = dual_rate_ema(rms_base, frame.rms, 0.015, 0.06);
+        peak_base = dual_rate_ema(peak_base, frame.peak, 0.020, 0.08);
     }
 
     scores
@@ -725,8 +749,12 @@ fn positive_rise(current: f32, baseline: f32) -> f32 {
     diff / baseline.max(0.10)
 }
 
-fn ema(previous: f32, current: f32, alpha: f32) -> f32 {
-    previous + (current - previous) * alpha
+fn dual_rate_ema(previous: f32, current: f32, alpha_up: f32, alpha_down: f32) -> f32 {
+    if current > previous {
+        previous + (current - previous) * alpha_up
+    } else {
+        previous + (current - previous) * alpha_down
+    }
 }
 
 fn robust_percentile(values: &[f32], percentile: f32) -> f32 {

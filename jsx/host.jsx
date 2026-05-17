@@ -117,6 +117,26 @@ var BeatDetect = BeatDetect || {};
     return null;
   }
 
+  function getAllSelectedVideoClips(seq) {
+    var selected = [];
+    var groups = [seq.videoTracks];
+    for (var g = 0; g < groups.length; g++) {
+      var tracks = groups[g];
+      if (!tracks) continue;
+      for (var i = 0; i < tracks.numTracks; i++) {
+        var track = tracks[i];
+        if (!track || !track.clips) continue;
+        for (var j = 0; j < track.clips.numItems; j++) {
+          var clip = track.clips[j];
+          if (clip && clip.isSelected && clip.isSelected()) {
+            selected.push(clip);
+          }
+        }
+      }
+    }
+    return selected;
+  }
+
   function getMediaPath(projectItem) {
     if (!projectItem) {
       return "";
@@ -143,15 +163,12 @@ var BeatDetect = BeatDetect || {};
     };
   }
 
-  function setMarkerFields(marker, name, comments, colorIndex) {
+  function setMarkerFields(marker, colorIndex) {
     if (!marker) {
       return;
     }
-    marker.name = name;
-    marker.comments = comments;
-    if (marker.setTypeAsComment) {
-      marker.setTypeAsComment();
-    }
+    marker.name = "";
+    marker.comments = "";
     if (marker.setColorByIndex) {
       marker.setColorByIndex(colorIndex, 0);
     }
@@ -178,30 +195,19 @@ var BeatDetect = BeatDetect || {};
     return target === "clip" ? 2 : 1;
   }
 
-  function markerPrefixForFocus(focus) {
-    if (focus === "vocal") {
-      return "BD Vocal";
-    }
-    if (focus === "music") {
-      return "BD Music";
-    }
-    if (focus === "spikes") {
-      return "BD Spike";
-    }
-    return "BD Event";
-  }
+  // Color indices used by Beat Detect for identification:
+  // vocal=4, music=3, spikes=1, default clip=2, default seq=1
+  var BD_COLOR_INDICES = [1, 2, 3, 4];
 
   function isBeatDetectMarker(marker) {
     if (!marker) {
       return false;
     }
+    // With blank markers, identify BD markers by checking they have
+    // no name and no comments (plain markers created by Beat Detect)
     var name = marker.name || "";
     var comments = marker.comments || "";
-    return name.indexOf("BD Spike") === 0 ||
-      name.indexOf("BD Music") === 0 ||
-      name.indexOf("BD Vocal") === 0 ||
-      name.indexOf("BD Event") === 0 ||
-      comments.indexOf("Beat Detect ") === 0;
+    return name === "" && comments === "";
   }
 
   function markerTimeSeconds(marker) {
@@ -297,19 +303,17 @@ var BeatDetect = BeatDetect || {};
           continue;
         }
 
-        var name = markerPrefixForFocus(focus) + " " + Math.round(score * 100) + "%";
-        var comments = "Beat Detect " + focus + " marker at source " + eventTime.toFixed(3) + "s";
         var color = markerColorForFocus(focus, target);
 
         if (target === "clip") {
-          setMarkerFields(createClipMarker(clip, eventTime), name, comments, color);
+          setMarkerFields(createClipMarker(clip, eventTime), color);
         } else {
           var sequenceTime = info.startSeconds + (eventTime - info.inPointSeconds);
           if (sequenceTime < info.startSeconds || sequenceTime > info.endSeconds) {
             skipped++;
             continue;
           }
-          setMarkerFields(seq.markers.createMarker(sequenceTime), name, comments, color);
+          setMarkerFields(seq.markers.createMarker(sequenceTime), color);
         }
         applied++;
       }
@@ -357,6 +361,63 @@ var BeatDetect = BeatDetect || {};
       }
 
       return ok({ removed: removed });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  BeatDetect.applyGimbalZoom = function (payloadJson) {
+    try {
+      var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0 };
+      var zoomTarget = payload.zoom || 110.0;
+      
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var clips = getAllSelectedVideoClips(seq);
+      if (clips.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+
+      var appliedCount = 0;
+      for (var i = 0; i < clips.length; i++) {
+        var clip = clips[i];
+        if (clip.components) {
+          for (var c = 0; c < clip.components.numItems; c++) {
+            var component = clip.components[c];
+            if (component.matchName === "AE.ADBE Motion" || component.displayName === "Motion") {
+              for (var p = 0; p < component.properties.numItems; p++) {
+                var prop = component.properties[p];
+                if (prop.matchName === "ADBE Video Scale" || prop.displayName === "Scale") {
+                  prop.setTimeVarying(true);
+                  
+                  // Add smooth 100% to 110% zoom over the clip duration using sequence time
+                  var inTime = clip.start.seconds || timeToSeconds(clip.start);
+                  var outTime = clip.end.seconds || timeToSeconds(clip.end);
+                  
+                  prop.addKey(inTime);
+                  prop.setValueAtKey(inTime, 100.0, true);
+                  
+                  prop.addKey(outTime);
+                  prop.setValueAtKey(outTime, zoomTarget, true);
+                  
+                  appliedCount++;
+                  break;
+                }
+              }
+              break; // Found Motion
+            }
+          }
+        }
+      }
+
+      if (appliedCount === 0) {
+        throw new Error("Could not find Motion properties on the selected clips.");
+      }
+
+      return ok({ applied: appliedCount });
     } catch (error) {
       return fail(error.message || String(error));
     }

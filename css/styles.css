@@ -471,6 +471,37 @@ input[type="range"]::-webkit-slider-thumb:hover {
   color: var(--text-muted);
 }
 
+/* Footer / Credit */
+.panel-footer {
+  margin-top: auto;
+  text-align: center;
+  padding-top: 10px;
+}
+
+.github-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  color: var(--text-muted);
+  text-decoration: none;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  opacity: 0.7;
+}
+
+.github-link:hover {
+  color: var(--text-main);
+  opacity: 1;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
+  transform: scale(1.05);
+}
+
+.github-link svg {
+  color: var(--accent-2);
+}
+
 /* Custom Scrollbar */
 ::-webkit-scrollbar {
   width: 6px;

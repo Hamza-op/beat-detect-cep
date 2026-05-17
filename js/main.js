@@ -710,6 +710,26 @@
   }
   syncModeSelection();
 
+  var githubLink = document.getElementById("githubLink");
+  if (githubLink) {
+    githubLink.addEventListener("click", function (e) {
+      e.preventDefault();
+      try {
+        var req = getNodeRequire();
+        if (req) {
+          var cp = req('child_process');
+          var isWin = req('os').platform() === 'win32';
+          var cmd = isWin ? 'start https://github.com/Hamza-op' : 'open https://github.com/Hamza-op';
+          cp.exec(cmd);
+        } else {
+          window.open("https://github.com/Hamza-op");
+        }
+      } catch (err) {
+        // Ignore fallback errors
+      }
+    });
+  }
+
   if (isBrowserPreview()) {
     setStatus("Browser preview mode. Analyze uses simulated music spikes; Premiere actions are mocked.");
   }

@@ -11,20 +11,23 @@
   };
 
   var dom = {
-    analyzeButton: document.getElementById("analyzeButton"),
-    diagnosticsButton: document.getElementById("diagnosticsButton"),
-    applyButton: document.getElementById("applyButton"),
-    removeButton: document.getElementById("removeButton"),
+    analyzeButton:    document.getElementById("analyzeButton"),
+    randomizeButton:  document.getElementById("randomizeButton"),
+    diagnosticsButton:document.getElementById("diagnosticsButton"),
+    applyButton:      document.getElementById("applyButton"),
+    removeButton:     document.getElementById("removeButton"),
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
-    status: document.getElementById("status"),
-    densityPanel: document.getElementById("densityPanel"),
-    densitySlider: document.getElementById("densitySlider"),
-    thresholdLabel: document.getElementById("thresholdLabel"),
-    filteredCount: document.getElementById("filteredCount"),
-    totalCount: document.getElementById("totalCount"),
-    markerTarget: document.getElementById("markerTarget"),
-    zoomSlider: document.getElementById("zoomSlider"),
-    zoomLabel: document.getElementById("zoomLabel")
+    status:           document.getElementById("status"),
+    densityPanel:     document.getElementById("densityPanel"),
+    densitySlider:    document.getElementById("densitySlider"),
+    thresholdLabel:   document.getElementById("thresholdLabel"),
+    filteredCount:    document.getElementById("filteredCount"),
+    totalCount:       document.getElementById("totalCount"),
+    markerTarget:     document.getElementById("markerTarget"),
+    zoomSlider:       document.getElementById("zoomSlider"),
+    zoomLabel:        document.getElementById("zoomLabel"),
+    targetCountInput: document.getElementById("targetCountInput"),
+    targetCountHint:  document.getElementById("targetCountHint")
   };
 
   function getDetectionFocus() {
@@ -42,16 +45,19 @@
 
   function setBusy(isBusy) {
     state.isBusy = isBusy;
-    dom.analyzeButton.disabled = isBusy;
+    dom.analyzeButton.disabled   = isBusy;
     dom.diagnosticsButton.disabled = isBusy;
-    dom.removeButton.disabled = isBusy;
+    dom.removeButton.disabled    = isBusy;
+    if (dom.randomizeButton) dom.randomizeButton.disabled = isBusy || state.allEvents.length === 0;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
   }
 
-  function setStatus(message, isError) {
+  function setStatus(message, isError, isBusy, isSuccess) {
     dom.status.textContent = message;
     dom.status.classList.toggle("is-error", Boolean(isError));
+    dom.status.classList.toggle("is-busy", Boolean(isBusy));
+    dom.status.classList.toggle("is-success", Boolean(isSuccess));
     appendLog((isError ? "ERROR: " : "STATUS: ") + message);
   }
 
@@ -492,22 +498,193 @@
     return keepStrongestPerWindow(filtered, windowSeconds);
   }
 
-  function filterEvents() {
-    var threshold = getThreshold();
-    var focus = getDetectionFocus();
-    var thresholded = state.allEvents.filter(function (event) {
-      return Number(event.score) >= threshold;
-    });
-    state.filteredEvents = finalDensityPass(
-      suppressCloseEvents(thresholded, spacingForFilter(threshold, focus), focus),
-      threshold,
-      focus
-    );
+  // ── Target Count selection logic ──────────────────────────────
+  //
+  // Selects exactly N events from state.allEvents with two goals:
+  //   1. Distribute picks across the full duration (no clustering).
+  //   2. Within each segment pick the highest-scoring event so the
+  //      output still follows the actual musical content.
+  //
+  // Strategy:
+  //   a. If N >= pool size  → return the whole pool (already filtered).
+  //   b. Divide the timeline into N equal segments.
+  //   c. In each segment pick the strongest event. If a segment is
+  //      empty (gap in the audio), skip it and "carry" its slot to a
+  //      neighbouring non-empty segment by widening the search window.
+  //   d. After the first pass, if fewer than N events were picked
+  //      (due to gaps), fill the remainder with the globally strongest
+  //      un-selected events to reach exactly N.
+  //
+  function selectByTargetCount(pool, n) {
+    if (!pool || pool.length === 0 || n <= 0) return [];
+    if (n >= pool.length) return pool.slice(); // Pool is already sorted by time
 
-    dom.thresholdLabel.textContent = threshold.toFixed(2);
+    var sorted = pool.slice();
+    var duration = sorted[sorted.length - 1].time;
+    if (duration <= 0) {
+      // No time axis — fall back to top-N by score
+      return pool.slice().sort(function(a,b){ return b.score - a.score; }).slice(0, n)
+        .sort(function(a,b){ return a.time - b.time; });
+    }
+
+    var segWidth = duration / n;
+    var selected = [];
+    var usedIndices = {};
+
+    for (var seg = 0; seg < n; seg++) {
+      var tLo = seg * segWidth;
+      var tHi = tLo + segWidth;
+
+      // Widen by 50 % on each side if segment is empty
+      var attempts = 0;
+      var expand = 0;
+      var best = null;
+      var bestIdx = -1;
+
+      while (best === null && attempts < 6) {
+        var lo = tLo - expand * segWidth;
+        var hi = tHi + expand * segWidth;
+        for (var k = 0; k < sorted.length; k++) {
+          if (usedIndices[k]) continue;
+          var t = sorted[k].time;
+          if (t >= lo && t < hi) {
+            if (best === null || sorted[k].score > best.score) {
+              best = sorted[k];
+              bestIdx = k;
+            }
+          }
+        }
+        expand += 0.5;
+        attempts++;
+      }
+
+      if (best !== null) {
+        selected.push(best);
+        usedIndices[bestIdx] = true;
+      }
+    }
+
+    // Gap fill: if we still need more events, top up with globally strongest unused
+    if (selected.length < n) {
+      var remaining = sorted
+        .filter(function(_, i) { return !usedIndices[i]; })
+        .sort(function(a, b) { return b.score - a.score; });
+      for (var r = 0; r < remaining.length && selected.length < n; r++) {
+        selected.push(remaining[r]);
+      }
+    }
+
+    return selected.sort(function(a,b){ return a.time - b.time; });
+  }
+
+  // Returns the user-entered target count (integer) or null if blank/invalid.
+  function getTargetCount() {
+    if (!dom.targetCountInput) return null;
+    var raw = dom.targetCountInput.value.trim();
+    if (raw === "") return null;
+    var n = parseInt(raw, 10);
+    return (isFinite(n) && n >= 1) ? n : null;
+  }
+
+  // Calibrate min/max bounds of the target-count input after analysis.
+  function calibrateTargetCountBounds(allEvents, clip) {
+    if (!dom.targetCountInput) return;
+    var total = allEvents.length;
+    // Practical minimum: at least 1 but default to ~1 per 15 s of track
+    var duration = (clip && clip.duration) ? Number(clip.duration) : 0;
+    var minEstimate = duration > 0 ? Math.max(1, Math.round(duration / 15)) : 1;
+    var min = Math.min(minEstimate, Math.max(1, total));
+    var max = total;
+    dom.targetCountInput.min = String(min);
+    dom.targetCountInput.max = String(max);
+    // Update hint with range
+    if (dom.targetCountHint) {
+      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Leave blank for density slider.";
+    }
+  }
+
+  // Perform a random shuffle of the target-count selection.
+  // Picks N events from the pool at random but still distributes them
+  // across segments (each segment contributes one random event).
+  function randomizeSelection() {
+    var n = getTargetCount();
+    if (!n || state.allEvents.length === 0) return;
+
+    var pool = state.allEvents;
+    var sorted = pool.slice().sort(function(a,b){ return a.time - b.time; });
+    var duration = sorted[sorted.length - 1].time;
+    var segWidth = duration > 0 ? duration / n : 0;
+    var selected = [];
+    var usedIndices = {};
+
+    for (var seg = 0; seg < n; seg++) {
+      var tLo = seg * segWidth;
+      var tHi = tLo + segWidth;
+      var candidates = [];
+      for (var k = 0; k < sorted.length; k++) {
+        if (!usedIndices[k] && sorted[k].time >= tLo && sorted[k].time < tHi) {
+          candidates.push(k);
+        }
+      }
+      if (candidates.length > 0) {
+        var pick = candidates[Math.floor(Math.random() * candidates.length)];
+        selected.push(sorted[pick]);
+        usedIndices[pick] = true;
+      }
+    }
+    // Top-up with random unselected events if needed
+    if (selected.length < n) {
+      var unused = sorted.filter(function(_, i){ return !usedIndices[i]; });
+      // Shuffle unused
+      for (var i = unused.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = unused[i]; unused[i] = unused[j]; unused[j] = tmp;
+      }
+      for (var u = 0; u < unused.length && selected.length < n; u++) {
+        selected.push(unused[u]);
+      }
+    }
+
+    state.filteredEvents = selected.sort(function(a,b){ return a.time - b.time; });
+    updateCounterUI(n);
+  }
+
+  function updateCounterUI(targetN) {
+    var n = targetN !== undefined ? targetN : getTargetCount();
     dom.filteredCount.textContent = String(state.filteredEvents.length);
-    dom.totalCount.textContent = "of " + state.allEvents.length + " events selected";
+    if (n !== null) {
+      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + n + ")";
+      dom.thresholdLabel.textContent = "\u2022" + state.filteredEvents.length;
+    } else {
+      var threshold = getThreshold();
+      dom.thresholdLabel.textContent = threshold.toFixed(2);
+      dom.totalCount.textContent = "of " + state.allEvents.length + " events selected";
+    }
     dom.applyButton.disabled = state.isBusy || state.filteredEvents.length === 0;
+    if (dom.randomizeButton) dom.randomizeButton.disabled = state.isBusy || state.allEvents.length === 0;
+  }
+
+  function filterEvents() {
+    var n = getTargetCount();
+    if (n !== null) {
+      // ── Target Count mode ──
+      state.filteredEvents = selectByTargetCount(state.allEvents, n);
+      if (dom.targetCountInput) dom.targetCountInput.classList.add("is-active");
+    } else {
+      // ── Density slider mode ──
+      var threshold = getThreshold();
+      var focus = getDetectionFocus();
+      var thresholded = state.allEvents.filter(function(event) {
+        return Number(event.score) >= threshold;
+      });
+      state.filteredEvents = finalDensityPass(
+        suppressCloseEvents(thresholded, spacingForFilter(threshold, focus), focus),
+        threshold,
+        focus
+      );
+      if (dom.targetCountInput) dom.targetCountInput.classList.remove("is-active");
+    }
+    updateCounterUI();
   }
 
   function sanitizeEvents(events) {
@@ -527,16 +704,14 @@
   }
 
   function analyzeTrack() {
-    if (state.isBusy) {
-      return;
-    }
+    if (state.isBusy) return;
 
     setBusy(true);
-    state.allEvents = [];
+    state.allEvents    = [];
     state.filteredEvents = [];
-    state.clip = null;
+    state.clip         = null;
     dom.densityPanel.classList.add("is-hidden");
-    setStatus("Reading the selected clip path from Premiere...");
+    setStatus("Reading the selected clip path from Premiere...", false, true);
 
     cepEval("BeatDetect.getSelectedClipInfo()")
       .then(function (result) {
@@ -545,18 +720,25 @@
           throw new Error("Premiere returned an empty media path for the selected clip.");
         }
         var focus = getDetectionFocus();
-        var label = focus === "vocal" ? "vocal phrase starts and melodic entries" : focus === "music" ? "music spikes and vocal phrase starts" : "sharp percussion hits, drops, and accents";
-        setStatus("Analyzing " + state.clip.name + " for " + label + "...");
+        var label = focus === "vocal"
+          ? "vocal phrase starts and melodic entries"
+          : focus === "music"
+            ? "music spikes and vocal phrase starts"
+            : "sharp percussion hits, drops, and accents";
+        setStatus("Analyzing " + state.clip.name + " for " + label + "...", false, true);
         return runHybridAnalyzer(state.clip.mediaPath, focus);
       })
       .then(function (analysis) {
         state.allEvents = sanitizeEvents(analysis.events || []);
+        // Calibrate target-count input bounds now we know the event pool size
+        calibrateTargetCountBounds(state.allEvents, state.clip);
         filterEvents();
         dom.densityPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
           "found " + state.allEvents.length + " total rhythmic events" +
-          (analysis.essentiaUsed ? " using Rust + Essentia support." : " using Rust analyzer.")
+          (analysis.essentiaUsed ? " using Rust + Essentia support." : " using Rust analyzer."),
+          false, false, true
         );
       })
       .catch(function (error) {
@@ -574,7 +756,7 @@
     }
 
     setBusy(true);
-    setStatus("Applying " + state.filteredEvents.length + " markers in Premiere...");
+    setStatus("Applying " + state.filteredEvents.length + " markers in Premiere...", false, true);
 
     var payload = {
       target: dom.markerTarget.value,
@@ -585,7 +767,7 @@
 
     cepEval("BeatDetect.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Applied " + result.applied + " markers. Skipped " + result.skipped + " outside the selected clip range.");
+        setStatus("Applied " + result.applied + " markers. Skipped " + result.skipped + " outside the selected clip range.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -602,7 +784,7 @@
     }
 
     setBusy(true);
-    setStatus("Removing Beat Detect markers from the selected " + (dom.markerTarget.value === "clip" ? "clip" : "timeline range") + "...");
+    setStatus("Removing Beat Detect markers from the selected " + (dom.markerTarget.value === "clip" ? "clip" : "timeline range") + "...", false, true);
 
     var payload = {
       target: dom.markerTarget.value
@@ -610,7 +792,7 @@
 
     cepEval("BeatDetect.removeMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Removed " + result.removed + " Beat Detect markers.");
+        setStatus("Removed " + result.removed + " Beat Detect markers.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -692,7 +874,21 @@
   dom.applyButton.addEventListener("click", applyMarkers);
   dom.removeButton.addEventListener("click", removeMarkers);
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
+  if (dom.randomizeButton) {
+    dom.randomizeButton.addEventListener("click", function() {
+      // If no target count is set, default to current filtered count
+      if (getTargetCount() === null && state.filteredEvents.length > 0) {
+        dom.targetCountInput.value = String(state.filteredEvents.length);
+      }
+      randomizeSelection();
+    });
+  }
   dom.densitySlider.addEventListener("input", filterEvents);
+  if (dom.targetCountInput) {
+    dom.targetCountInput.addEventListener("input", function() {
+      if (state.allEvents.length > 0) filterEvents();
+    });
+  }
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function() {
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";

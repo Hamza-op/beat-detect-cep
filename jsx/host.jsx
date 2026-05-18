@@ -391,19 +391,43 @@ var BeatDetect = BeatDetect || {};
               for (var p = 0; p < component.properties.numItems; p++) {
                 var prop = component.properties[p];
                 if (prop.matchName === "ADBE Video Scale" || prop.displayName === "Scale") {
-                  prop.setTimeVarying(true);
-                  
-                  // Add smooth 100% to 110% zoom over the clip duration using sequence time
-                  var inTime = clip.start.seconds || timeToSeconds(clip.start);
-                  var outTime = clip.end.seconds || timeToSeconds(clip.end);
-                  
-                  prop.addKey(inTime);
-                  prop.setValueAtKey(inTime, 100.0, true);
-                  
-                  prop.addKey(outTime);
-                  prop.setValueAtKey(outTime, zoomTarget, true);
-                  
-                  appliedCount++;
+                  try {
+                    prop.setTimeVarying(true);
+                    
+                    // Add smooth 100% to 110% zoom over the clip duration using sequence time
+                    // Ensure perfectly frame-aligned precision using ticks if available
+                    var inTime = clip.start.ticks ? (parseInt(clip.start.ticks, 10) / TICKS_PER_SECOND) : (clip.start.seconds || timeToSeconds(clip.start));
+                    var outTime = clip.end.ticks ? (parseInt(clip.end.ticks, 10) / TICKS_PER_SECOND) : (clip.end.seconds || timeToSeconds(clip.end));
+                    
+                    // Clear existing keyframes within range to prevent jitter
+                    if (prop.getKeys) {
+                      var keys = prop.getKeys() || [];
+                      for (var k = keys.length - 1; k >= 0; k--) {
+                        var kTime = keys[k].ticks ? (parseInt(keys[k].ticks, 10) / TICKS_PER_SECOND) : timeToSeconds(keys[k]);
+                        if (kTime >= inTime && kTime <= outTime) {
+                          try { prop.removeKey(kTime); } catch (e) {
+                            try { prop.removeKey(keys[k]); } catch (e2) {}
+                          }
+                        }
+                      }
+                    }
+
+                    prop.addKey(inTime);
+                    prop.setValueAtKey(inTime, 100.0, true);
+                    if (prop.setInterpolationTypeAtKey) {
+                      prop.setInterpolationTypeAtKey(inTime, 5, true); // 5 = Bezier
+                    }
+                    
+                    prop.addKey(outTime);
+                    prop.setValueAtKey(outTime, zoomTarget, true);
+                    if (prop.setInterpolationTypeAtKey) {
+                      prop.setInterpolationTypeAtKey(outTime, 5, true); // 5 = Bezier
+                    }
+                    
+                    appliedCount++;
+                  } catch (err) {
+                    // Gracefully handle if Motion component is hidden or Scale property is restricted
+                  }
                   break;
                 }
               }

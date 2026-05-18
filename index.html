@@ -8,39 +8,40 @@
   </head>
   <body>
     <main class="panel-shell">
+
+      <!-- ── Header ─────────────────────────────────────── -->
       <header class="panel-header">
-        <div>
-          <p class="eyebrow">Premiere Pro CEP</p>
+        <div class="wordmark">
+          <span class="eyebrow">Premiere Pro</span>
           <h1>Beat Detect</h1>
-          <p class="version-tag">v1.0.0 verified</p>
         </div>
-        <div class="pulse-meter" aria-hidden="true">
-          <span></span>
-          <span></span>
-          <span></span>
-          <span></span>
-          <span></span>
-        </div>
+        <span class="version-tag">v1.0.0</span>
       </header>
 
-      <section class="control-stack" aria-label="Beat marker controls">
+      <!-- ── Card 1: Beat Marker Generation ────────────── -->
+      <section class="card" aria-label="Beat marker controls">
+        <div class="card-title">
+          <span class="card-dot dot-cyan"></span>
+          Marker Generation
+        </div>
+
         <label class="field">
-          <span>Marker Target</span>
+          <span class="field-label">Marker Target</span>
           <select id="markerTarget">
             <option value="sequence">Sequence Markers</option>
             <option value="clip">Clip Markers</option>
           </select>
         </label>
 
-        <section class="mode-group" aria-label="Detection focus">
-          <div class="field-label">Detection Focus</div>
+        <div class="field">
+          <span class="field-label">Detection Focus</span>
           <div class="mode-grid">
             <label class="mode-option mode-spikes">
               <input type="radio" name="detectionFocus" value="spikes" checked>
               <span class="mode-swatch"></span>
               <span class="mode-text">
                 <strong>Spikes</strong>
-                <small>Dhol, drops, hits</small>
+                <small>Hits &amp; drops</small>
               </span>
             </label>
             <label class="mode-option mode-music">
@@ -48,7 +49,7 @@
               <span class="mode-swatch"></span>
               <span class="mode-text">
                 <strong>Music</strong>
-                <small>Spikes + phrases</small>
+                <small>Full beats</small>
               </span>
             </label>
             <label class="mode-option mode-vocal">
@@ -56,58 +57,67 @@
               <span class="mode-swatch"></span>
               <span class="mode-text">
                 <strong>Vocal</strong>
-                <small>Phrase entries</small>
+                <small>Phrases</small>
               </span>
             </label>
           </div>
-        </section>
+        </div>
 
-        <button id="analyzeButton" class="primary-button" type="button">
-          Analyze Track
-        </button>
-
-        <button id="diagnosticsButton" class="utility-button" type="button">
-          Run Diagnostics
-        </button>
+        <div class="analyze-row">
+          <button id="analyzeButton" class="primary-button" type="button">
+            Analyze Track
+          </button>
+          <button id="randomizeButton" class="randomize-button" type="button" disabled title="Randomly pick N events from the detected pool">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
+          </button>
+        </div>
 
         <div id="status" class="status" role="status">
           Select one audio or linked clip in the active sequence.
         </div>
 
         <section id="densityPanel" class="density-panel is-hidden" aria-label="Marker density">
+
+          <!-- Density slider row -->
           <div class="density-head">
             <span>Marker Density</span>
             <strong id="thresholdLabel">0.75</strong>
           </div>
           <input id="densitySlider" type="range" min="20" max="80" value="75" step="1">
           <div class="density-scale">
-            <span>Show All Micro-Beats</span>
-            <span>Major Beats Only</span>
+            <span>All micro-beats</span>
+            <span>Major only</span>
           </div>
+
+          <!-- Live event counter -->
           <div class="event-counter">
             <strong id="filteredCount">0</strong>
             <span id="totalCount">of 0 events selected</span>
           </div>
+
+          <!-- Target Count divider -->
+          <div class="panel-divider" aria-hidden="true"></div>
+
+          <!-- Target Count row -->
+          <div class="target-count-row">
+            <label class="target-count-label" for="targetCountInput">Target Count</label>
+            <input
+              id="targetCountInput"
+              class="target-count-input"
+              type="number"
+              min="1"
+              max="999"
+              value=""
+              placeholder="Auto"
+              title="Enter an exact number of markers to generate"
+            >
+          </div>
+          <p class="target-count-hint" id="targetCountHint">Leave blank to use density slider.</p>
+
         </section>
 
         <button id="applyButton" class="secondary-button" type="button" disabled>
           Apply Markers to Timeline
-        </button>
-
-        <section id="zoomPanel" class="density-panel" aria-label="Zoom Amount">
-          <div class="density-head">
-            <span>Gimbal Zoom Amount</span>
-            <strong id="zoomLabel">110%</strong>
-          </div>
-          <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
-          <div class="density-scale">
-            <span>Subtle</span>
-            <span>Intense</span>
-          </div>
-        </section>
-
-        <button id="gimbalZoomButton" class="secondary-button" type="button" style="margin-top: 8px;">
-          Apply Gimbal Zoom (Selected Clips)
         </button>
 
         <button id="removeButton" class="danger-button" type="button">
@@ -115,14 +125,43 @@
         </button>
       </section>
 
+      <!-- ── Card 2: Gimbal Zoom ────────────────────────── -->
+      <section class="card card-zoom" aria-label="Gimbal zoom utility">
+        <div class="card-title">
+          <span class="card-dot dot-purple"></span>
+          Gimbal Zoom
+        </div>
+
+        <div class="density-panel density-panel--inline" aria-label="Zoom Amount">
+          <div class="density-head">
+            <span>Zoom Amount</span>
+            <strong id="zoomLabel">110%</strong>
+          </div>
+          <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
+          <div class="density-scale">
+            <span>Subtle</span>
+            <span>Intense</span>
+          </div>
+        </div>
+
+        <button id="gimbalZoomButton" class="zoom-button" type="button">
+          Apply Gimbal Zoom
+        </button>
+      </section>
+
+      <!-- ── Footer ─────────────────────────────────────── -->
       <footer class="panel-footer">
+        <button id="diagnosticsButton" class="utility-button" type="button">
+          Run Diagnostics
+        </button>
         <a href="#" id="githubLink" class="github-link">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
           </svg>
-          Made by Hamza-op
+          Hamza-op
         </a>
       </footer>
+
     </main>
 
     <script src="./js/CSInterface.js"></script>

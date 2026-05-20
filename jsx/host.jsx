@@ -256,7 +256,8 @@ var BeatDetect = BeatDetect || {};
       startSeconds: timeToSeconds(clip.start),
       endSeconds: timeToSeconds(clip.end),
       inPointSeconds: timeToSeconds(clip.inPoint),
-      outPointSeconds: timeToSeconds(clip.outPoint)
+      outPointSeconds: timeToSeconds(clip.outPoint),
+      durationSeconds: Math.max(0, timeToSeconds(clip.outPoint) - timeToSeconds(clip.inPoint))
     };
   }
 

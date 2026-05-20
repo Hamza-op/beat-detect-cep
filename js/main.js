@@ -87,11 +87,27 @@
   }
 
   function parseBridgeResult(raw) {
-    if (!raw) {
+    if (raw === null || raw === undefined) {
       throw new Error("Premiere returned an empty response.");
     }
 
-    var parsed = JSON.parse(raw);
+    var text = String(raw).trim();
+    if (!text) {
+      throw new Error("Premiere returned an empty response.");
+    }
+    if (text.indexOf("EvalScript error") === 0) {
+      throw new Error("Premiere bridge failed before returning data. Check the ExtendScript bridge and restart the panel.");
+    }
+
+    var parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new Error("Premiere returned invalid bridge data: " + text.slice(0, 240));
+    }
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Premiere returned an invalid bridge payload.");
+    }
     if (!parsed.ok) {
       throw new Error(parsed.error || "Premiere operation failed.");
     }
@@ -159,6 +175,9 @@
   function runAnalyzer(mediaPath, focus) {
     if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
       return Promise.resolve(makePreviewEvents(focus));
+    }
+    if (!mediaPath || typeof mediaPath !== "string") {
+      return Promise.reject(new Error("Analyzer did not receive a valid media path."));
     }
 
     var req = getNodeRequire();
@@ -370,7 +389,10 @@
   function runHybridAnalyzer(mediaPath, focus) {
     return Promise.all([
       runAnalyzer(mediaPath, focus),
-      runEssentiaAnalyzer(mediaPath, focus)
+      runEssentiaAnalyzer(mediaPath, focus).catch(function (error) {
+        appendLog("Essentia optional analyzer skipped: " + (error && error.message ? error.message : String(error)));
+        return { events: [], used: false, reason: "optional analyzer failed" };
+      })
     ]).then(function (results) {
       var primaryEvents = results[0];
       var essentia = results[1] || { events: [], used: false };
@@ -601,15 +623,29 @@
     var raw = dom.targetCountInput.value.trim();
     if (raw === "") return null;
     var n = parseInt(raw, 10);
-    return (isFinite(n) && n >= 1) ? n : null;
+    return (isFinite(n) && n >= 1) ? Math.floor(n) : null;
   }
 
   // Calibrate min/max bounds of the target-count input after analysis.
   function calibrateTargetCountBounds(allEvents, clip) {
     if (!dom.targetCountInput) return;
     var total = allEvents.length;
+    if (total < 1) {
+      dom.targetCountInput.min = "1";
+      dom.targetCountInput.max = "1";
+      if (dom.targetCountHint) {
+        dom.targetCountHint.textContent = "No usable events found for this analysis.";
+      }
+      return;
+    }
     // Practical minimum: at least 1 but default to ~1 per 15 s of track
-    var duration = (clip && clip.duration) ? Number(clip.duration) : 0;
+    var duration = 0;
+    if (clip) {
+      duration = Number(clip.durationSeconds) || Math.max(0, Number(clip.outPointSeconds) - Number(clip.inPointSeconds));
+      if (!duration) {
+        duration = Math.max(0, Number(clip.endSeconds) - Number(clip.startSeconds));
+      }
+    }
     var minEstimate = duration > 0 ? Math.max(1, Math.round(duration / 15)) : 1;
     var min = Math.min(minEstimate, Math.max(1, total));
     var max = total;
@@ -629,6 +665,11 @@
     if (!n || state.allEvents.length === 0) return;
 
     var pool = state.allEvents;
+    if (n >= pool.length) {
+      state.filteredEvents = pool.slice();
+      updateCounterUI(pool.length);
+      return;
+    }
     var sorted = pool.slice().sort(function(a,b){ return a.time - b.time; });
     var duration = sorted[sorted.length - 1].time;
     var segWidth = duration > 0 ? duration / n : 0;
@@ -669,9 +710,10 @@
 
   function updateCounterUI(targetN) {
     var n = targetN !== undefined ? targetN : getTargetCount();
+    var displayTarget = n !== null && state.allEvents.length > 0 ? Math.min(n, state.allEvents.length) : n;
     dom.filteredCount.textContent = String(state.filteredEvents.length);
     if (n !== null) {
-      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + n + ", " + getTargetStrategy() + ")";
+      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + displayTarget + ", " + getTargetStrategy() + ")";
       dom.thresholdLabel.textContent = "\u2022" + state.filteredEvents.length;
     } else {
       var threshold = getThreshold();

@@ -20,8 +20,10 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. It can a
 - Density slider from `0.20` to `0.80`
 - Adaptive spacing so weak nearby events are suppressed but strong nearby dhol/tabla hits can survive
 - Final marker selection keeps only the strongest event per whole second
-- Mode-specific marker naming and colors
-- Remove only Beat Detect markers from the selected target/range
+- Score/mode-based marker colors while marker name/comment fields remain blank
+- Exact marker count mode with Balanced, Strongest, and Spread selection strategies
+- One-by-one Warp Stabilizer queue for selected video clips
+- Remove blank Beat Detect markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
 - Browser preview mode by opening `index.html` without Premiere
 - Single Windows setup executable
@@ -265,7 +267,7 @@ analysis-reports\o-rangrez-vocal-threshold-050.txt
 3. Choose `Sequence Markers` or `Clip Markers`.
 4. Choose detection focus: `Spikes`, `Music`, or `Vocal`.
 5. Click `Analyze Track`.
-6. Adjust marker density.
+6. Adjust marker density, or enter an exact target marker count.
 7. Click `Apply Markers to Timeline`.
 
 To clean generated markers, keep the same marker target selected and click:
@@ -274,16 +276,13 @@ To clean generated markers, keep the same marker target selected and click:
 Remove Beat Detect Markers
 ```
 
-Removal only targets markers created by this extension:
+Beat Detect applies blank markers: marker name and comments are intentionally empty. Marker color carries the event category signal. Because the markers are intentionally blank, avoid using the remove button on ranges that contain user-created blank markers you want to keep.
 
-```text
-BD Spike
-BD Music
-BD Vocal
-BD Event
-```
+## Warp Stabilizer Queue
 
-Normal editor-created Premiere markers are not intentionally removed.
+Select multiple video clips and click `Apply Warp Stabilizer`. Beat Detect applies the effect to one selected clip, waits for Premiere's video-effect analysis state to report complete, then moves to the next selected clip.
+
+This uses Premiere's QE DOM to apply the named video effect and `Sequence.isDoneAnalyzingForVideoEffects()` to wait between clips. If a Premiere version does not expose either API, the panel reports the failure instead of continuing blindly.
 
 ## Detection Notes
 

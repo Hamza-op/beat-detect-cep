@@ -211,7 +211,7 @@ select:hover, select:focus {
 }
 
 .mode-option:active {
-  transform: translateY(0);
+  transform: translateY(0) scale(0.98);
   box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 
@@ -317,6 +317,19 @@ button:disabled {
 .zoom-button:hover:not(:disabled) {
   background: rgba(139,92,246,0.20);
   border-color: var(--purple);
+}
+
+.warp-button {
+  background: rgba(6,182,212,0.10);
+  border: 1px solid rgba(6,182,212,0.28);
+  color: #67e8f9;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.warp-button:hover:not(:disabled) {
+  background: rgba(6,182,212,0.18);
+  border-color: var(--cyan);
 }
 
 /* Danger — subtle red */
@@ -509,8 +522,18 @@ input[type="range"]::-webkit-slider-thumb:active {
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.footer-row {
+  display: flex;
   gap: 8px;
-  padding-top: 4px;
+  width: 100%;
+}
+
+.footer-row .utility-button {
+  flex: 1;
 }
 
 .github-link {
@@ -584,6 +607,13 @@ input[type="range"]::-webkit-slider-thumb:active {
   gap: 8px;
 }
 
+.target-strategy-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .target-count-label {
   font-size: 10px;
   font-weight: 700;
@@ -627,6 +657,14 @@ input[type="range"]::-webkit-slider-thumb:active {
   color: var(--cyan);
 }
 
+.target-strategy-select {
+  width: 112px;
+  height: 28px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .target-count-hint {
   font-size: 9px;
   color: var(--text-dim);
@@ -649,6 +687,8 @@ input[type="range"]::-webkit-slider-thumb:active {
   .mode-text { align-items: flex-start; }
   .primary-button { height: 34px; }
   button { height: 32px; font-size: 11px; }
-  .target-count-row { flex-direction: column; align-items: stretch; gap: 4px; }
+  .target-count-row,
+  .target-strategy-row { flex-direction: column; align-items: stretch; gap: 4px; }
   .target-count-input { width: 100%; }
+  .target-strategy-select { width: 100%; }
 }

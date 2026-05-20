@@ -17,6 +17,7 @@
     applyButton:      document.getElementById("applyButton"),
     removeButton:     document.getElementById("removeButton"),
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
+    warpStabilizerButton: document.getElementById("warpStabilizerButton"),
     status:           document.getElementById("status"),
     densityPanel:     document.getElementById("densityPanel"),
     densitySlider:    document.getElementById("densitySlider"),
@@ -27,7 +28,9 @@
     zoomSlider:       document.getElementById("zoomSlider"),
     zoomLabel:        document.getElementById("zoomLabel"),
     targetCountInput: document.getElementById("targetCountInput"),
-    targetCountHint:  document.getElementById("targetCountHint")
+    targetStrategy:   document.getElementById("targetStrategy"),
+    targetCountHint:  document.getElementById("targetCountHint"),
+    clearLogsButton:  document.getElementById("clearLogsButton")
   };
 
   function getDetectionFocus() {
@@ -50,6 +53,8 @@
     dom.removeButton.disabled    = isBusy;
     if (dom.randomizeButton) dom.randomizeButton.disabled = isBusy || state.allEvents.length === 0;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
+    if (dom.warpStabilizerButton) dom.warpStabilizerButton.disabled = isBusy;
+    if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
   }
 
@@ -500,24 +505,28 @@
 
   // ── Target Count selection logic ──────────────────────────────
   //
-  // Selects exactly N events from state.allEvents with two goals:
-  //   1. Distribute picks across the full duration (no clustering).
-  //   2. Within each segment pick the highest-scoring event so the
-  //      output still follows the actual musical content.
+  // Selects exactly N events from state.allEvents.
   //
-  // Strategy:
-  //   a. If N >= pool size  → return the whole pool (already filtered).
-  //   b. Divide the timeline into N equal segments.
-  //   c. In each segment pick the strongest event. If a segment is
-  //      empty (gap in the audio), skip it and "carry" its slot to a
-  //      neighbouring non-empty segment by widening the search window.
-  //   d. After the first pass, if fewer than N events were picked
-  //      (due to gaps), fill the remainder with the globally strongest
-  //      un-selected events to reach exactly N.
+  // Strategies:
+  //   balanced  = one strong event per segment, with gap fill.
+  //   strongest = global top-N by score.
+  //   spread    = one event per segment, favoring time-center spacing.
   //
-  function selectByTargetCount(pool, n) {
+  function getTargetStrategy() {
+    return dom.targetStrategy ? dom.targetStrategy.value : "balanced";
+  }
+
+  function selectByTargetCount(pool, n, strategy) {
     if (!pool || pool.length === 0 || n <= 0) return [];
     if (n >= pool.length) return pool.slice(); // Pool is already sorted by time
+    strategy = strategy || "balanced";
+
+    if (strategy === "strongest") {
+      return pool.slice()
+        .sort(function(a, b) { return b.score - a.score; })
+        .slice(0, n)
+        .sort(function(a, b) { return a.time - b.time; });
+    }
 
     var sorted = pool.slice();
     var duration = sorted[sorted.length - 1].time;
@@ -540,6 +549,8 @@
       var expand = 0;
       var best = null;
       var bestIdx = -1;
+      var center = tLo + segWidth * 0.5;
+      var bestRank = -Infinity;
 
       while (best === null && attempts < 6) {
         var lo = tLo - expand * segWidth;
@@ -548,9 +559,16 @@
           if (usedIndices[k]) continue;
           var t = sorted[k].time;
           if (t >= lo && t < hi) {
-            if (best === null || sorted[k].score > best.score) {
+            var rank = sorted[k].score;
+            if (strategy === "spread") {
+              var distance = Math.abs(t - center);
+              var closeness = 1 - Math.min(1, distance / Math.max(segWidth * (1 + expand), 0.001));
+              rank = closeness * 0.70 + sorted[k].score * 0.30;
+            }
+            if (best === null || rank > bestRank) {
               best = sorted[k];
               bestIdx = k;
+              bestRank = rank;
             }
           }
         }
@@ -599,7 +617,7 @@
     dom.targetCountInput.max = String(max);
     // Update hint with range
     if (dom.targetCountHint) {
-      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Leave blank for density slider.";
+      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Use Strategy to choose balanced, strongest, or spread.";
     }
   }
 
@@ -653,7 +671,7 @@
     var n = targetN !== undefined ? targetN : getTargetCount();
     dom.filteredCount.textContent = String(state.filteredEvents.length);
     if (n !== null) {
-      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + n + ")";
+      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + n + ", " + getTargetStrategy() + ")";
       dom.thresholdLabel.textContent = "\u2022" + state.filteredEvents.length;
     } else {
       var threshold = getThreshold();
@@ -668,7 +686,7 @@
     var n = getTargetCount();
     if (n !== null) {
       // ── Target Count mode ──
-      state.filteredEvents = selectByTargetCount(state.allEvents, n);
+      state.filteredEvents = selectByTargetCount(state.allEvents, n, getTargetStrategy());
       if (dom.targetCountInput) dom.targetCountInput.classList.add("is-active");
     } else {
       // ── Density slider mode ──
@@ -701,6 +719,32 @@
       .sort(function (a, b) {
         return a.time - b.time;
       });
+  }
+
+  function markerColorIndexForEvent(event, focus) {
+    var score = Number(event.score) || 0;
+    if (focus === "vocal") {
+      return 4;
+    }
+    if (focus === "music") {
+      if (score >= 0.86) return 1;
+      if (score >= 0.64) return 3;
+      return 2;
+    }
+    if (score >= 0.82) {
+      return 1;
+    }
+    return 2;
+  }
+
+  function eventsForPremiere(events, focus) {
+    return events.map(function(event) {
+      return {
+        time: event.time,
+        score: event.score,
+        colorIndex: markerColorIndexForEvent(event, focus)
+      };
+    });
   }
 
   function analyzeTrack() {
@@ -762,7 +806,7 @@
       target: dom.markerTarget.value,
       mediaPath: state.clip ? state.clip.mediaPath : "",
       focus: getDetectionFocus(),
-      events: state.filteredEvents
+      events: eventsForPremiere(state.filteredEvents, getDetectionFocus())
     };
 
     cepEval("BeatDetect.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
@@ -826,6 +870,87 @@
       });
   }
 
+  function sleep(ms) {
+    return new Promise(function(resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  function waitForVideoEffectAnalysis(label) {
+    var started = Date.now();
+    var timeoutMs = 20 * 60 * 1000;
+
+    return sleep(1200).then(function poll() {
+      return cepEval("BeatDetect.isVideoEffectAnalysisDone()")
+        .then(function(result) {
+          if (result.done) {
+            return result;
+          }
+          if (Date.now() - started > timeoutMs) {
+            throw new Error("Timed out waiting for Warp Stabilizer analysis on " + label + ".");
+          }
+          setStatus("Waiting for Warp Stabilizer analysis: " + label + "...", false, true);
+          return sleep(2500).then(poll);
+        });
+    });
+  }
+
+  function applyWarpStabilizerQueue() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Reading selected video clips for Warp Stabilizer...", false, true);
+
+    cepEval("BeatDetect.getSelectedVideoClipCount()")
+      .then(function(result) {
+        var total = Number(result.count) || 0;
+        if (total < 1) {
+          throw new Error("Select at least one video clip in the active sequence.");
+        }
+
+        var applied = 0;
+        var skipped = 0;
+
+        function applyNext(index) {
+          if (index >= total) {
+            setStatus("Warp Stabilizer queue complete: applied " + applied + ", skipped " + skipped + ".", false, false, true);
+            return Promise.resolve();
+          }
+
+          setStatus("Applying Warp Stabilizer to clip " + (index + 1) + " of " + total + "...", false, true);
+          var payload = { index: index };
+          return cepEval("BeatDetect.applyWarpStabilizerToSelectedClip(" + JSON.stringify(JSON.stringify(payload)) + ")")
+            .then(function(applyResult) {
+              var name = applyResult.name || ("clip " + (index + 1));
+              if (applyResult.skipped) {
+                skipped++;
+                setStatus("Skipping " + name + ": " + applyResult.reason, false, true);
+                return sleep(300).then(function() {
+                  return applyNext(index + 1);
+                });
+              }
+
+              applied++;
+              setStatus("Warp Stabilizer applied to " + name + ". Waiting for analysis before next clip...", false, true);
+              return waitForVideoEffectAnalysis(name).then(function() {
+                return applyNext(index + 1);
+              });
+            });
+        }
+
+        return applyNext(0);
+      })
+      .catch(function(error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function() {
+        setBusy(false);
+      });
+  }
+
   function runDiagnostics() {
     if (state.isBusy) {
       return;
@@ -857,7 +982,16 @@
         if (result.diagnostics && result.diagnostics.length) {
           checks = checks.concat(result.diagnostics);
         }
-        setStatus(checks.join(" | "));
+        var report = checks.join(" | ");
+        setStatus(report);
+        
+        // Copy diagnostics to clipboard for support/debugging.
+        if (req) {
+          try {
+            copyToClipboard(report.replace(/ \| /g, "\n"));
+            appendLog("Diagnostics copied to clipboard.");
+          } catch (_) {}
+        }
       })
       .catch(function (error) {
         checks.push("Premiere bridge: FAIL - " + error.message);
@@ -869,11 +1003,54 @@
       });
   }
 
+  function clearLogs() {
+    var req = getNodeRequire();
+    if (!req) {
+      setStatus("Cannot clear logs: Node.js unavailable.", true);
+      return;
+    }
+
+    try {
+      var fs = req("fs");
+      var path = req("path");
+      var os = req("os");
+      var appData = typeof process !== "undefined" && process.env ? process.env.APPDATA : "";
+      var dir = path.join(appData || os.tmpdir(), "BeatDetect");
+
+      var panelLog = path.join(dir, "panel.log");
+      var installLog = path.join(dir, "install.log");
+
+      if (fs.existsSync(panelLog)) fs.writeFileSync(panelLog, "");
+      if (fs.existsSync(installLog)) fs.writeFileSync(installLog, "");
+
+      setStatus("Logs cleared successfully.", false, false, true);
+      if (fs.existsSync(panelLog)) fs.writeFileSync(panelLog, "");
+    } catch (error) {
+      setStatus("Failed to clear logs: " + error.message, true);
+    }
+  }
+
+  function copyToClipboard(text) {
+    var textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      document.execCommand("copy");
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
   dom.analyzeButton.addEventListener("click", analyzeTrack);
   dom.diagnosticsButton.addEventListener("click", runDiagnostics);
+  if (dom.clearLogsButton) dom.clearLogsButton.addEventListener("click", clearLogs);
   dom.applyButton.addEventListener("click", applyMarkers);
   dom.removeButton.addEventListener("click", removeMarkers);
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
+  if (dom.warpStabilizerButton) dom.warpStabilizerButton.addEventListener("click", applyWarpStabilizerQueue);
   if (dom.randomizeButton) {
     dom.randomizeButton.addEventListener("click", function() {
       // If no target count is set, default to current filtered count
@@ -887,6 +1064,11 @@
   if (dom.targetCountInput) {
     dom.targetCountInput.addEventListener("input", function() {
       if (state.allEvents.length > 0) filterEvents();
+    });
+  }
+  if (dom.targetStrategy) {
+    dom.targetStrategy.addEventListener("change", function() {
+      if (state.allEvents.length > 0 && getTargetCount() !== null) filterEvents();
     });
   }
   if (dom.zoomSlider) {

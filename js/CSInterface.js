@@ -49,6 +49,42 @@
         return;
       }
 
+      if (script.indexOf("BeatDetect.applyGimbalZoom") === 0) {
+        callback(JSON.stringify({ ok: true, applied: 3 }));
+        return;
+      }
+
+      if (script.indexOf("BeatDetect.getSelectedVideoClipCount") === 0) {
+        callback(JSON.stringify({ ok: true, count: 3 }));
+        return;
+      }
+
+      if (script.indexOf("BeatDetect.applyWarpStabilizerToSelectedClip") === 0) {
+        var warpMatch = script.match(/BeatDetect\.applyWarpStabilizerToSelectedClip\((.*)\)/);
+        var index = 0;
+        if (warpMatch && warpMatch[1]) {
+          try {
+            index = JSON.parse(JSON.parse(warpMatch[1])).index || 0;
+          } catch (_) {
+            index = 0;
+          }
+        }
+        callback(JSON.stringify({
+          ok: true,
+          applied: 1,
+          skipped: false,
+          index: index,
+          total: 3,
+          name: "Preview Clip " + (index + 1)
+        }));
+        return;
+      }
+
+      if (script.indexOf("BeatDetect.isVideoEffectAnalysisDone") === 0) {
+        callback(JSON.stringify({ ok: true, done: true }));
+        return;
+      }
+
       if (script.indexOf("BeatDetect.runDiagnostics") === 0) {
         callback(JSON.stringify({
           ok: true,

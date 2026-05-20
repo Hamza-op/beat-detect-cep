@@ -4,7 +4,12 @@ var BeatDetect = BeatDetect || {};
   var TICKS_PER_SECOND = 254016000000;
 
   function esc(value) {
-    return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+    return String(value)
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, '\\"')
+      .replace(/\r/g, "\\r")
+      .replace(/\n/g, "\\n")
+      .replace(/\t/g, "\\t");
   }
 
   function jsonString(value) {
@@ -13,6 +18,10 @@ var BeatDetect = BeatDetect || {};
     }
     if (typeof value === "number" || typeof value === "boolean") {
       return String(value);
+    }
+    // Handle dates if any
+    if (value instanceof Date) {
+      return '"' + value.toISOString() + '"';
     }
     return '"' + esc(value) + '"';
   }
@@ -137,6 +146,94 @@ var BeatDetect = BeatDetect || {};
     return selected;
   }
 
+  function getSelectedVideoClipRefs(seq) {
+    var selected = [];
+    if (!seq || !seq.videoTracks) {
+      return selected;
+    }
+
+    for (var i = 0; i < seq.videoTracks.numTracks; i++) {
+      var track = seq.videoTracks[i];
+      if (!track || !track.clips) {
+        continue;
+      }
+      for (var j = 0; j < track.clips.numItems; j++) {
+        var clip = track.clips[j];
+        if (clip && clip.isSelected && clip.isSelected()) {
+          selected.push({
+            clip: clip,
+            trackIndex: i,
+            clipIndex: j,
+            name: clip.name || "Selected clip"
+          });
+        }
+      }
+    }
+
+    return selected;
+  }
+
+  function clipHasWarpStabilizer(clip) {
+    if (!clip || !clip.components) {
+      return false;
+    }
+    for (var c = 0; c < clip.components.numItems; c++) {
+      var component = clip.components[c];
+      var matchName = String(component.matchName || "");
+      var displayName = String(component.displayName || "");
+      if (
+        matchName.indexOf("SubspaceStabilizer") >= 0 ||
+        displayName.toLowerCase().indexOf("warp stabilizer") >= 0
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getWarpStabilizerEffect() {
+    if (!app.enableQE) {
+      throw new Error("Premiere QE DOM is unavailable; cannot apply Warp Stabilizer by script.");
+    }
+    app.enableQE();
+    if (typeof qe === "undefined" || !qe.project || !qe.project.getVideoEffectByName) {
+      throw new Error("Premiere QE project API is unavailable; cannot find Warp Stabilizer.");
+    }
+
+    var names = ["Warp Stabilizer", "Warp Stabilizer VFX"];
+    for (var i = 0; i < names.length; i++) {
+      var effect = qe.project.getVideoEffectByName(names[i]);
+      if (effect) {
+        return effect;
+      }
+    }
+
+    throw new Error("Could not find the Warp Stabilizer video effect in this Premiere installation.");
+  }
+
+  function applyVideoEffectToClipRef(ref, effect) {
+    if (!app.enableQE) {
+      throw new Error("Premiere QE DOM is unavailable.");
+    }
+    app.enableQE();
+    var qeSeq = qe.project.getActiveSequence();
+    if (!qeSeq || !qeSeq.getVideoTrackAt) {
+      throw new Error("Could not access the active sequence through QE DOM.");
+    }
+
+    var qeTrack = qeSeq.getVideoTrackAt(ref.trackIndex);
+    if (!qeTrack || !qeTrack.getItemAt) {
+      throw new Error("Could not access selected video track through QE DOM.");
+    }
+
+    var qeClip = qeTrack.getItemAt(ref.clipIndex);
+    if (!qeClip || !qeClip.addVideoEffect) {
+      throw new Error("Could not access selected clip through QE DOM.");
+    }
+
+    qeClip.addVideoEffect(effect);
+  }
+
   function getMediaPath(projectItem) {
     if (!projectItem) {
       return "";
@@ -193,6 +290,14 @@ var BeatDetect = BeatDetect || {};
       return 1;
     }
     return target === "clip" ? 2 : 1;
+  }
+
+  function markerColorForEvent(event, focus, target) {
+    var color = Number(event && event.colorIndex);
+    if (!isNaN(color) && color >= 0 && color <= 16) {
+      return Math.round(color);
+    }
+    return markerColorForFocus(focus, target);
   }
 
   // Color indices used by Beat Detect for identification:
@@ -303,7 +408,7 @@ var BeatDetect = BeatDetect || {};
           continue;
         }
 
-        var color = markerColorForFocus(focus, target);
+        var color = markerColorForEvent(events[i], focus, target);
 
         if (target === "clip") {
           setMarkerFields(createClipMarker(clip, eventTime), color);
@@ -442,6 +547,75 @@ var BeatDetect = BeatDetect || {};
       }
 
       return ok({ applied: appliedCount });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  BeatDetect.getSelectedVideoClipCount = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+      return ok({ count: getSelectedVideoClipRefs(seq).length });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  BeatDetect.applyWarpStabilizerToSelectedClip = function (payloadJson) {
+    try {
+      var payload = payloadJson ? parseJson(payloadJson) : {};
+      var index = Number(payload.index) || 0;
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var refs = getSelectedVideoClipRefs(seq);
+      if (refs.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+      if (index < 0 || index >= refs.length) {
+        throw new Error("Selected clip index is out of range.");
+      }
+
+      var ref = refs[index];
+      if (clipHasWarpStabilizer(ref.clip)) {
+        return ok({
+          applied: 0,
+          skipped: true,
+          reason: "Warp Stabilizer already exists",
+          index: index,
+          total: refs.length,
+          name: ref.name
+        });
+      }
+
+      applyVideoEffectToClipRef(ref, getWarpStabilizerEffect());
+      return ok({
+        applied: 1,
+        skipped: false,
+        index: index,
+        total: refs.length,
+        name: ref.name
+      });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  BeatDetect.isVideoEffectAnalysisDone = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+      if (!seq.isDoneAnalyzingForVideoEffects) {
+        throw new Error("This Premiere version does not expose video-effect analysis status to scripts.");
+      }
+      return ok({ done: Boolean(seq.isDoneAnalyzingForVideoEffects()) });
     } catch (error) {
       return fail(error.message || String(error));
     }

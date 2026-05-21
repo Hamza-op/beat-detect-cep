@@ -474,8 +474,9 @@ var BeatDetect = BeatDetect || {};
 
   BeatDetect.applyGimbalZoom = function (payloadJson) {
     try {
-      var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0 };
+      var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0, style: "smooth_in" };
       var zoomTarget = payload.zoom || 110.0;
+      var zoomStyle = payload.style || "smooth_in";
       
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -500,10 +501,9 @@ var BeatDetect = BeatDetect || {};
                   try {
                     prop.setTimeVarying(true);
                     
-                    // Add smooth 100% to 110% zoom over the clip duration using sequence time
-                    // Ensure perfectly frame-aligned precision using ticks if available
                     var inTime = clip.start.ticks ? (parseInt(clip.start.ticks, 10) / TICKS_PER_SECOND) : (clip.start.seconds || timeToSeconds(clip.start));
                     var outTime = clip.end.ticks ? (parseInt(clip.end.ticks, 10) / TICKS_PER_SECOND) : (clip.end.seconds || timeToSeconds(clip.end));
+                    var duration = outTime - inTime;
                     
                     // Clear existing keyframes within range to prevent jitter
                     if (prop.getKeys) {
@@ -518,21 +518,74 @@ var BeatDetect = BeatDetect || {};
                       }
                     }
 
-                    prop.addKey(inTime);
-                    prop.setValueAtKey(inTime, 100.0, true);
-                    if (prop.setInterpolationTypeAtKey) {
-                      prop.setInterpolationTypeAtKey(inTime, 5, true); // 5 = Bezier
-                    }
-                    
-                    prop.addKey(outTime);
-                    prop.setValueAtKey(outTime, zoomTarget, true);
-                    if (prop.setInterpolationTypeAtKey) {
-                      prop.setInterpolationTypeAtKey(outTime, 5, true); // 5 = Bezier
+                    // Apply corresponding keyframe track based on the selected style
+                    if (zoomStyle === "smooth_in") {
+                      prop.addKey(inTime);
+                      prop.setValueAtKey(inTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true); // 5 = Bezier
+                      
+                      prop.addKey(outTime);
+                      prop.setValueAtKey(outTime, zoomTarget, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
+
+                    } else if (zoomStyle === "smooth_out") {
+                      prop.addKey(inTime);
+                      prop.setValueAtKey(inTime, zoomTarget, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
+                      
+                      prop.addKey(outTime);
+                      prop.setValueAtKey(outTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
+
+                    } else if (zoomStyle === "crash_in") {
+                      // Speed ramp crash zoom-in at the end (fast punch in the last 25% or 0.35s of the clip)
+                      var rampDuration = Math.min(0.35, duration * 0.25);
+                      var rampStartTime = outTime - rampDuration;
+                      
+                      prop.addKey(inTime);
+                      prop.setValueAtKey(inTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
+                      
+                      prop.addKey(rampStartTime);
+                      prop.setValueAtKey(rampStartTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(rampStartTime, 5, true);
+                      
+                      prop.addKey(outTime);
+                      prop.setValueAtKey(outTime, zoomTarget, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
+
+                    } else if (zoomStyle === "crash_out") {
+                      // Speed ramp crash zoom-out at the start (fast pull out in the first 25% or 0.35s of the clip)
+                      var rampDuration = Math.min(0.35, duration * 0.25);
+                      var rampEndTime = inTime + rampDuration;
+                      
+                      prop.addKey(inTime);
+                      prop.setValueAtKey(inTime, zoomTarget, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
+                      
+                      prop.addKey(rampEndTime);
+                      prop.setValueAtKey(rampEndTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(rampEndTime, 5, true);
+                      
+                      prop.addKey(outTime);
+                      prop.setValueAtKey(outTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
+
+                    } else if (zoomStyle === "drift") {
+                      // Slow drifting zoom (subtle zoom from 100% to 103% or 104% over the full clip)
+                      var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3; // subtle 30% weighting
+                      prop.addKey(inTime);
+                      prop.setValueAtKey(inTime, 100.0, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
+                      
+                      prop.addKey(outTime);
+                      prop.setValueAtKey(outTime, driftTarget, true);
+                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
                     }
                     
                     appliedCount++;
                   } catch (err) {
-                    // Gracefully handle if Motion component is hidden or Scale property is restricted
+                    // Gracefully handle if Motion Scale is restricted
                   }
                   break;
                 }
@@ -544,7 +597,7 @@ var BeatDetect = BeatDetect || {};
       }
 
       if (appliedCount === 0) {
-        throw new Error("Could not find Motion properties on the selected clips.");
+        throw new Error("Could not find Motion Scale properties on selected clips.");
       }
 
       return ok({ applied: appliedCount });

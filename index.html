@@ -4,178 +4,271 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Beat Detect</title>
+    <!-- Premium Fonts: Plus Jakarta Sans for UI labels, Share Tech Mono for precise technical values -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Share+Tech+Mono&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="./css/styles.css">
   </head>
   <body>
     <main class="panel-shell">
 
       <!-- ── Header ─────────────────────────────────────── -->
-      <header class="panel-header">
-        <div class="wordmark">
-          <span class="eyebrow">Premiere Pro</span>
-          <h1>Beat Detect</h1>
+      <header class="panel-header animate-fade-in" style="animation-delay: 0.05s;">
+        <div class="logo-area">
+          <svg class="logo-icon animate-pulse-slow" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2v20M17 5v14M22 9v6M7 8v8M2 10v4"/>
+          </svg>
+          <div class="wordmark">
+            <span class="subtitle">
+              <span class="full-label">PREMIERE PRO ASSISTANT</span>
+              <span class="short-label">ASSISTANT</span>
+            </span>
+            <h1>BEAT DETECT</h1>
+          </div>
         </div>
         <span class="version-tag">v1.0.0</span>
       </header>
 
-      <!-- ── Card 1: Beat Marker Generation ────────────── -->
-      <section class="card" aria-label="Beat marker controls">
-        <div class="card-title">
-          <span class="card-dot dot-cyan"></span>
-          Marker Generation
+      <!-- ── Status Info Alert ──────────────────────────── -->
+      <div id="status" class="status-banner animate-fade-in" style="animation-delay: 0.1s;" role="status">
+        Select one audio or linked clip in the active sequence.
+      </div>
+
+      <!-- ── Section 1: Beat Marker Engine ───────────────── -->
+      <section class="panel-card animate-fade-in" style="animation-delay: 0.15s;" aria-label="Beat Marker Generation">
+        <div class="card-header">
+          <div class="header-indicator"></div>
+          <h2>Marker Configuration</h2>
         </div>
 
-        <label class="field">
-          <span class="field-label">Marker Target</span>
-          <select id="markerTarget">
-            <option value="sequence">Sequence Markers</option>
-            <option value="clip">Clip Markers</option>
-          </select>
-        </label>
+        <div class="card-body">
+          <!-- Marker Destination -->
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="field-label" for="markerTarget">Target Destination</label>
+              <div class="select-wrapper">
+                <select id="markerTarget">
+                  <option value="sequence">Sequence Timeline Markers</option>
+                  <option value="clip">Clip Source Markers</option>
+                </select>
+              </div>
+            </div>
+          </div>
 
-        <div class="field">
-          <span class="field-label">Detection Focus</span>
-          <div class="mode-grid">
-            <label class="mode-option mode-spikes">
-              <input type="radio" name="detectionFocus" value="spikes" checked>
-              <span class="mode-swatch"></span>
-              <span class="mode-text">
-                <strong>Spikes</strong>
-                <small>Hits &amp; drops</small>
-              </span>
-            </label>
-            <label class="mode-option mode-music">
-              <input type="radio" name="detectionFocus" value="music">
-              <span class="mode-swatch"></span>
-              <span class="mode-text">
-                <strong>Music</strong>
-                <small>Full beats</small>
-              </span>
-            </label>
-            <label class="mode-option mode-vocal">
-              <input type="radio" name="detectionFocus" value="vocal">
-              <span class="mode-swatch"></span>
-              <span class="mode-text">
-                <strong>Vocal</strong>
-                <small>Phrases</small>
-              </span>
-            </label>
+          <!-- Hidden inputs kept for JS logic compatibility -->
+          <input type="radio" name="detectionFocus" value="beats" checked hidden>
+
+          <!-- Detection Mode Summary Banner (Utilitarian Minimalist) -->
+          <div class="mode-summary-deck">
+            <span class="field-label">Active Engine</span>
+            <div class="mode-summary-card">
+              <div class="mode-meta-row">
+                <div class="engine-indicator">
+                  <span class="pulse-dot"></span>
+                  <span class="engine-name">BEATS DETECTOR</span>
+                </div>
+                <span class="engine-badge">RESOLVE ALIGNED</span>
+              </div>
+              <p class="engine-desc">Generates a high-precision, frame-accurate music beat grid utilizing a native Rust audio analyzer.</p>
+            </div>
+          </div>
+
+          <!-- Analysis Action Trigger -->
+          <div class="action-row">
+            <button id="analyzeButton" class="btn-primary" type="button">
+              <svg class="btn-icon-svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="5 3 19 12 5 21 5 3"/>
+              </svg>
+              <span class="full-label">Analyze Media</span>
+              <span class="short-label">Analyze</span>
+            </button>
+            
+            <button id="randomizeButton" class="btn-secondary btn-icon" type="button" disabled title="Shuffle section picks from the detected beat pool">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="16 3 21 3 21 8"/>
+                <line x1="4" y1="20" x2="21" y2="3"/>
+                <polyline points="21 16 21 21 16 21"/>
+                <line x1="15" y1="15" x2="21" y2="21"/>
+              </svg>
+            </button>
+          </div>
+
+          <!-- Beat result panel (Revealed after successful analysis) -->
+          <section id="densityPanel" class="density-panel is-hidden" aria-label="Detected beat markers">
+            
+            <!-- Sleek Tab Switcher to coordinate UX Modes -->
+            <div class="filter-tabs">
+              <button type="button" id="tabDensity" class="tab-btn is-active">
+                <span class="full-label">Automatic Density</span>
+                <span class="short-label">Auto</span>
+              </button>
+              <button type="button" id="tabLimit" class="tab-btn">
+                <span class="full-label">Exact Limit</span>
+                <span class="short-label">Limit</span>
+              </button>
+            </div>
+
+            <!-- Tab 1: Density Slider Mode -->
+            <div id="densityTabContent" class="tab-content is-active">
+              <div class="density-slider-container">
+                <div class="density-head">
+                  <span class="section-subtitle">Density Threshold</span>
+                  <strong id="thresholdLabel" class="value-highlight">0.70</strong>
+                </div>
+                <div class="slider-wrapper">
+                  <input id="densitySlider" type="range" min="20" max="90" value="70" step="1">
+                </div>
+                <div class="slider-labels">
+                  <span>Dense (All Beats)</span>
+                  <span>Sparse (Major Hits)</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Tab 2: Exact Target Limit Mode -->
+            <div id="limitTabContent" class="tab-content">
+              <div class="strategy-row">
+                <div class="form-group flex-1">
+                  <label class="field-label" for="targetCountInput">Marker Limit</label>
+                  <input
+                    id="targetCountInput"
+                    class="input-text"
+                    type="number"
+                    min="1"
+                    max="999"
+                    value=""
+                    placeholder="Auto"
+                  >
+                </div>
+
+                <div class="form-group flex-1">
+                  <label class="field-label" for="targetStrategy">Strategy</label>
+                  <div class="select-wrapper">
+                    <select id="targetStrategy">
+                      <option value="balanced">Balanced</option>
+                      <option value="strongest">Section Best</option>
+                      <option value="spread">Even Spread</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <p class="hint-text" id="targetCountHint">Exact limit divides the song into sections and skips sections with no detected beat.</p>
+            </div>
+
+            <!-- Event Counters (Styled like an LCD Tech Screen) -->
+            <div class="events-badge-deck">
+              <div class="lcd-screen">
+                <div class="lcd-value"><span id="filteredCount">0</span></div>
+                <div class="lcd-label"><span id="totalCount">of 0 beats active</span></div>
+              </div>
+            </div>
+
+          </section>
+
+          <!-- Marker Actions -->
+          <div class="apply-actions">
+            <button id="applyButton" class="btn-success" type="button" disabled>
+              <svg class="btn-icon-svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              <span class="full-label">Apply Markers to Sequence</span>
+              <span class="short-label">Apply Markers</span>
+            </button>
+            <button id="removeButton" class="btn-danger" type="button">
+              <svg class="btn-icon-svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="3 6 5 6 21 6"/>
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              </svg>
+              <span class="full-label">Clear Beat Markers</span>
+              <span class="short-label">Clear Markers</span>
+            </button>
           </div>
         </div>
-
-        <div class="analyze-row">
-          <button id="analyzeButton" class="primary-button" type="button">
-            Analyze Track
-          </button>
-          <button id="randomizeButton" class="randomize-button" type="button" disabled title="Randomly pick N events from the detected pool">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/></svg>
-          </button>
-        </div>
-
-        <div id="status" class="status" role="status">
-          Select one audio or linked clip in the active sequence.
-        </div>
-
-        <section id="densityPanel" class="density-panel is-hidden" aria-label="Marker density">
-
-          <!-- Density slider row -->
-          <div class="density-head">
-            <span>Marker Density</span>
-            <strong id="thresholdLabel">0.75</strong>
-          </div>
-          <input id="densitySlider" type="range" min="20" max="80" value="75" step="1">
-          <div class="density-scale">
-            <span>All micro-beats</span>
-            <span>Major only</span>
-          </div>
-
-          <!-- Live event counter -->
-          <div class="event-counter">
-            <strong id="filteredCount">0</strong>
-            <span id="totalCount">of 0 events selected</span>
-          </div>
-
-          <!-- Target Count divider -->
-          <div class="panel-divider" aria-hidden="true"></div>
-
-          <!-- Target Count row -->
-          <div class="target-count-row">
-            <label class="target-count-label" for="targetCountInput">Target Count</label>
-            <input
-              id="targetCountInput"
-              class="target-count-input"
-              type="number"
-              min="1"
-              max="999"
-              value=""
-              placeholder="Auto"
-              title="Enter an exact number of markers to generate"
-            >
-          </div>
-          <label class="target-strategy-row" for="targetStrategy">
-            <span class="target-count-label">Strategy</span>
-            <select id="targetStrategy" class="target-strategy-select">
-              <option value="balanced">Balanced</option>
-              <option value="strongest">Strongest</option>
-              <option value="spread">Spread</option>
-            </select>
-          </label>
-          <p class="target-count-hint" id="targetCountHint">Leave blank to use density slider.</p>
-
-        </section>
-
-        <button id="applyButton" class="secondary-button" type="button" disabled>
-          Apply Markers to Timeline
-        </button>
-
-        <button id="removeButton" class="danger-button" type="button">
-          Remove Beat Detect Markers
-        </button>
       </section>
 
-      <!-- ── Card 2: Gimbal Zoom ────────────────────────── -->
-      <section class="card card-zoom" aria-label="Gimbal zoom utility">
-        <div class="card-title">
-          <span class="card-dot dot-purple"></span>
-          Gimbal Zoom
+      <!-- ── Section 2: Creative Editing Tools (Modular Toolbox) ── -->
+      <section class="panel-card animate-fade-in" style="animation-delay: 0.2s;" aria-label="Creative Toolbox">
+        <div class="card-header">
+          <div class="header-indicator tint-creative"></div>
+          <h2>Creative Editing Toolbox</h2>
         </div>
 
-        <div class="density-panel density-panel--inline" aria-label="Zoom Amount">
-          <div class="density-head">
-            <span>Zoom Amount</span>
-            <strong id="zoomLabel">110%</strong>
+        <div class="card-body tools-grid">
+          
+          <!-- Gimbal Zoom Style Dropdown -->
+          <div class="form-group grid-span-full">
+            <label class="field-label" for="zoomMode">Gimbal Zoom Style</label>
+            <div class="select-wrapper">
+              <select id="zoomMode">
+                <option value="smooth_in">Slow Smooth Zoom-In</option>
+                <option value="smooth_out">Slow Smooth Zoom-Out</option>
+                <option value="crash_in">Speed Ramp Crash-In (End)</option>
+                <option value="crash_out">Speed Ramp Crash-Out (Start)</option>
+                <option value="drift">Slow Cinematic Drift</option>
+              </select>
+            </div>
           </div>
-          <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
-          <div class="density-scale">
-            <span>Subtle</span>
-            <span>Intense</span>
+
+          <!-- Gimbal Ratio Slider -->
+          <div class="form-group grid-span-full">
+            <div class="density-head">
+              <span class="section-subtitle">Gimbal Zoom Ratio</span>
+              <strong id="zoomLabel" class="value-highlight">110%</strong>
+            </div>
+            <div class="slider-wrapper">
+              <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
+            </div>
+            <div class="slider-labels">
+              <span>Subtle (101%)</span>
+              <span>Intense (150%)</span>
+            </div>
           </div>
+
+          <!-- Utility Action Buttons -->
+          <button id="gimbalZoomButton" class="btn-tool" type="button">
+            <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+            </svg>
+            <span class="full-label">Gimbal Zoom</span>
+            <span class="short-label">Zoom</span>
+          </button>
+
+          <button id="warpStabilizerButton" class="btn-tool" type="button">
+            <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/>
+              <path d="M12 6v12M6 12h12"/>
+            </svg>
+            <span class="full-label">Stabilizer</span>
+            <span class="short-label">Stab</span>
+          </button>
+
+          <!-- ── PLUGGABLE BOX FOR FUTURE UTILITIES (Modularity) ── -->
+          <div class="future-tool-slot" title="Easily add future features and scripts here in index.html">
+            <span class="plus-sign">+</span>
+            <span class="full-label">Add Custom Tool...</span>
+            <span class="short-label">Add Tool</span>
+          </div>
+
         </div>
-
-        <button id="gimbalZoomButton" class="zoom-button" type="button">
-          Apply Gimbal Zoom
-        </button>
-
-        <button id="warpStabilizerButton" class="warp-button" type="button">
-          Apply Warp Stabilizer
-        </button>
       </section>
 
       <!-- ── Footer ─────────────────────────────────────── -->
-      <footer class="panel-footer">
-        <div class="footer-row">
-          <button id="diagnosticsButton" class="utility-button" type="button">
-            Run Diagnostics
+      <footer class="panel-footer animate-fade-in" style="animation-delay: 0.25s;">
+        <div class="utility-row">
+          <button id="diagnosticsButton" class="btn-minor" type="button">
+            Diagnostics
           </button>
-          <button id="clearLogsButton" class="utility-button" type="button" title="Clear panel.log and install.log">
+          <button id="clearLogsButton" class="btn-minor" type="button" title="Clear diagnostic logs">
             Clear Logs
           </button>
         </div>
-        <a href="#" id="githubLink" class="github-link">
+        
+        <a href="https://github.com/Hamza-op" id="githubLink" class="github-link" target="_blank">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
           </svg>
-          Hamza-op
+          Hamza-op / Beat Detect
         </a>
       </footer>
 

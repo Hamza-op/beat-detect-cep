@@ -30,12 +30,16 @@
     targetCountInput: document.getElementById("targetCountInput"),
     targetStrategy:   document.getElementById("targetStrategy"),
     targetCountHint:  document.getElementById("targetCountHint"),
-    clearLogsButton:  document.getElementById("clearLogsButton")
+    clearLogsButton:  document.getElementById("clearLogsButton"),
+    tabDensity:       document.getElementById("tabDensity"),
+    tabLimit:         document.getElementById("tabLimit"),
+    densityTabContent:document.getElementById("densityTabContent"),
+    limitTabContent:  document.getElementById("limitTabContent")
   };
 
   function getDetectionFocus() {
     var selected = document.querySelector("input[name='detectionFocus']:checked");
-    return selected ? selected.value : "spikes";
+    return selected ? selected.value : "beats";
   }
 
   function syncModeSelection() {
@@ -198,7 +202,7 @@
 
       childProcess.execFile(
         analyzerPath,
-        ["--mode", focus || "music", mediaPath],
+        ["--mode", focus || "beats", mediaPath],
         { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 15 * 60 * 1000 },
         function (error, stdout, stderr) {
           if (error) {
@@ -256,6 +260,9 @@
   }
 
   function runEssentiaAnalyzer(mediaPath, focus) {
+    if (focus === "beats") {
+      return Promise.resolve({ events: [], used: false, reason: "beat grid mode" });
+    }
     if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
       return Promise.resolve({ events: [], used: false, reason: "preview" });
     }
@@ -268,7 +275,7 @@
     var childProcess = req("child_process");
     var exePath = getEssentiaExePath();
     if (exePath) {
-      return execEssentiaCommand(childProcess, exePath, ["--mode", focus || "music", mediaPath], "native runner", focus);
+    return execEssentiaCommand(childProcess, exePath, ["--mode", focus || "beats", mediaPath], "native runner", focus);
     }
 
     return Promise.resolve({ events: [], used: false, reason: "not bundled" });
@@ -353,6 +360,9 @@
   }
 
   function mergeAnalyzerEvents(primaryEvents, essentiaEvents, focus) {
+    if (focus === "beats") {
+      return sanitizeEvents(primaryEvents);
+    }
     var merged = sanitizeEvents(primaryEvents).map(function (event) {
       return { time: event.time, score: event.score };
     });
@@ -406,6 +416,17 @@
   }
 
   function makePreviewEvents(focus) {
+    if (focus === "beats") {
+      var beatEvents = [];
+      for (var beat = 0; beat < 42; beat++) {
+        beatEvents.push({
+          time: Number((0.52 + beat * 0.50).toFixed(3)),
+          score: beat % 8 === 0 ? 0.88 : beat % 4 === 0 ? 0.76 : 0.64
+        });
+      }
+      return beatEvents;
+    }
+
     var times = [
       0.42, 0.78, 1.11, 1.62, 2.05, 2.48, 3.02, 3.44, 4.01, 4.39,
       5.12, 5.54, 6.03, 6.46, 7.25, 8.04, 8.41, 9.18, 10.02, 10.42,
@@ -427,7 +448,7 @@
   }
 
   function getThreshold() {
-    return Number(dom.densitySlider.value) / 100;
+    return dom.densitySlider ? Number(dom.densitySlider.value) / 100 : 0;
   }
 
   function spacingForFilter(threshold, focus) {
@@ -505,8 +526,43 @@
     });
   }
 
-  function keepStrongestPerSecond(events) {
+function keepStrongestPerSecond(events) {
     return keepStrongestPerWindow(events, 1.0);
+  }
+
+  function keepStrongestWithMinimumGap(events, minGapSeconds) {
+    if (!events.length || !minGapSeconds || minGapSeconds <= 0) {
+      return events;
+    }
+
+    var strongestFirst = events.slice().sort(function(a, b) {
+      return Number(b.score) - Number(a.score);
+    });
+    var kept = [];
+
+    for (var i = 0; i < strongestFirst.length; i++) {
+      var candidate = strongestFirst[i];
+      var tooClose = false;
+      for (var j = 0; j < kept.length; j++) {
+        if (Math.abs(candidate.time - kept[j].time) < minGapSeconds) {
+          tooClose = true;
+          break;
+        }
+      }
+      if (!tooClose) {
+        kept.push(candidate);
+      }
+    }
+
+    return kept.sort(function(a, b) {
+      return a.time - b.time;
+    });
+  }
+
+  function beatMinimumGapForThreshold(threshold) {
+    if (threshold <= 0.40) return 0;
+    var t = Math.max(0, Math.min(1, (threshold - 0.40) / 0.50));
+    return 1.05 + t * 2.75;
   }
 
   function finalDensityPass(events, threshold, focus) {
@@ -527,21 +583,72 @@
 
   // ── Target Count selection logic ──────────────────────────────
   //
-  // Selects exactly N events from state.allEvents.
+  // Selects up to N events from state.allEvents.
   //
-  // Strategies:
-  //   balanced  = one strong event per segment, with gap fill.
-  //   strongest = global top-N by score.
-  //   spread    = one event per segment, favoring time-center spacing.
+  // Beat mode is section-based: divide the detected beat span into N sections,
+  // choose one real beat from each non-empty section, and never synthesize a
+  // marker just to satisfy the target count.
+  //
+  // Beat strategies:
+  //   balanced  = strong beat near the section center.
+  //   strongest = highest-scored beat inside each section.
+  //   spread    = beat closest to the section center.
+  //
+  // Legacy non-beat modes keep their old behavior for compatibility.
   //
   function getTargetStrategy() {
     return dom.targetStrategy ? dom.targetStrategy.value : "balanced";
   }
 
+  function getTargetStrategyLabel() {
+    var strategy = getTargetStrategy();
+    if (strategy === "strongest") return "section best";
+    if (strategy === "spread") return "even spread";
+    return "balanced";
+  }
+
+  function collapseBeatCandidatesBySecond(sortedEvents, target) {
+    if (!sortedEvents || sortedEvents.length === 0 || target >= sortedEvents.length) {
+      return sortedEvents || [];
+    }
+
+    var strongestBySecond = {};
+    var secondCount = 0;
+    for (var i = 0; i < sortedEvents.length; i++) {
+      var event = sortedEvents[i];
+      var bucket = String(Math.floor(Number(event.time) || 0));
+      if (!strongestBySecond[bucket]) {
+        strongestBySecond[bucket] = event;
+        secondCount++;
+      } else if ((Number(event.score) || 0) > (Number(strongestBySecond[bucket].score) || 0)) {
+        strongestBySecond[bucket] = event;
+      }
+    }
+
+    if (secondCount < target) {
+      return sortedEvents;
+    }
+
+    var collapsed = [];
+    for (var key in strongestBySecond) {
+      if (Object.prototype.hasOwnProperty.call(strongestBySecond, key)) {
+        collapsed.push(strongestBySecond[key]);
+      }
+    }
+    return collapsed.sort(function(a, b) { return a.time - b.time; });
+  }
+
   function selectByTargetCount(pool, n, strategy) {
-    if (!pool || pool.length === 0 || n <= 0) return [];
-    if (n >= pool.length) return pool.slice(); // Pool is already sorted by time
+    if (!pool || pool.length === 0 || !isFinite(n) || n <= 0) return [];
+    n = Math.min(Math.floor(n), pool.length);
+    if (n >= pool.length) {
+      return pool.slice().sort(function(a, b) { return a.time - b.time; });
+    }
     strategy = strategy || "balanced";
+
+    if (getDetectionFocus() === "beats") {
+      return selectBeatGridByTargetCount(pool, n, strategy);
+    }
 
     if (strategy === "strongest") {
       return pool.slice()
@@ -617,6 +724,65 @@
     return selected.sort(function(a,b){ return a.time - b.time; });
   }
 
+  function selectBeatGridByTargetCount(pool, n, strategy) {
+    if (!pool || pool.length === 0 || !isFinite(n) || n <= 0) return [];
+    var sorted = pool.slice().sort(function(a, b) { return a.time - b.time; });
+    var target = Math.min(Math.floor(n), sorted.length);
+    sorted = collapseBeatCandidatesBySecond(sorted, target);
+    target = Math.min(target, sorted.length);
+    if (target >= sorted.length) return sorted.slice();
+
+    var firstTime = sorted[0].time;
+    var lastTime = sorted[sorted.length - 1].time;
+    var duration = Math.max(0, lastTime - firstTime);
+    if (duration <= 0) {
+      return sorted.slice(0, target);
+    }
+
+    var segWidth = duration / target;
+    var selected = [];
+    var usedIndices = {};
+
+    for (var seg = 0; seg < target; seg++) {
+      var tLo = firstTime + seg * segWidth;
+      var tHi = seg === target - 1 ? lastTime + 0.001 : tLo + segWidth;
+      var center = tLo + segWidth * 0.5;
+      var best = null;
+      var bestIdx = -1;
+      var bestRank = -Infinity;
+
+      for (var k = 0; k < sorted.length; k++) {
+        if (usedIndices[k]) continue;
+        var event = sorted[k];
+        if (event.time < tLo || event.time >= tHi) continue;
+
+        var rank = Number(event.score) || 0;
+        if (strategy === "spread") {
+          var distance = Math.abs(event.time - center);
+          var closeness = 1 - Math.min(1, distance / Math.max(segWidth * 0.5, 0.001));
+          rank = closeness * 0.90 + rank * 0.10;
+        } else if (strategy === "balanced") {
+          var centerDistance = Math.abs(event.time - center);
+          var centerCloseness = 1 - Math.min(1, centerDistance / Math.max(segWidth * 0.5, 0.001));
+          rank = rank * 0.70 + centerCloseness * 0.30;
+        }
+
+        if (best === null || rank > bestRank) {
+          best = event;
+          bestIdx = k;
+          bestRank = rank;
+        }
+      }
+
+      if (best !== null) {
+        selected.push(best);
+        usedIndices[bestIdx] = true;
+      }
+    }
+
+    return selected.sort(function(a, b) { return a.time - b.time; });
+  }
+
   // Returns the user-entered target count (integer) or null if blank/invalid.
   function getTargetCount() {
     if (!dom.targetCountInput) return null;
@@ -653,32 +819,42 @@
     dom.targetCountInput.max = String(max);
     // Update hint with range
     if (dom.targetCountHint) {
-      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Use Strategy to choose balanced, strongest, or spread.";
+      if (getDetectionFocus() === "beats") {
+        dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Balanced favors strong centered beats; Strongest uses the highest score per section; Spread favors timing symmetry.";
+      } else {
+        dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Use Strategy to choose balanced, strongest, or spread.";
+      }
     }
   }
 
-  // Perform a random shuffle of the target-count selection.
-  // Picks N events from the pool at random but still distributes them
-  // across segments (each segment contributes one random event).
+  // Shuffle target-count selection. In beat mode this follows the same section
+  // logic as Strategy: one real beat from each non-empty section, no top-up.
   function randomizeSelection() {
     var n = getTargetCount();
-    if (!n || state.allEvents.length === 0) return;
+    if (!isFinite(n) || n <= 0 || state.allEvents.length === 0) return;
 
     var pool = state.allEvents;
+    n = Math.min(Math.floor(n), pool.length);
     if (n >= pool.length) {
-      state.filteredEvents = pool.slice();
-      updateCounterUI(pool.length);
+      state.filteredEvents = pool.slice().sort(function(a,b){ return a.time - b.time; });
+      updateCounterUI(n);
       return;
     }
     var sorted = pool.slice().sort(function(a,b){ return a.time - b.time; });
-    var duration = sorted[sorted.length - 1].time;
+    if (getDetectionFocus() === "beats") {
+      sorted = collapseBeatCandidatesBySecond(sorted, n);
+      n = Math.min(n, sorted.length);
+    }
+    var firstTime = getDetectionFocus() === "beats" ? sorted[0].time : 0;
+    var lastTime = sorted[sorted.length - 1].time;
+    var duration = Math.max(0, lastTime - firstTime);
     var segWidth = duration > 0 ? duration / n : 0;
     var selected = [];
     var usedIndices = {};
 
     for (var seg = 0; seg < n; seg++) {
-      var tLo = seg * segWidth;
-      var tHi = tLo + segWidth;
+      var tLo = firstTime + seg * segWidth;
+      var tHi = seg === n - 1 ? lastTime + 0.001 : tLo + segWidth;
       var candidates = [];
       for (var k = 0; k < sorted.length; k++) {
         if (!usedIndices[k] && sorted[k].time >= tLo && sorted[k].time < tHi) {
@@ -686,21 +862,59 @@
         }
       }
       if (candidates.length > 0) {
-        var pick = candidates[Math.floor(Math.random() * candidates.length)];
-        selected.push(sorted[pick]);
-        usedIndices[pick] = true;
+        // Calculate cumulative score-weighted sum (using squared score to favor prominent events)
+        var totalWeight = 0;
+        var weights = [];
+        for (var c = 0; c < candidates.length; c++) {
+          var score = Number(sorted[candidates[c]].score) || 0.1;
+          var weight = Math.max(0.001, score * score);
+          totalWeight += weight;
+          weights.push(weight);
+        }
+
+        // Weighted random selection
+        var randomValue = Math.random() * totalWeight;
+        var runningSum = 0;
+        var pickIndex = candidates[0]; // fallback
+        for (var c = 0; c < candidates.length; c++) {
+          runningSum += weights[c];
+          if (randomValue <= runningSum) {
+            pickIndex = candidates[c];
+            break;
+          }
+        }
+
+        selected.push(sorted[pickIndex]);
+        usedIndices[pickIndex] = true;
       }
     }
-    // Top-up with random unselected events if needed
-    if (selected.length < n) {
+
+    // Legacy non-beat modes can still top up so older workflows keep exact N.
+    if (getDetectionFocus() !== "beats" && selected.length < n) {
       var unused = sorted.filter(function(_, i){ return !usedIndices[i]; });
-      // Shuffle unused
-      for (var i = unused.length - 1; i > 0; i--) {
-        var j = Math.floor(Math.random() * (i + 1));
-        var tmp = unused[i]; unused[i] = unused[j]; unused[j] = tmp;
-      }
-      for (var u = 0; u < unused.length && selected.length < n; u++) {
-        selected.push(unused[u]);
+      while (selected.length < n && unused.length > 0) {
+        var totalWeight = 0;
+        var weights = [];
+        for (var u = 0; u < unused.length; u++) {
+          var score = Number(unused[u].score) || 0.1;
+          var weight = Math.max(0.001, score * score);
+          totalWeight += weight;
+          weights.push(weight);
+        }
+
+        var randomValue = Math.random() * totalWeight;
+        var runningSum = 0;
+        var pickIdx = 0; // fallback
+        for (var u = 0; u < unused.length; u++) {
+          runningSum += weights[u];
+          if (randomValue <= runningSum) {
+            pickIdx = u;
+            break;
+          }
+        }
+        
+        selected.push(unused[pickIdx]);
+        unused.splice(pickIdx, 1);
       }
     }
 
@@ -713,7 +927,7 @@
     var displayTarget = n !== null && state.allEvents.length > 0 ? Math.min(n, state.allEvents.length) : n;
     dom.filteredCount.textContent = String(state.filteredEvents.length);
     if (n !== null) {
-      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + displayTarget + ", " + getTargetStrategy() + ")";
+      dom.totalCount.textContent = "of " + state.allEvents.length + " events (target: " + displayTarget + ", " + getTargetStrategyLabel() + ")";
       dom.thresholdLabel.textContent = "\u2022" + state.filteredEvents.length;
     } else {
       var threshold = getThreshold();
@@ -722,6 +936,22 @@
     }
     dom.applyButton.disabled = state.isBusy || state.filteredEvents.length === 0;
     if (dom.randomizeButton) dom.randomizeButton.disabled = state.isBusy || state.allEvents.length === 0;
+    syncFilterTabUI();
+  }
+
+  function syncFilterTabUI() {
+    var hasLimit = getTargetCount() !== null;
+    if (hasLimit) {
+      if (dom.tabDensity) dom.tabDensity.classList.remove("is-active");
+      if (dom.tabLimit) dom.tabLimit.classList.add("is-active");
+      if (dom.densityTabContent) dom.densityTabContent.classList.remove("is-active");
+      if (dom.limitTabContent) dom.limitTabContent.classList.add("is-active");
+    } else {
+      if (dom.tabDensity) dom.tabDensity.classList.add("is-active");
+      if (dom.tabLimit) dom.tabLimit.classList.remove("is-active");
+      if (dom.densityTabContent) dom.densityTabContent.classList.add("is-active");
+      if (dom.limitTabContent) dom.limitTabContent.classList.remove("is-active");
+    }
   }
 
   function filterEvents() {
@@ -732,6 +962,21 @@
       if (dom.targetCountInput) dom.targetCountInput.classList.add("is-active");
     } else {
       // ── Density slider mode ──
+      if (getDetectionFocus() === "beats") {
+        var beatThreshold = getThreshold();
+        var beatEvents = state.allEvents.filter(function(event) {
+          return Number(event.score) >= beatThreshold;
+        });
+        state.filteredEvents = beatThreshold <= 0.40
+          ? beatEvents
+          : keepStrongestWithMinimumGap(
+              keepStrongestPerSecond(beatEvents),
+              beatMinimumGapForThreshold(beatThreshold)
+            );
+        if (dom.targetCountInput) dom.targetCountInput.classList.remove("is-active");
+        updateCounterUI();
+        return;
+      }
       var threshold = getThreshold();
       var focus = getDetectionFocus();
       var thresholded = state.allEvents.filter(function(event) {
@@ -765,6 +1010,9 @@
 
   function markerColorIndexForEvent(event, focus) {
     var score = Number(event.score) || 0;
+    if (focus === "beats") {
+      return 3;
+    }
     if (focus === "vocal") {
       return 4;
     }
@@ -806,7 +1054,9 @@
           throw new Error("Premiere returned an empty media path for the selected clip.");
         }
         var focus = getDetectionFocus();
-        var label = focus === "vocal"
+        var label = focus === "beats"
+          ? "Resolve-style music beats"
+          : focus === "vocal"
           ? "vocal phrase starts and melodic entries"
           : focus === "music"
             ? "music spikes and vocal phrase starts"
@@ -822,7 +1072,7 @@
         dom.densityPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
-          "found " + state.allEvents.length + " total rhythmic events" +
+          "found " + state.allEvents.length + (getDetectionFocus() === "beats" ? " beat markers" : " total rhythmic events") +
           (analysis.essentiaUsed ? " using Rust + Essentia support." : " using Rust analyzer."),
           false, false, true
         );
@@ -896,9 +1146,12 @@
 
     setBusy(true);
     var zoomValue = dom.zoomSlider ? Number(dom.zoomSlider.value) : 110.0;
-    setStatus("Applying smooth gimbal zoom to selected clips (" + zoomValue + "%)...");
+    var zoomModeEl = document.getElementById("zoomMode");
+    var zoomStyle = zoomModeEl ? zoomModeEl.value : "smooth_in";
+    var styleLabel = zoomStyle.replace("_", " ");
+    setStatus("Applying " + styleLabel + " gimbal zoom to selected clips (" + zoomValue + "%)...");
 
-    var payload = { zoom: zoomValue };
+    var payload = { zoom: zoomValue, style: zoomStyle };
     cepEval("BeatDetect.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
         setStatus("Applied gimbal zoom to " + result.applied + " clips.");
@@ -1102,7 +1355,7 @@
       randomizeSelection();
     });
   }
-  dom.densitySlider.addEventListener("input", filterEvents);
+  if (dom.densitySlider) dom.densitySlider.addEventListener("input", filterEvents);
   if (dom.targetCountInput) {
     dom.targetCountInput.addEventListener("input", function() {
       if (state.allEvents.length > 0) filterEvents();
@@ -1116,6 +1369,36 @@
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function() {
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
+    });
+  }
+
+  if (dom.tabDensity) {
+    dom.tabDensity.addEventListener("click", function() {
+      if (state.isBusy) return;
+      if (dom.targetCountInput) {
+        dom.targetCountInput.value = "";
+        var event = document.createEvent("Event");
+        event.initEvent("input", true, true);
+        dom.targetCountInput.dispatchEvent(event);
+      }
+      syncFilterTabUI();
+    });
+  }
+
+  if (dom.tabLimit) {
+    dom.tabLimit.addEventListener("click", function() {
+      if (state.isBusy) return;
+      if (dom.targetCountInput) {
+        var val = dom.targetCountInput.value.trim();
+        if (val === "") {
+          var minVal = dom.targetCountInput.min || "10";
+          dom.targetCountInput.value = minVal;
+        }
+        var event = document.createEvent("Event");
+        event.initEvent("input", true, true);
+        dom.targetCountInput.dispatchEvent(event);
+      }
+      syncFilterTabUI();
     });
   }
 
@@ -1151,7 +1434,7 @@
   }
 
   if (isBrowserPreview()) {
-    setStatus("Browser preview mode. Analyze uses simulated music spikes; Premiere actions are mocked.");
+    setStatus("Browser preview mode. Analyze uses simulated beat markers; Premiere actions are mocked.");
   }
 
   window.onerror = function (message, source, line, column, error) {

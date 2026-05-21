@@ -10,14 +10,11 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. It can a
 
 - Premiere Pro CEP panel: `Window -> Extensions -> Beat Detect`
 - One-click analysis of the selected timeline clip's source media
-- Three detection modes:
-  - `Spikes`: percussion hits, dhol/kick impact, drops, sharp accents
-  - `Music`: music spikes plus vocal/melodic phrase starts
-  - `Vocal`: vocal and melodic phrase entries
+- Resolve-style `Beats` mode for a consistent music beat grid
 - Marker target:
   - `Sequence Markers`
   - `Clip Markers`
-- Density slider from `0.20` to `0.80`
+- Automatic beat marker selection without manual density tuning
 - Adaptive spacing so weak nearby events are suppressed but strong nearby dhol/tabla hits can survive
 - Final marker selection keeps only the strongest event per whole second
 - Score/mode-based marker colors while marker name/comment fields remain blank
@@ -173,15 +170,13 @@ BeatDetect-CEP-Windows.zip
 After building:
 
 ```powershell
-.\bin\beat_analyzer.exe --mode music "C:\path\to\song-or-video.mp4"
+.\bin\beat_analyzer.exe --mode beats "C:\path\to\song-or-video.mp4"
 ```
 
 Modes:
 
 ```text
-spikes
-music
-vocal
+beats
 ```
 
 Expected stdout is JSON only:
@@ -212,7 +207,7 @@ or:
 {"bpm":96.0,"confidence":0.74,"beats":[25.739,26.364]}
 ```
 
-Beat Detect uses Essentia events as steady beat-grid support. The custom Rust analyzer still owns dhol/tabla hits, vocal phrase entries, drops, and edit accents.
+Beat Detect's panel uses the Rust `beats` grid detector by default. The optional Essentia runner remains a legacy build hook for experiments, but the default panel workflow does not depend on it.
 
 ## Local Song Test Reports
 
@@ -229,7 +224,7 @@ $media = "C:\Users\User\Downloads\Video\O Rangrez Full Video - Bhaag Milkha Bhaa
 $outDir = ".\analysis-reports"
 $threshold = 0.50
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-foreach ($mode in "spikes", "music", "vocal") {
+foreach ($mode in "beats") {
   $json = & .\bin\beat_analyzer.exe --mode $mode $media
   $events = $json | ConvertFrom-Json
   $selected = $events |
@@ -255,9 +250,7 @@ foreach ($mode in "spikes", "music", "vocal") {
 Current generated threshold reports in this repo:
 
 ```text
-analysis-reports\o-rangrez-spikes-threshold-050.txt
-analysis-reports\o-rangrez-music-threshold-050.txt
-analysis-reports\o-rangrez-vocal-threshold-050.txt
+analysis-reports\o-rangrez-beats-threshold-050.txt
 ```
 
 ## Premiere Workflow
@@ -265,10 +258,8 @@ analysis-reports\o-rangrez-vocal-threshold-050.txt
 1. Open a Premiere sequence.
 2. Select one timeline clip with linked source media.
 3. Choose `Sequence Markers` or `Clip Markers`.
-4. Choose detection focus: `Spikes`, `Music`, or `Vocal`.
-5. Click `Analyze Track`.
-6. Adjust marker density, or enter an exact target marker count.
-7. Click `Apply Markers to Timeline`.
+4. Click `Analyze Track`.
+5. Click `Apply Markers to Timeline`.
 
 To clean generated markers, keep the same marker target selected and click:
 
@@ -298,8 +289,15 @@ The core Rust analyzer uses two independent methods and fuses them:
   - RMS rise
   - peak rise
   - immediate frame-to-frame transient rise
+- log-frequency SuperFlux-style onset scoring:
+  - 40 log-spaced bands from `45 Hz-10 kHz`
+  - dhol/tabla-focused weighting around bass impact, drum body, and slap/attack bands
+  - vocal/melodic weighting for phrase entries in `music` and `vocal` modes
+- local robust normalization:
+  - each section is judged against its own recent context, so late quiet hits are not buried by loud earlier drops
+  - direct onset-evidence gating prevents steady hum/noise sections from producing fake markers
 
-Scores use non-saturated calibrated confidence. This keeps the density slider useful instead of flattening many events to `1.000`.
+Scores use non-saturated calibrated confidence, but the panel now uses the `beats` grid output directly instead of asking the editor to tune density.
 
 Panel filtering then applies:
 
@@ -308,7 +306,7 @@ Panel filtering then applies:
 - one strongest selected event per whole second
 - optional extra thinning at the strict end of the slider
 
-When the bundled Essentia runner is present, the panel also merges its steady beat positions. Nearby Essentia beats raise confidence on Rust events; strong Essentia-only beats can be added in `spikes` and `music` modes. `vocal` mode does not add Essentia-only beats because vocal phrase entries are not the same thing as a beat grid.
+The panel's default `beats` mode skips optional Essentia merging so the marker output stays one coherent beat grid rather than a blend of unrelated detector styles.
 
 ## Logs
 

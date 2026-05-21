@@ -16,6 +16,10 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
 use symphonia::default::{get_codecs, get_probe};
 
+const LOG_BANDS: usize = 40;
+const MIN_ANALYSIS_HZ: f32 = 45.0;
+const MAX_ANALYSIS_HZ: f32 = 10_000.0;
+
 #[derive(Debug, Serialize)]
 struct Event {
     time: f64,
@@ -27,6 +31,7 @@ enum DetectionMode {
     Spikes,
     Music,
     Vocal,
+    Beats,
 }
 
 #[derive(Clone, Copy)]
@@ -40,6 +45,7 @@ struct FrameEnergy {
     flux: f32,
     rms: f32,
     peak: f32,
+    log_bands: [f32; LOG_BANDS],
 }
 
 fn main() {
@@ -76,7 +82,7 @@ fn run() -> Result<(), Box<dyn Error>> {
 fn parse_args() -> Result<(DetectionMode, String), Box<dyn Error>> {
     let args = env::args().skip(1).collect::<Vec<_>>();
     if args.is_empty() {
-        return Err("usage: beat_analyzer [--mode spikes|music|vocal] <media-file-path>".into());
+        return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] <media-file-path>".into());
     }
 
     if args.len() >= 3 && args[0] == "--mode" {
@@ -84,12 +90,13 @@ fn parse_args() -> Result<(DetectionMode, String), Box<dyn Error>> {
             "spikes" => DetectionMode::Spikes,
             "music" => DetectionMode::Music,
             "vocal" => DetectionMode::Vocal,
+            "beats" => DetectionMode::Beats,
             other => return Err(format!("unsupported detection mode: {other}").into()),
         };
         return Ok((mode, args[2..].join(" ")));
     }
 
-    Ok((DetectionMode::Spikes, args.join(" ")))
+    Ok((DetectionMode::Beats, args.join(" ")))
 }
 
 fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
@@ -269,13 +276,19 @@ fn detect_events(samples: &[f32], sample_rate: u32, mode: DetectionMode) -> Vec<
     if frames.len() < 8 {
         return Vec::new();
     }
+    if matches!(mode, DetectionMode::Beats) {
+        return detect_beat_grid_events(samples, sample_rate, &frames);
+    }
 
     let spectral_scores = spectral_novelty_scores(&frames, mode);
     let envelope_scores = envelope_onset_scores(&frames, mode);
-    let raw_scores = fuse_detector_scores(&spectral_scores, &envelope_scores, mode);
+    let superflux_scores = superflux_onset_scores(&frames, mode);
+    let raw_scores =
+        fuse_detector_scores(&spectral_scores, &envelope_scores, &superflux_scores, mode);
     let shaped_scores = shape_scores_for_mode(&frames, &raw_scores, mode);
     let reinforced_scores = reinforce_rhythmic_scores(&frames, &shaped_scores, mode);
-    let mut peak_candidates = pick_local_peaks(&frames, &reinforced_scores, mode);
+    let stable_scores = locally_stabilize_scores(&frames, &reinforced_scores, mode);
+    let mut peak_candidates = pick_local_peaks(&frames, &stable_scores, mode);
     if peak_candidates.is_empty() {
         return Vec::new();
     }
@@ -286,6 +299,7 @@ fn detect_events(samples: &[f32], sample_rate: u32, mode: DetectionMode) -> Vec<
         DetectionMode::Spikes => 0.150,
         DetectionMode::Music => 0.260,
         DetectionMode::Vocal => 0.850,
+        DetectionMode::Beats => 0.260,
     };
 
     suppress_duplicates(peak_candidates, duplicate_gap)
@@ -346,6 +360,8 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
         let mut attack = 0.0;
         let mut vocal = 0.0;
         let mut wide = 0.0;
+        let mut log_band_power = [0.0_f32; LOG_BANDS];
+        let mut log_band_bins = [0_usize; LOG_BANDS];
         let mut bass_bins = 0;
         let mut body_bins = 0;
         let mut attack_bins = 0;
@@ -385,6 +401,15 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
                 wide += power;
                 wide_bins += 1;
             }
+            if let Some(band) = log_band_index(freq) {
+                log_band_power[band] += power;
+                log_band_bins[band] += 1;
+            }
+        }
+
+        let mut log_bands = [0.0_f32; LOG_BANDS];
+        for band in 0..LOG_BANDS {
+            log_bands[band] = band_energy(log_band_power[band], log_band_bins[band]);
         }
 
         out.push(FrameEnergy {
@@ -397,6 +422,7 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
             flux: energy_scale(flux / (window_size / 2) as f32),
             rms: energy_scale(sum_squares / window_size as f32),
             peak: energy_scale(peak),
+            log_bands,
         });
 
         start += hop;
@@ -429,6 +455,24 @@ fn band_energy(power: f32, bins: usize) -> f32 {
         return 0.0;
     }
     energy_scale(power / bins as f32)
+}
+
+fn log_band_index(freq: f32) -> Option<usize> {
+    if !(MIN_ANALYSIS_HZ..=MAX_ANALYSIS_HZ).contains(&freq) {
+        return None;
+    }
+
+    let min_ln = MIN_ANALYSIS_HZ.ln();
+    let max_ln = MAX_ANALYSIS_HZ.ln();
+    let position = ((freq.ln() - min_ln) / (max_ln - min_ln)).clamp(0.0, 0.999_999);
+    Some((position * LOG_BANDS as f32) as usize)
+}
+
+fn log_band_center_hz(band: usize) -> f32 {
+    let min_ln = MIN_ANALYSIS_HZ.ln();
+    let max_ln = MAX_ANALYSIS_HZ.ln();
+    let t = (band as f32 + 0.5) / LOG_BANDS as f32;
+    (min_ln + t * (max_ln - min_ln)).exp()
 }
 
 fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32> {
@@ -467,7 +511,7 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
                     + wide_rise * 0.04
                     + flux_rise * 0.06
             }
-            DetectionMode::Music => {
+            DetectionMode::Music | DetectionMode::Beats => {
                 bass_rise * 0.30
                     + body_rise * 0.22
                     + attack_rise * 0.26
@@ -490,7 +534,7 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
                     + wide_snap * 0.04
                     + flux_snap * 0.08
             }
-            DetectionMode::Music => {
+            DetectionMode::Music | DetectionMode::Beats => {
                 bass_snap * 0.24
                     + body_snap * 0.18
                     + attack_snap * 0.30
@@ -516,7 +560,7 @@ fn spectral_novelty_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f
             vocal_rise * (0.30 + 0.42 * quiet_zone) + vocal_snap * (0.14 + 0.18 * quiet_zone);
         let score = match mode {
             DetectionMode::Spikes => percussion * 0.80 + transient * 0.78 + section_jump * 0.32,
-            DetectionMode::Music => {
+            DetectionMode::Music | DetectionMode::Beats => {
                 // Give percussion/transient equal standing with melodic to avoid
                 // skipping rhythmic hits; reduce section_jump slightly to cut clutter.
                 percussion * 0.44 + transient * 0.50 + vocal_or_melodic * 0.90 + section_jump * 0.60
@@ -562,6 +606,9 @@ fn envelope_onset_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32
             DetectionMode::Music => {
                 peak_rise * 0.34 + peak_snap * 0.30 + rms_rise * 0.44 + rms_snap * 0.24
             }
+            DetectionMode::Beats => {
+                peak_rise * 0.38 + peak_snap * 0.34 + rms_rise * 0.42 + rms_snap * 0.20
+            }
             DetectionMode::Vocal => rms_rise * 0.72 + rms_snap * 0.18 + peak_rise * 0.06,
         };
         scores.push(score.max(0.0));
@@ -573,28 +620,122 @@ fn envelope_onset_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32
     scores
 }
 
-fn fuse_detector_scores(spectral: &[f32], envelope: &[f32], mode: DetectionMode) -> Vec<f32> {
+fn superflux_onset_scores(frames: &[FrameEnergy], mode: DetectionMode) -> Vec<f32> {
+    if frames.len() < 3 {
+        return vec![0.0; frames.len()];
+    }
+
+    let mut scores = vec![0.0_f32; frames.len()];
+    for i in 2..frames.len() {
+        let mut total = 0.0_f32;
+        let mut weight_sum = 0.0_f32;
+
+        for band in 0..LOG_BANDS {
+            let current = frames[i].log_bands[band];
+            let previous_max = local_previous_band_max(frames, i, band, 1)
+                .max(local_previous_band_max(frames, i, band, 2) * 0.86);
+            let diff = (current - previous_max).max(0.0);
+            if diff <= 0.0 {
+                continue;
+            }
+
+            let center_hz = log_band_center_hz(band);
+            let weight = onset_band_weight(center_hz, mode);
+            total += diff * weight;
+            weight_sum += weight;
+        }
+
+        if weight_sum > 0.0 {
+            scores[i] = total / weight_sum;
+        }
+    }
+
+    scores
+}
+
+fn local_previous_band_max(frames: &[FrameEnergy], index: usize, band: usize, lag: usize) -> f32 {
+    if index < lag {
+        return 0.0;
+    }
+
+    let source = &frames[index - lag].log_bands;
+    let start = band.saturating_sub(1);
+    let end = (band + 1).min(LOG_BANDS - 1);
+    let mut best = 0.0_f32;
+    for value in source.iter().take(end + 1).skip(start) {
+        best = best.max(*value);
+    }
+    best
+}
+
+fn onset_band_weight(freq: f32, mode: DetectionMode) -> f32 {
+    let dhol_bass = gaussian_weight(freq, 90.0, 0.62);
+    let tabla_body = gaussian_weight(freq, 430.0, 0.72);
+    let slap_attack = gaussian_weight(freq, 2_800.0, 0.95);
+    let vocal_formant = gaussian_weight(freq, 1_100.0, 1.10);
+    let upper_presence = gaussian_weight(freq, 4_200.0, 1.00);
+
+    match mode {
+        DetectionMode::Spikes => {
+            0.18 + dhol_bass * 1.25 + tabla_body * 0.95 + slap_attack * 0.92
+        }
+        DetectionMode::Music | DetectionMode::Beats => {
+            0.20
+                + dhol_bass * 0.72
+                + tabla_body * 0.75
+                + slap_attack * 0.70
+                + vocal_formant * 0.58
+                + upper_presence * 0.26
+        }
+        DetectionMode::Vocal => {
+            0.08 + vocal_formant * 1.18 + upper_presence * 0.32 + tabla_body * 0.18
+        }
+    }
+}
+
+fn gaussian_weight(freq: f32, center_hz: f32, octave_width: f32) -> f32 {
+    if freq <= 0.0 || center_hz <= 0.0 || octave_width <= 0.0 {
+        return 0.0;
+    }
+    let distance_octaves = (freq / center_hz).log2();
+    (-0.5 * (distance_octaves / octave_width).powi(2)).exp()
+}
+
+fn fuse_detector_scores(
+    spectral: &[f32],
+    envelope: &[f32],
+    superflux: &[f32],
+    mode: DetectionMode,
+) -> Vec<f32> {
     let spectral_norm = normalize_series(spectral, 0.985);
     let envelope_norm = normalize_series(envelope, 0.985);
-    let mut fused = Vec::with_capacity(spectral.len().min(envelope.len()));
+    let superflux_norm = normalize_series(superflux, 0.985);
+    let len = spectral_norm.len().min(envelope_norm.len()).min(superflux_norm.len());
+    let mut fused = Vec::with_capacity(len);
 
-    for i in 0..spectral_norm.len().min(envelope_norm.len()) {
+    for i in 0..len {
         let spec = spectral_norm[i];
         let env = envelope_norm[i];
-        let agreement = spec.min(env);
-        let support = (spec * env).sqrt();
-        let strong_single = spec.max(env);
+        let flux = superflux_norm[i];
+        let agreement = spec.min(env).max(flux.min(env) * 0.92);
+        let support = ((spec.max(flux) * env).sqrt() + (spec * flux).sqrt() * 0.45) / 1.45;
+        let strong_single = spec.max(env).max(flux);
 
-        // Geometric mean of agreement and support captures true co-activation;
-        // strong_single lets either detector carry a clear onset alone.
+        // SuperFlux catches timbral and tabla/dhol attacks that envelope-only
+        // scoring can miss, while agreement keeps sustained noise from winning.
         let mut score = match mode {
-            DetectionMode::Spikes => agreement * 0.72 + support * 0.30 + strong_single * 0.12,
+            DetectionMode::Spikes => {
+                agreement * 0.62 + support * 0.30 + flux * 0.26 + strong_single * 0.08
+            }
             // Music: spec carries melodic novelty — give it a direct path even
             // when envelope agreement is moderate.
             DetectionMode::Music => {
-                agreement * 0.55 + support * 0.28 + spec * 0.22 + strong_single * 0.10
+                agreement * 0.48 + support * 0.28 + flux * 0.26 + spec * 0.18 + strong_single * 0.06
             }
-            DetectionMode::Vocal => agreement * 0.56 + support * 0.18 + spec * 0.26,
+            DetectionMode::Beats => {
+                agreement * 0.56 + support * 0.34 + flux * 0.24 + env * 0.14 + strong_single * 0.04
+            }
+            DetectionMode::Vocal => agreement * 0.42 + support * 0.16 + flux * 0.20 + spec * 0.30,
         };
 
         // Penalty thresholds: relaxed so low-velocity soft beats (agreement ~0.12-0.20)
@@ -615,6 +756,13 @@ fn fuse_detector_scores(spectral: &[f32], envelope: &[f32], mode: DetectionMode)
                     score *= 0.88;
                 }
             }
+            DetectionMode::Beats => {
+                if agreement < 0.10 {
+                    score *= if strong_single > 0.84 { 0.62 } else { 0.34 };
+                } else if agreement < 0.24 {
+                    score *= 0.78;
+                }
+            }
             DetectionMode::Vocal => {
                 if agreement < 0.08 {
                     score *= if strong_single > 0.80 { 0.68 } else { 0.40 };
@@ -633,8 +781,84 @@ fn fuse_detector_scores(spectral: &[f32], envelope: &[f32], mode: DetectionMode)
 fn shape_scores_for_mode(frames: &[FrameEnergy], scores: &[f32], mode: DetectionMode) -> Vec<f32> {
     match mode {
         DetectionMode::Vocal => shape_vocal_phrase_scores(frames, scores),
-        DetectionMode::Spikes | DetectionMode::Music => scores.to_vec(),
+        DetectionMode::Spikes | DetectionMode::Music | DetectionMode::Beats => scores.to_vec(),
     }
+}
+
+fn locally_stabilize_scores(
+    frames: &[FrameEnergy],
+    scores: &[f32],
+    mode: DetectionMode,
+) -> Vec<f32> {
+    if frames.len() < 8 || scores.len() < 8 {
+        return scores.to_vec();
+    }
+
+    let frame_step = median_frame_step_seconds(frames);
+    if frame_step <= 0.0 {
+        return scores.to_vec();
+    }
+
+    let half_window_seconds = match mode {
+        DetectionMode::Spikes => 5.5,
+        DetectionMode::Music => 7.0,
+        DetectionMode::Vocal => 9.0,
+        DetectionMode::Beats => 8.0,
+    };
+    let half_window = ((half_window_seconds / frame_step).round() as usize).clamp(16, 180);
+    let global_reference = robust_percentile(scores, 0.72).max(1.0e-6);
+    let global_activity_floor = global_reference
+        * match mode {
+            DetectionMode::Spikes => 0.18,
+            DetectionMode::Music => 0.15,
+            DetectionMode::Vocal => 0.20,
+            DetectionMode::Beats => 0.18,
+        };
+    let k_mad = match mode {
+        DetectionMode::Spikes => 1.10,
+        DetectionMode::Music => 0.95,
+        DetectionMode::Vocal => 1.35,
+        DetectionMode::Beats => 1.05,
+    };
+
+    let mut stabilized = Vec::with_capacity(scores.len());
+    for i in 0..scores.len() {
+        let lo = i.saturating_sub(half_window);
+        let hi = (i + half_window + 1).min(scores.len());
+        let mut window = scores[lo..hi]
+            .iter()
+            .copied()
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .collect::<Vec<_>>();
+        if window.len() < 4 {
+            stabilized.push(0.0);
+            continue;
+        }
+
+        window.sort_by(|a, b| a.total_cmp(b));
+        let median = percentile_sorted(&window, 0.50);
+        let p85 = percentile_sorted(&window, 0.85);
+        let p97 = percentile_sorted(&window, 0.97).max(p85 + 1.0e-6);
+        let mad = median_absolute_deviation_sorted(&window, median).max(1.0e-6);
+
+        if p85 < global_activity_floor {
+            stabilized.push(0.0);
+            continue;
+        }
+
+        let threshold = (median + k_mad * mad).max(p85 * 0.42);
+        let score = scores[i];
+        if score <= threshold {
+            stabilized.push(0.0);
+            continue;
+        }
+
+        let local_ratio = ((score - threshold) / (p97 - threshold).max(1.0e-6)).clamp(0.0, 1.8);
+        let activity_confidence = ((p85 - global_activity_floor) / global_reference).clamp(0.35, 1.0);
+        stabilized.push(soft_compress(local_ratio) * activity_confidence);
+    }
+
+    stabilized
 }
 
 fn shape_vocal_phrase_scores(frames: &[FrameEnergy], scores: &[f32]) -> Vec<f32> {
@@ -703,6 +927,7 @@ fn frame_medians(frames: &[FrameEnergy], start: usize, end: usize) -> FrameEnerg
             flux: 0.0,
             rms: 0.0,
             peak: 0.0,
+            log_bands: [0.0; LOG_BANDS],
         };
     }
 
@@ -721,6 +946,7 @@ fn frame_medians(frames: &[FrameEnergy], start: usize, end: usize) -> FrameEnerg
         flux: median_by(frames, start, end, |frame| frame.flux),
         rms: median_by(frames, start, end, |frame| frame.rms),
         peak: median_by(frames, start, end, |frame| frame.peak),
+        log_bands: [0.0; LOG_BANDS],
     }
 }
 
@@ -742,6 +968,182 @@ where
     }
     values.sort_by(|a, b| a.total_cmp(b));
     values[values.len() / 2]
+}
+
+fn detect_beat_grid_events(samples: &[f32], sample_rate: u32, frames: &[FrameEnergy]) -> Vec<Event> {
+    let spectral_scores = spectral_novelty_scores(frames, DetectionMode::Beats);
+    let envelope_scores = envelope_onset_scores(frames, DetectionMode::Beats);
+    let superflux_scores = superflux_onset_scores(frames, DetectionMode::Beats);
+    let raw_scores = fuse_detector_scores(
+        &spectral_scores,
+        &envelope_scores,
+        &superflux_scores,
+        DetectionMode::Beats,
+    );
+    let reinforced_scores = reinforce_rhythmic_scores(frames, &raw_scores, DetectionMode::Beats);
+    let stable_scores = locally_stabilize_scores(frames, &reinforced_scores, DetectionMode::Beats);
+    let frame_step = median_frame_step_seconds(frames);
+    if frame_step <= 0.0 {
+        return Vec::new();
+    }
+
+    let norm = normalize_series(&stable_scores, 0.985);
+    let Some(lag) = estimate_beat_lag(&norm, frame_step) else {
+        return Vec::new();
+    };
+    let Some(phase) = estimate_beat_phase(&norm, lag) else {
+        return Vec::new();
+    };
+
+    let period_seconds = lag as f64 * frame_step;
+    let search_radius = (lag / 5).clamp(3, 18);
+    let min_score = robust_percentile(&stable_scores, 0.72).max(0.12);
+    let mut beats = Vec::new();
+    let mut index = phase;
+
+    while index < frames.len() {
+        if let Some((best_index, best_score)) =
+            best_local_grid_onset(&stable_scores, index, search_radius)
+        {
+            let frame = frames[best_index];
+            if best_score >= min_score
+                && has_direct_onset_evidence(frames, best_index, lag.clamp(4, 32), DetectionMode::Beats)
+            {
+                let snapped = snap_event_time(samples, sample_rate, frame.time, DetectionMode::Music);
+                beats.push((snapped, best_score));
+            }
+        }
+        index += lag;
+    }
+
+    let mut deduped = suppress_duplicates(beats, period_seconds * 0.55);
+    calibrate_beat_grid_scores(&mut deduped);
+    deduped
+        .into_iter()
+        .map(|(time, score)| Event {
+            time: round_to_millis(time),
+            score: round_score(score),
+        })
+        .collect()
+}
+
+fn calibrate_beat_grid_scores(beats: &mut [(f64, f32)]) {
+    if beats.is_empty() {
+        return;
+    }
+
+    if beats.len() == 1 {
+        beats[0].1 = 0.97;
+        return;
+    }
+
+    let mut ranked_indices = (0..beats.len()).collect::<Vec<_>>();
+    ranked_indices.sort_by(|a, b| beats[*a].1.total_cmp(&beats[*b].1));
+
+    for (rank, index) in ranked_indices.into_iter().enumerate() {
+        let percentile = rank as f32 / (beats.len() - 1) as f32;
+        // Rank calibration gives the UI slider a predictable curve:
+        // low sensitivity keeps almost everything, high sensitivity keeps only
+        // the strongest musical beats. Raw detector strength still decides
+        // ordering; the slider no longer depends on accidental score clustering.
+        beats[index].1 = (0.22 + percentile * 0.75).clamp(0.20, 0.97);
+    }
+}
+
+fn estimate_beat_lag(norm: &[f32], frame_step: f64) -> Option<usize> {
+    if norm.len() < 24 || frame_step <= 0.0 {
+        return None;
+    }
+
+    let min_lag = ((60.0 / 190.0) / frame_step).round().max(2.0) as usize;
+    let max_lag = ((60.0 / 58.0) / frame_step).round().min((norm.len() / 2) as f64) as usize;
+    if min_lag >= max_lag {
+        return None;
+    }
+
+    let mut best_lag = 0;
+    let mut best_score = 0.0_f32;
+    for lag in min_lag..=max_lag {
+        let bpm = 60.0 / (lag as f64 * frame_step);
+        let mut cross = 0.0_f32;
+        let mut left_energy = 0.0_f32;
+        let mut right_energy = 0.0_f32;
+        for i in lag..norm.len() {
+            let a = norm[i].max(0.0);
+            let b = norm[i - lag].max(0.0);
+            if a < 0.05 && b < 0.05 {
+                continue;
+            }
+            cross += a * b;
+            left_energy += a * a;
+            right_energy += b * b;
+        }
+        let corr = cross / (left_energy.sqrt() * right_energy.sqrt()).max(1.0e-6);
+        let tempo_prior = if (72.0..=156.0).contains(&bpm) {
+            1.0
+        } else if (64.0..=176.0).contains(&bpm) {
+            0.93
+        } else {
+            0.84
+        };
+        let score = corr * tempo_prior;
+        if score > best_score {
+            best_score = score;
+            best_lag = lag;
+        }
+    }
+
+    (best_lag > 0 && best_score >= 0.10).then_some(best_lag)
+}
+
+fn estimate_beat_phase(norm: &[f32], lag: usize) -> Option<usize> {
+    if lag == 0 || norm.len() < lag * 2 {
+        return None;
+    }
+
+    let mut best_phase = 0;
+    let mut best_score = 0.0_f32;
+    for phase in 0..lag {
+        let mut score = 0.0_f32;
+        let mut count = 0;
+        let mut index = phase;
+        while index < norm.len() {
+            let lo = index.saturating_sub(2);
+            let hi = (index + 2).min(norm.len() - 1);
+            let local = norm[lo..=hi].iter().copied().fold(0.0_f32, f32::max);
+            score += local;
+            count += 1;
+            index += lag;
+        }
+        if count > 0 {
+            score /= count as f32;
+        }
+        if score > best_score {
+            best_score = score;
+            best_phase = phase;
+        }
+    }
+
+    (best_score >= 0.06).then_some(best_phase)
+}
+
+fn best_local_grid_onset(scores: &[f32], center: usize, radius: usize) -> Option<(usize, f32)> {
+    if scores.is_empty() || center >= scores.len() {
+        return None;
+    }
+
+    let lo = center.saturating_sub(radius);
+    let hi = (center + radius).min(scores.len() - 1);
+    let mut best_index = center;
+    let mut best_score = 0.0_f32;
+    for (offset, score) in scores[lo..=hi].iter().enumerate() {
+        if *score > best_score {
+            best_score = *score;
+            best_index = lo + offset;
+        }
+    }
+
+    (best_score > 0.0).then_some((best_index, best_score))
 }
 
 fn reinforce_rhythmic_scores(
@@ -796,6 +1198,7 @@ fn reinforce_rhythmic_scores(
     let boost_limit = match mode {
         DetectionMode::Spikes => 0.16,
         DetectionMode::Music => 0.24,
+        DetectionMode::Beats => 0.34,
         DetectionMode::Vocal => 0.0,
     };
     let confidence = ((best_corr - 0.09) / 0.24).clamp(0.0, 1.0);
@@ -907,6 +1310,7 @@ fn pick_local_peaks(
         DetectionMode::Spikes => 20,
         DetectionMode::Music => 24,
         DetectionMode::Vocal => 30,
+        DetectionMode::Beats => 28,
     };
     // Sensitivity multiplier above local median.
     // Spikes: 1.10 (tighter than before) — fewer false positives on noise bursts.
@@ -916,12 +1320,14 @@ fn pick_local_peaks(
         DetectionMode::Spikes => 1.10,
         DetectionMode::Music => 1.00,
         DetectionMode::Vocal => 1.45,
+        DetectionMode::Beats => 1.20,
     };
     // Hard global floor so we never pick meaningless noise peaks
     let global_floor: f32 = match mode {
         DetectionMode::Spikes => 0.020,
         DetectionMode::Music => 0.016,
         DetectionMode::Vocal => 0.025,
+        DetectionMode::Beats => 0.020,
     };
 
     // Pre-compute adaptive thresholds per frame
@@ -947,11 +1353,16 @@ fn pick_local_peaks(
             (median + k_mad * mad).max(global_floor)
         })
         .collect();
+    let evidence_back = ((0.520 / median_frame_step_seconds(frames).max(1.0e-6)).round() as usize)
+        .clamp(3, 28);
 
     let mut peaks = Vec::new();
 
     for i in 1..n - 1 {
         if frames[i].wide < silence_floor {
+            continue;
+        }
+        if !has_direct_onset_evidence(frames, i, evidence_back, mode) {
             continue;
         }
         if scores[i] < thresholds[i] {
@@ -965,6 +1376,47 @@ fn pick_local_peaks(
     }
 
     peaks
+}
+
+fn has_direct_onset_evidence(
+    frames: &[FrameEnergy],
+    index: usize,
+    prior_frames: usize,
+    mode: DetectionMode,
+) -> bool {
+    if frames.is_empty() || index >= frames.len() {
+        return false;
+    }
+
+    let prior_start = index.saturating_sub(prior_frames);
+    let prior = frame_medians(frames, prior_start, index);
+    let frame = frames[index];
+
+    let bass_entry = positive_rise(frame.bass, prior.bass);
+    let body_entry = positive_rise(frame.body, prior.body);
+    let attack_entry = positive_rise(frame.attack, prior.attack);
+    let vocal_entry = positive_rise(frame.vocal, prior.vocal);
+    let wide_entry = positive_rise(frame.wide, prior.wide);
+    let rms_entry = positive_rise(frame.rms, prior.rms);
+    let peak_entry = positive_rise(frame.peak, prior.peak);
+
+    let percussion = bass_entry * 0.36 + body_entry * 0.30 + attack_entry * 0.28;
+    let melodic = vocal_entry * 0.42 + wide_entry * 0.20;
+    let envelope = rms_entry * 0.62 + peak_entry * 0.38;
+
+    match mode {
+        DetectionMode::Spikes => percussion >= 0.18 && envelope >= 0.055,
+        DetectionMode::Music => {
+            (percussion >= 0.13 && envelope >= 0.040)
+                || (melodic >= 0.16 && envelope >= 0.050)
+                || (percussion + melodic >= 0.24 && wide_entry >= 0.050)
+        }
+        DetectionMode::Beats => {
+            (percussion >= 0.16 && envelope >= 0.050)
+                || (percussion + melodic >= 0.28 && wide_entry >= 0.060)
+        }
+        DetectionMode::Vocal => melodic >= 0.18 && envelope >= 0.045,
+    }
 }
 
 fn suppress_duplicates(mut peaks: Vec<(f64, f32)>, min_gap_seconds: f64) -> Vec<(f64, f32)> {
@@ -1019,11 +1471,13 @@ fn snap_event_time(
         DetectionMode::Spikes => 0.050,
         DetectionMode::Music => 0.055,
         DetectionMode::Vocal => 0.090,
+        DetectionMode::Beats => 0.055,
     };
     let look_forward = match mode {
         DetectionMode::Spikes => 0.080,
         DetectionMode::Music => 0.090,
         DetectionMode::Vocal => 0.150,
+        DetectionMode::Beats => 0.090,
     };
     let start = (estimated - (look_back * sr) as isize).max(1) as usize;
     let end = (estimated + (look_forward * sr) as isize)
@@ -1039,11 +1493,13 @@ fn snap_event_time(
         DetectionMode::Spikes => 0.012,
         DetectionMode::Music => 0.016,
         DetectionMode::Vocal => 0.030,
+        DetectionMode::Beats => 0.016,
     }) * sr) as usize;
     let post_window = ((match mode {
         DetectionMode::Spikes => 0.008,
         DetectionMode::Music => 0.012,
         DetectionMode::Vocal => 0.024,
+        DetectionMode::Beats => 0.012,
     }) * sr) as usize;
     let mut best_index = start;
     let mut best_score = 0.0_f32;
@@ -1076,6 +1532,7 @@ fn snap_event_time(
         DetectionMode::Spikes => 0.30,
         DetectionMode::Music => 0.36,
         DetectionMode::Vocal => 0.44,
+        DetectionMode::Beats => 0.36,
     };
     for (index, score, envelope_rise, impulse) in onset_scores {
         if index > best_index {
@@ -1091,6 +1548,7 @@ fn snap_event_time(
         DetectionMode::Spikes => 0.006,
         DetectionMode::Music => 0.008,
         DetectionMode::Vocal => 0.018,
+        DetectionMode::Beats => 0.008,
     };
     ((best_index as f64 / sr) - pre_roll).max(0.0)
 }
@@ -1173,6 +1631,26 @@ fn robust_percentile(values: &[f32], percentile: f32) -> f32 {
     sorted.sort_by(|a, b| a.total_cmp(b));
     let index = ((sorted.len() - 1) as f32 * percentile.clamp(0.0, 1.0)).round() as usize;
     sorted[index]
+}
+
+fn percentile_sorted(sorted: &[f32], percentile: f32) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let index = ((sorted.len() - 1) as f32 * percentile.clamp(0.0, 1.0)).round() as usize;
+    sorted[index]
+}
+
+fn median_absolute_deviation_sorted(sorted: &[f32], median: f32) -> f32 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let mut deviations = sorted
+        .iter()
+        .map(|value| (*value - median).abs())
+        .collect::<Vec<_>>();
+    deviations.sort_by(|a, b| a.total_cmp(b));
+    deviations[deviations.len() / 2]
 }
 
 fn round_to_millis(value: f64) -> f64 {
@@ -1261,6 +1739,71 @@ mod tests {
     }
 
     #[test]
+    fn music_mode_keeps_late_soft_hits_after_loud_intro() {
+        let sample_rate = 48_000;
+        let mut samples = synthetic_ambient(sample_rate, 64.0);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[1.0, 1.5, 2.0, 2.5], 1.9);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[52.0, 52.5, 53.0, 53.5], 0.58);
+
+        let events = detect_events(&samples, sample_rate, DetectionMode::Music);
+        let late_matches = [52.0, 52.5, 53.0, 53.5]
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.095)
+            })
+            .count();
+
+        assert!(
+            late_matches >= 3,
+            "expected consistent late-track sensitivity, matched {late_matches}/4; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn music_mode_does_not_fill_quiet_gap_with_false_onsets() {
+        let sample_rate = 48_000;
+        let mut samples = synthetic_ambient_scaled(sample_rate, 24.0, 0.28);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[2.0, 2.5, 3.0], 1.7);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[18.0, 18.5, 19.0], 1.4);
+
+        let events = detect_events(&samples, sample_rate, DetectionMode::Music);
+        let quiet_gap_events = events
+            .iter()
+            .filter(|event| event.time >= 7.0 && event.time <= 15.0)
+            .count();
+
+        assert_eq!(
+            quiet_gap_events, 0,
+            "quiet/no-onset section should be skipped; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn beats_mode_returns_consistent_grid_without_mode_overlap_noise() {
+        let sample_rate = 48_000;
+        let expected = [1.0, 1.5, 2.0, 2.5, 3.0, 3.5];
+        let mut samples = synthetic_ambient(sample_rate, 5.0);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &expected, 1.25);
+
+        let events = detect_events(&samples, sample_rate, DetectionMode::Beats);
+        let matched = expected
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.095)
+            })
+            .count();
+
+        assert!(
+            matched >= 5,
+            "expected beat-grid mode to follow the main pulse, matched {matched}/6; events: {events:?}"
+        );
+    }
+
+    #[test]
     fn spike_timing_snaps_to_attack_before_louder_resonance() {
         let sample_rate = 48_000;
         let mut samples = synthetic_ambient(sample_rate, 2.0);
@@ -1298,6 +1841,10 @@ mod tests {
     }
 
     fn synthetic_ambient(sample_rate: u32, duration_seconds: f64) -> Vec<f32> {
+        synthetic_ambient_scaled(sample_rate, duration_seconds, 1.0)
+    }
+
+    fn synthetic_ambient_scaled(sample_rate: u32, duration_seconds: f64, gain: f32) -> Vec<f32> {
         let len = (duration_seconds * sample_rate as f64).round() as usize;
         let mut samples = Vec::with_capacity(len);
         for i in 0..len {
@@ -1309,7 +1856,7 @@ mod tests {
                 + (std::f32::consts::TAU * 1500.0 * t).sin() * 0.008
                 + (std::f32::consts::TAU * 3000.0 * t).sin() * 0.005;
             let noise = ((i as f32 * 17.3).sin() * 43.7).sin() * 0.020;
-            samples.push(hum + noise);
+            samples.push((hum + noise) * gain);
         }
         samples
     }

@@ -2,9 +2,9 @@
 
 Version: `1.0.0`
 
-Beat Detect is a Windows-first Adobe Premiere Pro CEP extension for adding edit markers from music/audio events. It is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, drops, vocal phrase starts, and musical section changes.
+Beat Detect is a Windows-first Adobe Premiere Pro CEP extension for adding edit markers from music/audio events. It is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, drops, and strong musical section changes.
 
-The extension is a vanilla CEP panel backed by a bundled Rust analyzer. It can also merge in a bundled native Essentia runner when `bin/essentia_beats.exe` is included in the build. The editor machine only needs Premiere Pro and `BeatDetectSetup.exe`; Python, Cargo, Rust, FFmpeg, and manual library installs are not user requirements.
+The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The editor machine only needs Premiere Pro and `BeatDetectSetup.exe`; Python, Cargo, Rust, FFmpeg, and manual library installs are not user requirements.
 
 ## Features
 
@@ -24,7 +24,6 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. It can a
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
 - Browser preview mode by opening `index.html` without Premiere
 - Single Windows setup executable
-- Optional bundled Essentia steady-beat support via `bin/essentia_beats.exe`
 
 ## Repository Layout
 
@@ -44,7 +43,6 @@ Generated files are ignored by Git:
 
 ```text
 bin/beat_analyzer.exe
-bin/essentia_beats.exe
 dist/
 BeatDetectSetup.exe
 BeatDetect-CEP-Windows.zip
@@ -117,29 +115,7 @@ Output:
 BeatDetectSetup.exe
 ```
 
-Beat Detect can merge an optional native Essentia runner if one is bundled as `bin\essentia_beats.exe`. On Windows, Essentia's Python bindings are not currently a reliable build path, so the recommended shipping path remains the Rust analyzer unless a native Essentia runner is built separately.
-
-If you already have a Python environment where `import essentia.standard` works, this helper can package it into a runner:
-
-```powershell
-.\scripts\build-essentia-runner.ps1 -PythonPath "C:\Path\To\python.exe"
-```
-
-That script requires Python packages `essentia` and `PyInstaller` on the build PC only. It creates:
-
-```text
-bin\essentia_beats.exe
-```
-
-Then build the full single-file installer:
-
-```powershell
-.\scripts\build-setup-exe.ps1 -WithEssentia -PythonPath "C:\Path\To\python.exe"
-```
-
-The setup builder embeds every packaged runtime file, so the final editor install still remains one file: `BeatDetectSetup.exe`.
-
-If Python Essentia fails on Windows, do not install anything on editor machines. Either ship the Rust-only installer or build a native C++ Essentia runner that matches the JSON contract below.
+The setup builder embeds only the whitelisted runtime files needed by the beats-only workflow, so stale optional binaries cannot enter a release accidentally.
 
 ## GitHub Release Build
 
@@ -187,28 +163,6 @@ Expected stdout is JSON only:
 
 Errors are written to stderr with a non-zero exit code.
 
-## Optional Essentia Runner Contract
-
-The panel automatically runs `bin\essentia_beats.exe` when it is bundled. It must accept:
-
-```powershell
-.\bin\essentia_beats.exe --mode music "C:\path\to\song-or-video.mp4"
-```
-
-Expected stdout is JSON only. Supported shapes:
-
-```json
-{"bpm":96.0,"confidence":0.74,"events":[{"time":25.739,"score":0.68}]}
-```
-
-or:
-
-```json
-{"bpm":96.0,"confidence":0.74,"beats":[25.739,26.364]}
-```
-
-Beat Detect's panel uses the Rust `beats` grid detector by default. The optional Essentia runner remains a legacy build hook for experiments, but the default panel workflow does not depend on it.
-
 ## Local Song Test Reports
 
 To test the bundled analyzer against a real song, build first:
@@ -217,7 +171,7 @@ To test the bundled analyzer against a real song, build first:
 .\scripts\build-setup-exe.ps1
 ```
 
-Then run all three modes at the same `0.50` marker threshold used for review reports:
+Then run the beats analyzer at the marker threshold used for review reports:
 
 ```powershell
 $media = "C:\Users\User\Downloads\Video\O Rangrez Full Video - Bhaag Milkha Bhaag_Farhan, Sonam_Shreya Ghoshal, Javed Bashir_3.mp4"
@@ -277,13 +231,12 @@ This uses Premiere's QE DOM to apply the named video effect and `Sequence.isDone
 
 ## Detection Notes
 
-The core Rust analyzer uses two independent methods and fuses them:
+The core Rust analyzer uses multiple onset methods and fuses them:
 
 - spectral-band novelty:
   - `45-180 Hz` dhol/kick impact
   - `180-950 Hz` tabla/dholak body
   - `1.2-8 kHz` slap, clap, and stick attack
-  - `250 Hz-4 kHz` vocal/melodic movement
   - wideband section rise
 - waveform-envelope onset:
   - RMS rise
@@ -292,7 +245,6 @@ The core Rust analyzer uses two independent methods and fuses them:
 - log-frequency SuperFlux-style onset scoring:
   - 40 log-spaced bands from `45 Hz-10 kHz`
   - dhol/tabla-focused weighting around bass impact, drum body, and slap/attack bands
-  - vocal/melodic weighting for phrase entries in `music` and `vocal` modes
 - local robust normalization:
   - each section is judged against its own recent context, so late quiet hits are not buried by loud earlier drops
   - direct onset-evidence gating prevents steady hum/noise sections from producing fake markers
@@ -306,7 +258,7 @@ Panel filtering then applies:
 - one strongest selected event per whole second
 - optional extra thinning at the strict end of the slider
 
-The panel's default `beats` mode skips optional Essentia merging so the marker output stays one coherent beat grid rather than a blend of unrelated detector styles.
+The panel uses one Rust `beats` grid path so marker output stays coherent instead of blending unrelated detector styles.
 
 ## Logs
 

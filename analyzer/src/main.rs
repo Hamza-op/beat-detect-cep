@@ -10,7 +10,7 @@ use symphonia::core::audio::{AudioBufferRef, Signal};
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::conv::FromSample;
 use symphonia::core::errors::Error as SymphoniaError;
-use symphonia::core::formats::FormatOptions;
+use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
@@ -26,12 +26,19 @@ struct Event {
     score: f32,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DetectionMode {
     Spikes,
     Music,
     Vocal,
     Beats,
+}
+
+struct AnalyzerOptions {
+    mode: DetectionMode,
+    media_path: String,
+    start_seconds: Option<f64>,
+    duration_seconds: Option<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -60,46 +67,112 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn Error>> {
-    let (mode, media_path) = parse_args()?;
+    let options = parse_args()?;
 
-    if !Path::new(&media_path).exists() {
-        return Err(format!("media file does not exist: {media_path}").into());
+    if !Path::new(&options.media_path).exists() {
+        return Err(format!("media file does not exist: {}", options.media_path).into());
     }
 
-    let (samples, sample_rate) = decode_mono_audio(&media_path)?;
-    if sample_rate == 0 {
-        return Err("audio track has an invalid sample rate".into());
-    }
-    if samples.is_empty() {
-        return Err("no decodable audio samples found".into());
-    }
+    let (analysis_samples, sample_rate, analysis_offset) = decode_mono_audio(
+        &options.media_path,
+        options.start_seconds,
+        options.duration_seconds,
+    )?;
 
-    let events = detect_events(&samples, sample_rate, mode);
+    let mut events = detect_events(&analysis_samples, sample_rate, options.mode);
+    if analysis_offset > 0.0 {
+        for event in &mut events {
+            event.time = round_to_millis(event.time + analysis_offset);
+        }
+    }
     println!("{}", serde_json::to_string(&events)?);
     Ok(())
 }
 
-fn parse_args() -> Result<(DetectionMode, String), Box<dyn Error>> {
-    let args = env::args().skip(1).collect::<Vec<_>>();
-    if args.is_empty() {
-        return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] <media-file-path>".into());
-    }
-
-    if args.len() >= 3 && args[0] == "--mode" {
-        let mode = match args[1].as_str() {
-            "spikes" => DetectionMode::Spikes,
-            "music" => DetectionMode::Music,
-            "vocal" => DetectionMode::Vocal,
-            "beats" => DetectionMode::Beats,
-            other => return Err(format!("unsupported detection mode: {other}").into()),
-        };
-        return Ok((mode, args[2..].join(" ")));
-    }
-
-    Ok((DetectionMode::Beats, args.join(" ")))
+fn parse_args() -> Result<AnalyzerOptions, Box<dyn Error>> {
+    parse_args_from(env::args().skip(1))
 }
 
-fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
+fn parse_args_from<I>(args: I) -> Result<AnalyzerOptions, Box<dyn Error>>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut args = args.into_iter().peekable();
+    if args.peek().is_none() {
+        return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] [--start seconds] [--duration seconds] <media-file-path>".into());
+    }
+
+    let mut mode = DetectionMode::Beats;
+    let mut start_seconds = None;
+    let mut duration_seconds = None;
+    let mut path_parts = Vec::new();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--mode" => {
+                let raw = args.next().ok_or("--mode requires a value")?;
+                mode = match raw.as_str() {
+                    "spikes" => DetectionMode::Spikes,
+                    "music" => DetectionMode::Music,
+                    "vocal" => DetectionMode::Vocal,
+                    "beats" => DetectionMode::Beats,
+                    other => return Err(format!("unsupported detection mode: {other}").into()),
+                };
+            }
+            "--start" => {
+                start_seconds = Some(parse_seconds_flag(args.next(), "--start", true)?);
+            }
+            "--duration" => {
+                duration_seconds = Some(parse_seconds_flag(args.next(), "--duration", false)?);
+            }
+            "--help" | "-h" => {
+                return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] [--start seconds] [--duration seconds] <media-file-path>".into());
+            }
+            other if other.starts_with("--") => {
+                return Err(format!("unsupported option: {other}").into());
+            }
+            path_part => {
+                path_parts.push(path_part.to_string());
+                path_parts.extend(args);
+                break;
+            }
+        }
+    }
+
+    if path_parts.is_empty() {
+        return Err("media file path is required".into());
+    }
+
+    Ok(AnalyzerOptions {
+        mode,
+        media_path: path_parts.join(" "),
+        start_seconds,
+        duration_seconds,
+    })
+}
+
+fn parse_seconds_flag(
+    value: Option<String>,
+    flag: &str,
+    allow_zero: bool,
+) -> Result<f64, Box<dyn Error>> {
+    let raw = value.ok_or_else(|| format!("{flag} requires a seconds value"))?;
+    let seconds = raw
+        .parse::<f64>()
+        .map_err(|_| format!("{flag} requires a numeric seconds value: {raw}"))?;
+    if !seconds.is_finite() || seconds < 0.0 || (!allow_zero && seconds <= 0.0) {
+        return Err(format!("{flag} must be {}", if allow_zero { ">= 0" } else { "> 0" }).into());
+    }
+    Ok(seconds)
+}
+
+
+
+fn decode_mono_audio(
+    media_path: &str,
+    start_seconds: Option<f64>,
+    duration_seconds: Option<f64>,
+) -> Result<(Vec<f32>, u32, f64), Box<dyn Error>> {
     let path = Path::new(media_path);
     let file = File::open(path)?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -131,7 +204,31 @@ fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>
         .sample_rate
         .ok_or("audio track has no sample rate")?;
     let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+
+    let start = start_seconds.unwrap_or(0.0).max(0.0);
+    let time_base = track.codec_params.time_base.unwrap_or_else(|| symphonia::core::units::TimeBase::new(1, sample_rate));
+    
+    // Seek to start_seconds if requested and > 0
+    if start > 0.0 {
+        let seek_time = symphonia::core::units::Time::new(start as u64, start.fract());
+        if format.seek(SeekMode::Accurate, SeekTo::Time { time: seek_time, track_id: Some(track_id) }).is_ok() {
+            decoder.reset();
+        }
+    }
+
     let mut mono = Vec::new();
+    let mut first_packet_sample_index: Option<usize> = None;
+
+    let target_start_sample = (start * sample_rate as f64).round() as usize;
+    let target_end_sample = match duration_seconds {
+        Some(duration) => {
+            if !duration.is_finite() || duration <= 0.0 {
+                return Err("selected clip duration must be greater than zero".into());
+            }
+            ((start + duration) * sample_rate as f64).round() as usize
+        }
+        None => usize::MAX,
+    };
 
     loop {
         let packet = match format.next_packet() {
@@ -153,8 +250,16 @@ fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>
             continue;
         }
 
+        if first_packet_sample_index.is_none() {
+            let packet_time = time_base.calc_time(packet.ts());
+            let packet_seconds = packet_time.seconds as f64 + packet_time.frac;
+            first_packet_sample_index = Some((packet_seconds * sample_rate as f64).round() as usize);
+        }
+
         match decoder.decode(&packet) {
-            Ok(decoded) => push_decoded_as_mono(decoded, &mut mono),
+            Ok(decoded) => {
+                push_decoded_as_mono(decoded, &mut mono);
+            }
             // Malformed / corrupted packets — log to stderr, skip frame.
             Err(SymphoniaError::DecodeError(ref msg)) => {
                 eprintln!("[beat_analyzer] skipping malformed packet: {msg}");
@@ -162,9 +267,35 @@ fn decode_mono_audio(media_path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>
             }
             Err(error) => return Err(Box::new(error)),
         }
+
+        let start_idx = first_packet_sample_index.unwrap_or(0);
+        let current_decoded_len = mono.len();
+        if start_idx + current_decoded_len >= target_end_sample {
+            break;
+        }
     }
 
-    Ok((mono, sample_rate))
+    let start_idx = first_packet_sample_index.unwrap_or(0);
+    let discard = target_start_sample.saturating_sub(start_idx);
+    let mut final_mono = if mono.len() > discard {
+        mono[discard..].to_vec()
+    } else {
+        Vec::new()
+    };
+
+    let total_needed = target_end_sample.saturating_sub(target_start_sample);
+    if final_mono.len() > total_needed {
+        final_mono.truncate(total_needed);
+    }
+
+    if final_mono.is_empty() {
+        return Err("selected clip range contains no decodable audio samples".into());
+    }
+
+    let actual_start_sample = start_idx + discard;
+    let actual_offset_seconds = actual_start_sample as f64 / sample_rate as f64;
+
+    Ok((final_mono, sample_rate, actual_offset_seconds))
 }
 
 fn push_decoded_as_mono(decoded: AudioBufferRef<'_>, mono: &mut Vec<f32>) {
@@ -676,12 +807,9 @@ fn onset_band_weight(freq: f32, mode: DetectionMode) -> f32 {
     let upper_presence = gaussian_weight(freq, 4_200.0, 1.00);
 
     match mode {
-        DetectionMode::Spikes => {
-            0.18 + dhol_bass * 1.25 + tabla_body * 0.95 + slap_attack * 0.92
-        }
+        DetectionMode::Spikes => 0.18 + dhol_bass * 1.25 + tabla_body * 0.95 + slap_attack * 0.92,
         DetectionMode::Music | DetectionMode::Beats => {
-            0.20
-                + dhol_bass * 0.72
+            0.20 + dhol_bass * 0.72
                 + tabla_body * 0.75
                 + slap_attack * 0.70
                 + vocal_formant * 0.58
@@ -710,7 +838,10 @@ fn fuse_detector_scores(
     let spectral_norm = normalize_series(spectral, 0.985);
     let envelope_norm = normalize_series(envelope, 0.985);
     let superflux_norm = normalize_series(superflux, 0.985);
-    let len = spectral_norm.len().min(envelope_norm.len()).min(superflux_norm.len());
+    let len = spectral_norm
+        .len()
+        .min(envelope_norm.len())
+        .min(superflux_norm.len());
     let mut fused = Vec::with_capacity(len);
 
     for i in 0..len {
@@ -854,7 +985,8 @@ fn locally_stabilize_scores(
         }
 
         let local_ratio = ((score - threshold) / (p97 - threshold).max(1.0e-6)).clamp(0.0, 1.8);
-        let activity_confidence = ((p85 - global_activity_floor) / global_reference).clamp(0.35, 1.0);
+        let activity_confidence =
+            ((p85 - global_activity_floor) / global_reference).clamp(0.35, 1.0);
         stabilized.push(soft_compress(local_ratio) * activity_confidence);
     }
 
@@ -970,7 +1102,11 @@ where
     values[values.len() / 2]
 }
 
-fn detect_beat_grid_events(samples: &[f32], sample_rate: u32, frames: &[FrameEnergy]) -> Vec<Event> {
+fn detect_beat_grid_events(
+    samples: &[f32],
+    sample_rate: u32,
+    frames: &[FrameEnergy],
+) -> Vec<Event> {
     let spectral_scores = spectral_novelty_scores(frames, DetectionMode::Beats);
     let envelope_scores = envelope_onset_scores(frames, DetectionMode::Beats);
     let superflux_scores = superflux_onset_scores(frames, DetectionMode::Beats);
@@ -1007,9 +1143,15 @@ fn detect_beat_grid_events(samples: &[f32], sample_rate: u32, frames: &[FrameEne
         {
             let frame = frames[best_index];
             if best_score >= min_score
-                && has_direct_onset_evidence(frames, best_index, lag.clamp(4, 32), DetectionMode::Beats)
+                && has_direct_onset_evidence(
+                    frames,
+                    best_index,
+                    lag.clamp(4, 32),
+                    DetectionMode::Beats,
+                )
             {
-                let snapped = snap_event_time(samples, sample_rate, frame.time, DetectionMode::Music);
+                let snapped =
+                    snap_event_time(samples, sample_rate, frame.time, DetectionMode::Music);
                 beats.push((snapped, best_score));
             }
         }
@@ -1056,7 +1198,9 @@ fn estimate_beat_lag(norm: &[f32], frame_step: f64) -> Option<usize> {
     }
 
     let min_lag = ((60.0 / 190.0) / frame_step).round().max(2.0) as usize;
-    let max_lag = ((60.0 / 58.0) / frame_step).round().min((norm.len() / 2) as f64) as usize;
+    let max_lag = ((60.0 / 58.0) / frame_step)
+        .round()
+        .min((norm.len() / 2) as f64) as usize;
     if min_lag >= max_lag {
         return None;
     }
@@ -1079,12 +1223,12 @@ fn estimate_beat_lag(norm: &[f32], frame_step: f64) -> Option<usize> {
             right_energy += b * b;
         }
         let corr = cross / (left_energy.sqrt() * right_energy.sqrt()).max(1.0e-6);
-        let tempo_prior = if (72.0..=156.0).contains(&bpm) {
+        let tempo_prior = if (75.0..=165.0).contains(&bpm) {
             1.0
-        } else if (64.0..=176.0).contains(&bpm) {
-            0.93
+        } else if (60.0..=185.0).contains(&bpm) {
+            0.94
         } else {
-            0.84
+            0.85
         };
         let score = corr * tempo_prior;
         if score > best_score {
@@ -1353,8 +1497,8 @@ fn pick_local_peaks(
             (median + k_mad * mad).max(global_floor)
         })
         .collect();
-    let evidence_back = ((0.520 / median_frame_step_seconds(frames).max(1.0e-6)).round() as usize)
-        .clamp(3, 28);
+    let evidence_back =
+        ((0.520 / median_frame_step_seconds(frames).max(1.0e-6)).round() as usize).clamp(3, 28);
 
     let mut peaks = Vec::new();
 
@@ -1664,6 +1808,98 @@ fn round_score(value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_clip_range_args_before_media_path() {
+        let options = parse_args_from(vec![
+            "--mode".to_string(),
+            "beats".to_string(),
+            "--start".to_string(),
+            "42.5".to_string(),
+            "--duration".to_string(),
+            "12.25".to_string(),
+            "C:\\Media Files\\song cut.mp4".to_string(),
+        ])
+        .expect("clip-range args should parse");
+
+        assert_eq!(options.mode, DetectionMode::Beats);
+        assert_eq!(options.media_path, "C:\\Media Files\\song cut.mp4");
+        assert_eq!(options.start_seconds, Some(42.5));
+        assert_eq!(options.duration_seconds, Some(12.25));
+    }
+
+    fn write_wav_file(path: &Path, samples: &[i16], sample_rate: u32) -> Result<(), std::io::Error> {
+        use std::io::Write;
+        let mut file = File::create(path)?;
+        let data_size = (samples.len() * 2) as u32;
+        let file_size = 36 + data_size;
+
+        file.write_all(b"RIFF")?;
+        file.write_all(&file_size.to_le_bytes())?;
+        file.write_all(b"WAVE")?;
+        file.write_all(b"fmt ")?;
+        file.write_all(&16_u32.to_le_bytes())?;
+        file.write_all(&1_u16.to_le_bytes())?;
+        file.write_all(&1_u16.to_le_bytes())?;
+        file.write_all(&sample_rate.to_le_bytes())?;
+        file.write_all(&(sample_rate * 2).to_le_bytes())?;
+        file.write_all(&2_u16.to_le_bytes())?;
+        file.write_all(&16_u16.to_le_bytes())?;
+        file.write_all(b"data")?;
+        file.write_all(&data_size.to_le_bytes())?;
+
+        for &sample in samples {
+            file.write_all(&sample.to_le_bytes())?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn analysis_range_trims_samples_and_reports_source_offset() {
+        let sample_rate = 100;
+        let samples = (0..1000).map(|val| val as i16).collect::<Vec<_>>();
+        let temp_path = std::env::temp_dir().join("test_seek_trim_1.wav");
+        write_wav_file(&temp_path, &samples, sample_rate).expect("failed to write temp WAV file");
+
+        let (decoded, decoded_rate, offset) = decode_mono_audio(
+            temp_path.to_str().unwrap(),
+            Some(2.0),
+            Some(3.0),
+        )
+        .expect("decoding seek range should succeed");
+
+        let _ = std::fs::remove_file(temp_path);
+
+        assert_eq!(decoded_rate, sample_rate);
+        assert_eq!(decoded.len(), 300);
+        
+        // i16 value converted to f32 sample by Symphonia
+        let expected_first_sample = 200.0 / 32768.0;
+        assert!((decoded[0] - expected_first_sample).abs() < 1.0e-3);
+        assert!((offset - 2.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn analysis_range_rejects_empty_selected_clip() {
+        let sample_rate = 100;
+        let samples = (0..1000).map(|val| val as i16).collect::<Vec<_>>();
+        let temp_path = std::env::temp_dir().join("test_seek_trim_2.wav");
+        write_wav_file(&temp_path, &samples, sample_rate).expect("failed to write temp WAV file");
+
+        let result = decode_mono_audio(
+            temp_path.to_str().unwrap(),
+            Some(12.0),
+            Some(1.0),
+        );
+
+        let _ = std::fs::remove_file(temp_path);
+
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.contains("selected clip range") || error.contains("no decodable"),
+            "unexpected error message: {error}"
+        );
+    }
 
     #[test]
     fn chooses_nearest_analysis_window_at_common_video_rates() {

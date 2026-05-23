@@ -17,6 +17,7 @@
     applyButton:      document.getElementById("applyButton"),
     removeButton:     document.getElementById("removeButton"),
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
+    clearZoomButton:  document.getElementById("clearZoomButton"),
     warpStabilizerButton: document.getElementById("warpStabilizerButton"),
     status:           document.getElementById("status"),
     densityPanel:     document.getElementById("densityPanel"),
@@ -34,7 +35,9 @@
     tabDensity:       document.getElementById("tabDensity"),
     tabLimit:         document.getElementById("tabLimit"),
     densityTabContent:document.getElementById("densityTabContent"),
-    limitTabContent:  document.getElementById("limitTabContent")
+    limitTabContent:  document.getElementById("limitTabContent"),
+    offsetSlider:     document.getElementById("offsetSlider"),
+    offsetLabel:      document.getElementById("offsetLabel")
   };
 
   function getDetectionFocus() {
@@ -57,6 +60,7 @@
     dom.removeButton.disabled    = isBusy;
     if (dom.randomizeButton) dom.randomizeButton.disabled = isBusy || state.allEvents.length === 0;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
+    if (dom.clearZoomButton) dom.clearZoomButton.disabled = isBusy;
     if (dom.warpStabilizerButton) dom.warpStabilizerButton.disabled = isBusy;
     if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
@@ -84,7 +88,21 @@
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.appendFileSync(path.join(dir, "panel.log"), new Date().toISOString() + " " + message + "\n");
+      var logPath = path.join(dir, "panel.log");
+      
+      // Rotate log if it exceeds 2MB to prevent unbounded disk usage
+      if (fs.existsSync(logPath)) {
+        try {
+          var stats = fs.statSync(logPath);
+          if (stats.size > 2 * 1024 * 1024) {
+            var content = fs.readFileSync(logPath, "utf8");
+            var truncated = content.substring(content.length - 100 * 1024); // Keep last 100KB
+            fs.writeFileSync(logPath, "[LOG FILE TRUNCATED DUE TO SIZE LIMITS]\n" + truncated, "utf8");
+          }
+        } catch (_) {}
+      }
+      
+      fs.appendFileSync(logPath, new Date().toISOString() + " " + message + "\n");
     } catch (_) {
       // Logging must never break panel behavior.
     }
@@ -176,7 +194,52 @@
     throw new Error("Analyzer executable is missing. Reinstall Beat Detect or run scripts/build-setup-exe.ps1.");
   }
 
-  function runAnalyzer(mediaPath, focus) {
+  function clipAnalysisRange(clip) {
+    if (!clip) return null;
+    var start = Number(clip.inPointSeconds);
+    var out = Number(clip.outPointSeconds);
+    var duration = Number(clip.durationSeconds);
+
+    if ((!isFinite(duration) || duration <= 0) && isFinite(start) && isFinite(out)) {
+      duration = out - start;
+    }
+    if (!isFinite(start) || start < 0 || !isFinite(duration) || duration <= 0) {
+      return null;
+    }
+
+    return {
+      start: Math.max(0, start),
+      duration: duration,
+      end: Math.max(0, start) + duration
+    };
+  }
+
+  function addClipRangeArgs(args, clip) {
+    var range = clipAnalysisRange(clip);
+    if (range) {
+      args.push("--start", range.start.toFixed(6), "--duration", range.duration.toFixed(6));
+    }
+    return args;
+  }
+
+  function formatSeconds(seconds) {
+    seconds = Math.max(0, Number(seconds) || 0);
+    var minutes = Math.floor(seconds / 60);
+    var remaining = Math.round(seconds - minutes * 60);
+    return minutes > 0 ? minutes + "m " + remaining + "s" : remaining + "s";
+  }
+
+  function cropEventsToSelectedClip(events, clip) {
+    var range = clipAnalysisRange(clip);
+    if (!range) return events;
+    var start = range.start - 0.001;
+    var end = range.end + 0.001;
+    return events.filter(function(event) {
+      return event.time >= start && event.time <= end;
+    });
+  }
+
+  function runAnalyzer(mediaPath, focus, clip) {
     if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
       return Promise.resolve(makePreviewEvents(focus));
     }
@@ -200,9 +263,12 @@
         return;
       }
 
+      var args = addClipRangeArgs(["--mode", focus || "beats"], clip);
+      args.push(mediaPath);
+
       childProcess.execFile(
         analyzerPath,
-        ["--mode", focus || "beats", mediaPath],
+        args,
         { windowsHide: true, maxBuffer: 32 * 1024 * 1024, timeout: 15 * 60 * 1000 },
         function (error, stdout, stderr) {
           if (error) {
@@ -232,275 +298,28 @@
     });
   }
 
-  function getEssentiaExePath() {
-    var req = getNodeRequire();
-    if (!req) {
-      return "";
-    }
-    var path = req("path");
-    var fs = req("fs");
-    var root = getExtensionRoot();
-    var isWindows = req("os").platform() === "win32";
-    var exeName = isWindows ? "essentia_beats.exe" : "essentia_beats";
-    var exePath = path.join(root, "bin", exeName);
-    return fs.existsSync(exePath) ? exePath : "";
-  }
-
-  function describeEssentiaAvailability() {
-    if (isBrowserPreview()) {
-      return "Essentia: skipped in browser preview";
-    }
-    if (!getNodeRequire()) {
-      return "Essentia: optional, CEP Node unavailable";
-    }
-    if (getEssentiaExePath()) {
-      return "Essentia: bundled runner available";
-    }
-    return "Essentia: not bundled";
-  }
-
-  function runEssentiaAnalyzer(mediaPath, focus) {
-    if (focus === "beats") {
-      return Promise.resolve({ events: [], used: false, reason: "beat grid mode" });
-    }
-    if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
-      return Promise.resolve({ events: [], used: false, reason: "preview" });
-    }
-
-    var req = getNodeRequire();
-    if (!req) {
-      return Promise.resolve({ events: [], used: false, reason: "node unavailable" });
-    }
-
-    var childProcess = req("child_process");
-    var exePath = getEssentiaExePath();
-    if (exePath) {
-    return execEssentiaCommand(childProcess, exePath, ["--mode", focus || "beats", mediaPath], "native runner", focus);
-    }
-
-    return Promise.resolve({ events: [], used: false, reason: "not bundled" });
-  }
-
-  function execEssentiaCommand(childProcess, command, args, label, focus) {
-    return new Promise(function (resolve) {
-      childProcess.execFile(
-        command,
-        args,
-        { windowsHide: true, maxBuffer: 16 * 1024 * 1024, timeout: 15 * 60 * 1000 },
-        function (error, stdout, stderr) {
-          if (error) {
-            appendLog("Essentia optional analyzer skipped (" + label + "): " + (stderr || error.message || "unknown error").trim());
-            resolve({ events: [], used: false, reason: label + " failed" });
-            return;
-          }
-          resolve(parseEssentiaOutput(stdout, stderr, label, focus));
-        }
-      );
+  function runHybridAnalyzer(mediaPath, focus, clip) {
+    return runAnalyzer(mediaPath, focus || "beats", clip).then(function(primaryEvents) {
+      return {
+        events: sanitizeEvents(primaryEvents),
+        primaryCount: primaryEvents.length
+      };
     });
   }
 
-  function parseEssentiaOutput(stdout, stderr, label, focus) {
-    try {
-      var cleanStdout = String(stdout || "").trim();
-      if (!cleanStdout) {
-        throw new Error("no stdout" + (stderr ? ": " + stderr.trim() : ""));
-      }
-      var parsed = JSON.parse(cleanStdout);
-      var events = normalizeEssentiaEvents(parsed, focus);
-      return {
-        events: events,
-        used: events.length > 0,
-        reason: label,
-        bpm: parsed && parsed.bpm
-      };
-    } catch (error) {
-      appendLog("Essentia optional analyzer returned invalid output (" + label + "): " + error.message);
-      return { events: [], used: false, reason: "invalid output" };
-    }
-  }
-
-  function normalizeEssentiaEvents(parsed, focus) {
-    var confidence = parsed && isFinite(Number(parsed.confidence)) ? Number(parsed.confidence) : 0.45;
-    var rawEvents = [];
-    if (Array.isArray(parsed)) {
-      rawEvents = parsed;
-    } else if (parsed && Array.isArray(parsed.events)) {
-      rawEvents = parsed.events;
-    } else if (parsed && Array.isArray(parsed.beats)) {
-      rawEvents = parsed.beats;
-    }
-
-    return rawEvents
-      .map(function (event) {
-        if (typeof event === "number") {
-          return { time: event, score: essentiaScore(confidence, focus) };
-        }
-        return {
-          time: Number(event.time !== undefined ? event.time : event.beat),
-          score: isFinite(Number(event.score)) ? Number(event.score) : essentiaScore(confidence, focus)
-        };
-      })
-      .filter(function (event) {
-        return isFinite(event.time) && event.time >= 0 && isFinite(event.score);
-      })
-      .sort(function (a, b) {
-        return a.time - b.time;
+  function makePreviewEvents() {
+    var beatEvents = [];
+    for (var beat = 0; beat < 42; beat++) {
+      beatEvents.push({
+        time: Number((0.52 + beat * 0.50).toFixed(3)),
+        score: beat % 8 === 0 ? 0.88 : beat % 4 === 0 ? 0.76 : 0.64
       });
-  }
-
-  function essentiaScore(confidence, focus) {
-    var c = Math.max(0, Math.min(1, Number(confidence) || 0));
-    if (focus === "vocal") {
-      return 0.34 + c * 0.22;
     }
-    if (focus === "music") {
-      return 0.52 + c * 0.26;
-    }
-    return 0.48 + c * 0.24;
-  }
-
-  function mergeAnalyzerEvents(primaryEvents, essentiaEvents, focus) {
-    if (focus === "beats") {
-      return sanitizeEvents(primaryEvents);
-    }
-    var merged = sanitizeEvents(primaryEvents).map(function (event) {
-      return { time: event.time, score: event.score };
-    });
-    var supportWindow = focus === "vocal" ? 0.24 : focus === "music" ? 0.15 : 0.11;
-    var addThreshold = focus === "vocal" ? 0.54 : focus === "music" ? 0.50 : 0.48;
-
-    for (var i = 0; i < essentiaEvents.length; i++) {
-      var event = essentiaEvents[i];
-      var nearest = null;
-      var nearestDistance = Infinity;
-      for (var j = 0; j < merged.length; j++) {
-        var distance = Math.abs(merged[j].time - event.time);
-        if (distance < nearestDistance) {
-          nearest = merged[j];
-          nearestDistance = distance;
-        }
-      }
-
-      if (nearest && nearestDistance <= supportWindow) {
-        nearest.score = Math.min(0.995, Math.max(nearest.score, nearest.score * 0.88 + event.score * 0.18));
-      } else if (event.score >= addThreshold && focus !== "vocal") {
-        merged.push({
-          time: event.time,
-          score: Math.min(0.82, event.score)
-        });
-      }
-    }
-
-    return merged.sort(function (a, b) {
-      return a.time - b.time;
-    });
-  }
-
-  function runHybridAnalyzer(mediaPath, focus) {
-    return Promise.all([
-      runAnalyzer(mediaPath, focus),
-      runEssentiaAnalyzer(mediaPath, focus).catch(function (error) {
-        appendLog("Essentia optional analyzer skipped: " + (error && error.message ? error.message : String(error)));
-        return { events: [], used: false, reason: "optional analyzer failed" };
-      })
-    ]).then(function (results) {
-      var primaryEvents = results[0];
-      var essentia = results[1] || { events: [], used: false };
-      return {
-        events: mergeAnalyzerEvents(primaryEvents, essentia.events || [], focus),
-        primaryCount: primaryEvents.length,
-        essentiaCount: essentia.events ? essentia.events.length : 0,
-        essentiaUsed: Boolean(essentia.used)
-      };
-    });
-  }
-
-  function makePreviewEvents(focus) {
-    if (focus === "beats") {
-      var beatEvents = [];
-      for (var beat = 0; beat < 42; beat++) {
-        beatEvents.push({
-          time: Number((0.52 + beat * 0.50).toFixed(3)),
-          score: beat % 8 === 0 ? 0.88 : beat % 4 === 0 ? 0.76 : 0.64
-        });
-      }
-      return beatEvents;
-    }
-
-    var times = [
-      0.42, 0.78, 1.11, 1.62, 2.05, 2.48, 3.02, 3.44, 4.01, 4.39,
-      5.12, 5.54, 6.03, 6.46, 7.25, 8.04, 8.41, 9.18, 10.02, 10.42,
-      11.07, 11.51, 12.16, 12.64, 13.33, 14.05, 14.48, 15.21, 16.01,
-      16.52, 17.04, 17.44, 18.22, 19.03, 19.47, 20.18, 21.0
-    ];
-
-    return times.map(function (time, index) {
-      var dropBoost = index === 4 || index === 14 || index === 27 ? 0.32 : 0;
-      var phraseBoost = index === 0 || index === 10 || index === 20 || index === 30 ? 0.28 : 0;
-      var base = 0.22 + ((index * 37) % 55) / 100;
-      var score = focus === "vocal"
-        ? base * 0.56 + phraseBoost
-        : focus === "music"
-          ? base * 0.78 + dropBoost * 0.7 + phraseBoost * 0.55
-          : base + dropBoost;
-      return { time: time, score: Math.min(1, Number(score.toFixed(3))) };
-    });
+    return beatEvents;
   }
 
   function getThreshold() {
     return dom.densitySlider ? Number(dom.densitySlider.value) / 100 : 0;
-  }
-
-  function spacingForFilter(threshold, focus) {
-    var density = Math.max(0, Math.min(1, (threshold - 0.2) / 0.45));
-    var minGap = focus === "vocal" ? 0.42 : focus === "music" ? 0.16 : 0.12;
-    var maxGap = focus === "vocal" ? 1.3 : focus === "music" ? 0.62 : 0.44;
-    return minGap + density * (maxGap - minGap);
-  }
-
-  function adaptiveGapSeconds(anchorScore, candidateScore, baseGapSeconds, focus) {
-    var anchor = Number(anchorScore) || 0;
-    var candidate = Number(candidateScore) || 0;
-    var bothMajor = anchor >= 0.9 && candidate >= 0.86;
-    var candidateMuchStronger = candidate >= anchor + 0.18 && candidate >= 0.78;
-    var candidateWeak = candidate < 0.62;
-
-    if (bothMajor) {
-      return focus === "vocal" ? baseGapSeconds * 0.58 : baseGapSeconds * 0.45;
-    }
-    if (candidateMuchStronger) {
-      return baseGapSeconds * 0.55;
-    }
-    if (candidateWeak) {
-      return baseGapSeconds * 1.28;
-    }
-    return baseGapSeconds;
-  }
-
-  function suppressCloseEvents(events, minGapSeconds, focus) {
-    var byStrength = events.slice().sort(function (a, b) {
-      return b.score - a.score;
-    });
-    var kept = [];
-
-    for (var i = 0; i < byStrength.length; i++) {
-      var candidate = byStrength[i];
-      var tooClose = false;
-      for (var j = 0; j < kept.length; j++) {
-        var requiredGap = adaptiveGapSeconds(kept[j].score, candidate.score, minGapSeconds, focus);
-        if (Math.abs(candidate.time - kept[j].time) < requiredGap) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (!tooClose) {
-        kept.push(candidate);
-      }
-    }
-
-    return kept.sort(function (a, b) {
-      return a.time - b.time;
-    });
   }
 
   function keepStrongestPerWindow(events, windowSeconds) {
@@ -563,22 +382,6 @@ function keepStrongestPerSecond(events) {
     if (threshold <= 0.40) return 0;
     var t = Math.max(0, Math.min(1, (threshold - 0.40) / 0.50));
     return 1.05 + t * 2.75;
-  }
-
-  function finalDensityPass(events, threshold, focus) {
-    var filtered = keepStrongestPerSecond(events);
-    if (threshold < 0.68) {
-      return filtered;
-    }
-
-    var pressure = Math.max(0, Math.min(1, (threshold - 0.68) / 0.12));
-    var windowSeconds = focus === "vocal"
-      ? 0.75 + pressure * 0.35
-      : focus === "music"
-        ? 0.34 + pressure * 0.18
-        : 0.24 + pressure * 0.14;
-
-    return keepStrongestPerWindow(filtered, windowSeconds);
   }
 
   // ── Target Count selection logic ──────────────────────────────
@@ -961,32 +764,16 @@ function keepStrongestPerSecond(events) {
       state.filteredEvents = selectByTargetCount(state.allEvents, n, getTargetStrategy());
       if (dom.targetCountInput) dom.targetCountInput.classList.add("is-active");
     } else {
-      // ── Density slider mode ──
-      if (getDetectionFocus() === "beats") {
-        var beatThreshold = getThreshold();
-        var beatEvents = state.allEvents.filter(function(event) {
-          return Number(event.score) >= beatThreshold;
-        });
-        state.filteredEvents = beatThreshold <= 0.40
-          ? beatEvents
-          : keepStrongestWithMinimumGap(
-              keepStrongestPerSecond(beatEvents),
-              beatMinimumGapForThreshold(beatThreshold)
-            );
-        if (dom.targetCountInput) dom.targetCountInput.classList.remove("is-active");
-        updateCounterUI();
-        return;
-      }
-      var threshold = getThreshold();
-      var focus = getDetectionFocus();
-      var thresholded = state.allEvents.filter(function(event) {
-        return Number(event.score) >= threshold;
+      var beatThreshold = getThreshold();
+      var beatEvents = state.allEvents.filter(function(event) {
+        return Number(event.score) >= beatThreshold;
       });
-      state.filteredEvents = finalDensityPass(
-        suppressCloseEvents(thresholded, spacingForFilter(threshold, focus), focus),
-        threshold,
-        focus
-      );
+      state.filteredEvents = beatThreshold <= 0.40
+        ? beatEvents
+        : keepStrongestWithMinimumGap(
+            keepStrongestPerSecond(beatEvents),
+            beatMinimumGapForThreshold(beatThreshold)
+          );
       if (dom.targetCountInput) dom.targetCountInput.classList.remove("is-active");
     }
     updateCounterUI();
@@ -1009,28 +796,26 @@ function keepStrongestPerSecond(events) {
   }
 
   function markerColorIndexForEvent(event, focus) {
-    var score = Number(event.score) || 0;
-    if (focus === "beats") {
-      return 3;
+    return 3;
+  }
+
+  function getOffsetMs() {
+    return dom.offsetSlider ? Number(dom.offsetSlider.value) || 0 : 0;
+  }
+
+  function updateOffsetLabel() {
+    if (dom.offsetSlider && dom.offsetLabel) {
+      var val = Number(dom.offsetSlider.value) || 0;
+      var sign = val > 0 ? "+" : "";
+      dom.offsetLabel.innerText = sign + val + " ms";
     }
-    if (focus === "vocal") {
-      return 4;
-    }
-    if (focus === "music") {
-      if (score >= 0.86) return 1;
-      if (score >= 0.64) return 3;
-      return 2;
-    }
-    if (score >= 0.82) {
-      return 1;
-    }
-    return 2;
   }
 
   function eventsForPremiere(events, focus) {
+    var offsetSec = getOffsetMs() / 1000.0;
     return events.map(function(event) {
       return {
-        time: event.time,
+        time: event.time + offsetSec,
         score: event.score,
         colorIndex: markerColorIndexForEvent(event, focus)
       };
@@ -1044,6 +829,10 @@ function keepStrongestPerSecond(events) {
     state.allEvents    = [];
     state.filteredEvents = [];
     state.clip         = null;
+    if (dom.offsetSlider) {
+      dom.offsetSlider.value = 0;
+      updateOffsetLabel();
+    }
     dom.densityPanel.classList.add("is-hidden");
     setStatus("Reading the selected clip path from Premiere...", false, true);
 
@@ -1053,27 +842,22 @@ function keepStrongestPerSecond(events) {
         if (!state.clip.mediaPath) {
           throw new Error("Premiere returned an empty media path for the selected clip.");
         }
-        var focus = getDetectionFocus();
-        var label = focus === "beats"
-          ? "Resolve-style music beats"
-          : focus === "vocal"
-          ? "vocal phrase starts and melodic entries"
-          : focus === "music"
-            ? "music spikes and vocal phrase starts"
-            : "sharp percussion hits, drops, and accents";
-        setStatus("Analyzing " + state.clip.name + " for " + label + "...", false, true);
-        return runHybridAnalyzer(state.clip.mediaPath, focus);
+        var range = clipAnalysisRange(state.clip);
+        if (!range) {
+          throw new Error("Selected clip has an invalid source in/out range. Trim or reselect the timeline clip and try again.");
+        }
+        setStatus("Analyzing selected cut only (" + formatSeconds(range.duration) + ") from " + state.clip.name + " for Resolve-style music beats...", false, true);
+        return runHybridAnalyzer(state.clip.mediaPath, "beats", state.clip);
       })
       .then(function (analysis) {
-        state.allEvents = sanitizeEvents(analysis.events || []);
+        state.allEvents = cropEventsToSelectedClip(sanitizeEvents(analysis.events || []), state.clip);
         // Calibrate target-count input bounds now we know the event pool size
         calibrateTargetCountBounds(state.allEvents, state.clip);
         filterEvents();
         dom.densityPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
-          "found " + state.allEvents.length + (getDetectionFocus() === "beats" ? " beat markers" : " total rhythmic events") +
-          (analysis.essentiaUsed ? " using Rust + Essentia support." : " using Rust analyzer."),
+          "found " + state.allEvents.length + " beat markers in the selected cut using Rust analyzer.",
           false, false, true
         );
       })
@@ -1097,13 +881,17 @@ function keepStrongestPerSecond(events) {
     var payload = {
       target: dom.markerTarget.value,
       mediaPath: state.clip ? state.clip.mediaPath : "",
+      startSeconds: state.clip ? state.clip.startSeconds : null,
+      endSeconds: state.clip ? state.clip.endSeconds : null,
+      inPointSeconds: state.clip ? state.clip.inPointSeconds : null,
+      outPointSeconds: state.clip ? state.clip.outPointSeconds : null,
       focus: getDetectionFocus(),
       events: eventsForPremiere(state.filteredEvents, getDetectionFocus())
     };
 
     cepEval("BeatDetect.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Applied " + result.applied + " markers. Skipped " + result.skipped + " outside the selected clip range.", false, false, true);
+        setStatus("Replaced Beat Detect markers in range. Applied " + result.applied + "; skipped " + result.skipped + " outside the selected clip range.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -1154,13 +942,38 @@ function keepStrongestPerSecond(events) {
     var payload = { zoom: zoomValue, style: zoomStyle };
     cepEval("BeatDetect.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Applied gimbal zoom to " + result.applied + " clips.");
+        var skipped = Number(result.skipped) || 0;
+        var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
+        setStatus("Applied gimbal zoom keyframes to " + result.applied + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
         setStatus(error.message, true);
       })
       .then(function () {
+        setBusy(false);
+      });
+  }
+
+  function clearGimbalZoom() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Clearing zoom keyframes from selected video clips...", false, true);
+
+    cepEval("BeatDetect.clearGimbalZoom()")
+      .then(function(result) {
+        var skipped = Number(result.skipped) || 0;
+        var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
+        setStatus("Cleared zoom keyframes on " + result.cleared + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
+      })
+      .catch(function(error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function() {
         setBusy(false);
       });
   }
@@ -1186,6 +999,14 @@ function keepStrongestPerSecond(events) {
           }
           setStatus("Waiting for Warp Stabilizer analysis: " + label + "...", false, true);
           return sleep(2500).then(poll);
+        })
+        .catch(function(error) {
+          var message = error && error.message ? error.message : String(error);
+          if (message.indexOf("video-effect analysis status") >= 0) {
+            setStatus("Warp Stabilizer applied to " + label + ". Premiere did not expose analysis status, continuing.", false, true);
+            return { done: true, unsupportedStatus: true };
+          }
+          throw error;
         });
     });
   }
@@ -1266,10 +1087,8 @@ function keepStrongestPerSecond(events) {
       } catch (error) {
         checks.push("Analyzer: FAIL - " + error.message);
       }
-      checks.push(describeEssentiaAvailability());
     } else if (isBrowserPreview()) {
       checks.push("Analyzer: simulated demo events");
-      checks.push(describeEssentiaAvailability());
     }
 
     cepEval("BeatDetect.runDiagnostics()")
@@ -1278,14 +1097,17 @@ function keepStrongestPerSecond(events) {
           checks = checks.concat(result.diagnostics);
         }
         var report = checks.join(" | ");
-        setStatus(report);
+        var formatted = report.replace(/ \| /g, "\n");
+        setStatus("Diagnostics complete.");
         
-        // Copy diagnostics to clipboard for support/debugging.
-        if (req) {
+        // Show report in confirm modal and copy to clipboard only upon explicit user action.
+        if (confirm("DIAGNOSTICS REPORT:\n\n" + formatted + "\n\nWould you like to copy this report to the clipboard?")) {
           try {
-            copyToClipboard(report.replace(/ \| /g, "\n"));
-            appendLog("Diagnostics copied to clipboard.");
-          } catch (_) {}
+            copyToClipboard(formatted);
+            setStatus("Diagnostics copied to clipboard.");
+          } catch (_) {
+            setStatus("Failed to copy diagnostics to clipboard.", true);
+          }
         }
       })
       .catch(function (error) {
@@ -1313,13 +1135,12 @@ function keepStrongestPerSecond(events) {
       var dir = path.join(appData || os.tmpdir(), "BeatDetect");
 
       var panelLog = path.join(dir, "panel.log");
-      var installLog = path.join(dir, "install.log");
 
-      if (fs.existsSync(panelLog)) fs.writeFileSync(panelLog, "");
-      if (fs.existsSync(installLog)) fs.writeFileSync(installLog, "");
+      if (fs.existsSync(panelLog)) {
+        fs.writeFileSync(panelLog, "");
+      }
 
-      setStatus("Logs cleared successfully.", false, false, true);
-      if (fs.existsSync(panelLog)) fs.writeFileSync(panelLog, "");
+      setStatus("Panel logs cleared successfully.", false, false, true);
     } catch (error) {
       setStatus("Failed to clear logs: " + error.message, true);
     }
@@ -1345,6 +1166,7 @@ function keepStrongestPerSecond(events) {
   dom.applyButton.addEventListener("click", applyMarkers);
   dom.removeButton.addEventListener("click", removeMarkers);
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
+  if (dom.clearZoomButton) dom.clearZoomButton.addEventListener("click", clearGimbalZoom);
   if (dom.warpStabilizerButton) dom.warpStabilizerButton.addEventListener("click", applyWarpStabilizerQueue);
   if (dom.randomizeButton) {
     dom.randomizeButton.addEventListener("click", function() {
@@ -1356,6 +1178,11 @@ function keepStrongestPerSecond(events) {
     });
   }
   if (dom.densitySlider) dom.densitySlider.addEventListener("input", filterEvents);
+  if (dom.offsetSlider) {
+    dom.offsetSlider.addEventListener("input", function() {
+      updateOffsetLabel();
+    });
+  }
   if (dom.targetCountInput) {
     dom.targetCountInput.addEventListener("input", function() {
       if (state.allEvents.length > 0) filterEvents();
@@ -1371,7 +1198,16 @@ function keepStrongestPerSecond(events) {
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
     });
   }
-
+  // Initialize collapsible card headers for Adobe Spectrum smart folders
+  var headers = document.querySelectorAll(".card-header");
+  for (var h = 0; h < headers.length; h++) {
+    headers[h].addEventListener("click", function() {
+      var card = this.parentElement;
+      if (card && card.classList.contains("panel-card")) {
+        card.classList.toggle("is-collapsed");
+      }
+    });
+  }
   if (dom.tabDensity) {
     dom.tabDensity.addEventListener("click", function() {
       if (state.isBusy) return;

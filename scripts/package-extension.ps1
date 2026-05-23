@@ -19,7 +19,6 @@ $items = @(
   "css",
   "js",
   "jsx",
-  "bin",
   "index.html"
 )
 
@@ -28,6 +27,10 @@ foreach ($item in $items) {
   $destination = Join-Path $packageDir $item
   Copy-Item -LiteralPath $source -Destination $destination -Recurse -Force
 }
+
+$packageBinDir = Join-Path $packageDir "bin"
+New-Item -ItemType Directory -Force -Path $packageBinDir | Out-Null
+Copy-Item -LiteralPath (Join-Path $root "bin\beat_analyzer.exe") -Destination (Join-Path $packageBinDir "beat_analyzer.exe") -Force
 
 $installText = @"
 Beat Detect install

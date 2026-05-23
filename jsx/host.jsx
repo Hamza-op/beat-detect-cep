@@ -79,6 +79,49 @@ var BeatDetect = BeatDetect || {};
     return Number(time) || 0;
   }
 
+  function timeFromSeconds(seconds) {
+    var safeSeconds = Math.max(0, Number(seconds) || 0);
+    var time = new Time();
+    var ticks = Math.round(safeSeconds * TICKS_PER_SECOND);
+    time.ticks = String(ticks);
+    return time;
+  }
+
+  function clipName(clip, index) {
+    return (clip && (clip.name || (clip.projectItem && clip.projectItem.name))) || ("clip " + (index + 1));
+  }
+
+  function sameTrackItem(a, b) {
+    if (!a || !b) {
+      return false;
+    }
+    if (a === b) {
+      return true;
+    }
+    return (
+      a.projectItem &&
+      b.projectItem &&
+      a.projectItem === b.projectItem &&
+      timeToSeconds(a.start) === timeToSeconds(b.start) &&
+      timeToSeconds(a.end) === timeToSeconds(b.end)
+    );
+  }
+
+  function isTrackItemSelected(clip, selectedItems) {
+    if (clip && clip.isSelected && clip.isSelected()) {
+      return true;
+    }
+    if (!selectedItems) {
+      return false;
+    }
+    for (var i = 0; i < selectedItems.length; i++) {
+      if (sameTrackItem(clip, selectedItems[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function getSelectedClip() {
     var seq = app.project.activeSequence;
     if (!seq) {
@@ -101,6 +144,35 @@ var BeatDetect = BeatDetect || {};
     }
 
     throw new Error("The current selection has no linked project media.");
+  }
+
+  function getExactlyOneSelectedClip() {
+    var seq = app.project.activeSequence;
+    if (!seq) {
+      throw new Error("No active sequence is open.");
+    }
+
+    var selection = seq.getSelection ? seq.getSelection() : null;
+    var selected = [];
+    if (selection && selection.length) {
+      for (var i = 0; i < selection.length; i++) {
+        if (selection[i] && selection[i].projectItem) {
+          selected.push(selection[i]);
+        }
+      }
+    } else {
+      var fallback = scanSelectedClip(seq);
+      if (fallback) {
+        selected.push(fallback);
+      }
+    }
+
+    if (selected.length !== 1) {
+      throw new Error(selected.length < 1
+        ? "Select one audio or linked clip in the active sequence first."
+        : "Select exactly one clip for beat analysis and marker apply.");
+    }
+    return selected[0];
   }
 
   function scanSelectedClip(seq) {
@@ -128,6 +200,18 @@ var BeatDetect = BeatDetect || {};
 
   function getAllSelectedVideoClips(seq) {
     var selected = [];
+    var selection = seq && seq.getSelection ? seq.getSelection() : null;
+    if (selection && selection.length) {
+      for (var s = 0; s < selection.length; s++) {
+        if (selection[s] && selection[s].components) {
+          selected.push(selection[s]);
+        }
+      }
+      if (selected.length) {
+        return selected;
+      }
+    }
+
     var groups = [seq.videoTracks];
     for (var g = 0; g < groups.length; g++) {
       var tracks = groups[g];
@@ -151,6 +235,7 @@ var BeatDetect = BeatDetect || {};
     if (!seq || !seq.videoTracks) {
       return selected;
     }
+    var selectedItems = seq.getSelection ? seq.getSelection() : null;
 
     for (var i = 0; i < seq.videoTracks.numTracks; i++) {
       var track = seq.videoTracks[i];
@@ -159,7 +244,7 @@ var BeatDetect = BeatDetect || {};
       }
       for (var j = 0; j < track.clips.numItems; j++) {
         var clip = track.clips[j];
-        if (clip && clip.isSelected && clip.isSelected()) {
+        if (clip && isTrackItemSelected(clip, selectedItems)) {
           selected.push({
             clip: clip,
             trackIndex: i,
@@ -189,6 +274,143 @@ var BeatDetect = BeatDetect || {};
       }
     }
     return false;
+  }
+
+  function normalizedName(value) {
+    return String(value || "").toLowerCase();
+  }
+
+  function isMotionComponent(component) {
+    var matchName = normalizedName(component && component.matchName);
+    var displayName = normalizedName(component && component.displayName);
+    return matchName.indexOf("motion") >= 0 || displayName === "motion";
+  }
+
+  function isScaleProperty(prop) {
+    var matchName = normalizedName(prop && prop.matchName);
+    var displayName = normalizedName(prop && prop.displayName);
+    return displayName === "scale" || matchName.indexOf("scale") >= 0;
+  }
+
+  function findScalePropertyOnComponent(component) {
+    if (!component || !component.properties) {
+      return null;
+    }
+    for (var p = 0; p < component.properties.numItems; p++) {
+      var prop = component.properties[p];
+      if (isScaleProperty(prop)) {
+        return prop;
+      }
+    }
+    return null;
+  }
+
+  function findMotionScaleProperty(clip) {
+    if (!clip || !clip.components) {
+      return null;
+    }
+
+    for (var c = 0; c < clip.components.numItems; c++) {
+      var component = clip.components[c];
+      if (isMotionComponent(component)) {
+        var motionScale = findScalePropertyOnComponent(component);
+        if (motionScale) {
+          return motionScale;
+        }
+      }
+    }
+
+    // Fallback for localized or odd Premiere builds: use the first keyframeable
+    // Scale property we can find on the selected video TrackItem.
+    for (var c2 = 0; c2 < clip.components.numItems; c2++) {
+      var fallbackScale = findScalePropertyOnComponent(clip.components[c2]);
+      if (fallbackScale) {
+        return fallbackScale;
+      }
+    }
+
+    return null;
+  }
+
+  function removeKeysInRange(prop, startSeconds, endSeconds) {
+    if (!prop) {
+      return;
+    }
+    var startTime = timeFromSeconds(startSeconds);
+    var endTime = timeFromSeconds(endSeconds);
+
+    if (prop.removeKeyRange) {
+      try {
+        prop.removeKeyRange(startTime, endTime);
+        return;
+      } catch (_) {}
+    }
+
+    if (!prop.getKeys || !prop.removeKey) {
+      return;
+    }
+    var keys = prop.getKeys() || [];
+    for (var k = keys.length - 1; k >= 0; k--) {
+      var keyTime = keys[k];
+      var keySeconds = timeToSeconds(keyTime);
+      if (keySeconds >= startSeconds && keySeconds <= endSeconds) {
+        try {
+          prop.removeKey(keyTime);
+        } catch (_) {}
+      }
+    }
+  }
+
+  function setScaleKey(prop, seconds, value) {
+    var time = timeFromSeconds(seconds);
+    var addError = null;
+    try {
+      prop.addKey(time);
+    } catch (error) {
+      addError = error;
+    }
+
+    try {
+      prop.setValueAtKey(time, value, 1);
+    } catch (valueError) {
+      if (addError) {
+        throw new Error("Could not add Scale keyframe: " + (addError.message || addError) + "; " + (valueError.message || valueError));
+      }
+      throw valueError;
+    }
+
+    if (prop.setInterpolationTypeAtKey) {
+      try {
+        prop.setInterpolationTypeAtKey(time, 5, 1);
+      } catch (_) {}
+    }
+  }
+
+  function resetZoomOnClip(clip) {
+    var prop = findMotionScaleProperty(clip);
+    if (!prop) {
+      return false;
+    }
+
+    var inTime = timeToSeconds(clip.inPoint);
+    var outTime = timeToSeconds(clip.outPoint);
+    var duration = outTime - inTime;
+    if (!isFinite(duration) || duration <= 0) {
+      duration = timeToSeconds(clip.end) - timeToSeconds(clip.start);
+      outTime = inTime + duration;
+    }
+    if (!isFinite(duration) || duration <= 0.001) {
+      throw new Error("clip duration is too short");
+    }
+
+    removeKeysInRange(prop, inTime, outTime);
+    try {
+      prop.setTimeVarying(false);
+    } catch (_) {}
+    if (prop.setValue) {
+      prop.setValue(100.0, 1);
+    }
+    return true;
   }
 
   function getWarpStabilizerEffect() {
@@ -261,6 +483,34 @@ var BeatDetect = BeatDetect || {};
     };
   }
 
+  function sameNumber(a, b, tolerance) {
+    return Math.abs((Number(a) || 0) - (Number(b) || 0)) <= tolerance;
+  }
+
+  function verifyClipInfo(payload, info) {
+    if (!payload || !info) {
+      return;
+    }
+    if (payload.mediaPath && payload.mediaPath !== info.mediaPath) {
+      throw new Error("Selection changed after analysis. Re-select the analyzed clip or run analysis again.");
+    }
+
+    var tolerance = 0.002;
+    var checks = [
+      ["startSeconds", info.startSeconds],
+      ["endSeconds", info.endSeconds],
+      ["inPointSeconds", info.inPointSeconds],
+      ["outPointSeconds", info.outPointSeconds]
+    ];
+
+    for (var i = 0; i < checks.length; i++) {
+      var key = checks[i][0];
+      if (payload[key] !== undefined && !sameNumber(payload[key], checks[i][1], tolerance)) {
+        throw new Error("Selected clip timing changed after analysis. Re-select the analyzed clip or run analysis again.");
+      }
+    }
+  }
+
   function setMarkerFields(marker, colorIndex) {
     if (!marker) {
       return;
@@ -281,16 +531,7 @@ var BeatDetect = BeatDetect || {};
   }
 
   function markerColorForFocus(focus, target) {
-    if (focus === "vocal") {
-      return 4;
-    }
-    if (focus === "music") {
-      return 3;
-    }
-    if (focus === "spikes") {
-      return 1;
-    }
-    return target === "clip" ? 2 : 1;
+    return 3;
   }
 
   function markerColorForEvent(event, focus, target) {
@@ -301,19 +542,38 @@ var BeatDetect = BeatDetect || {};
     return markerColorForFocus(focus, target);
   }
 
-  // Color indices used by Beat Detect for identification:
-  // vocal=4, music=3, spikes=1, default clip=2, default seq=1
-  var BD_COLOR_INDICES = [1, 2, 3, 4];
+  var BD_COLOR_INDICES = [3];
 
   function isBeatDetectMarker(marker) {
     if (!marker) {
       return false;
     }
-    // With blank markers, identify BD markers by checking they have
-    // no name and no comments (plain markers created by Beat Detect)
     var name = marker.name || "";
     var comments = marker.comments || "";
-    return name === "" && comments === "";
+    if (name !== "" || comments !== "") {
+      return false;
+    }
+
+    var color = null;
+    try {
+      if (marker.getColorByIndex) {
+        color = Number(marker.getColorByIndex());
+      } else if (marker.getColor) {
+        color = Number(marker.getColor());
+      } else if (marker.color !== undefined) {
+        color = Number(marker.color);
+      }
+    } catch (_) {}
+
+    if (color === null || isNaN(color)) {
+      return true;
+    }
+    for (var i = 0; i < BD_COLOR_INDICES.length; i++) {
+      if (color === BD_COLOR_INDICES[i]) {
+        return true;
+      }
+    }
+    return false;
   }
 
   function markerTimeSeconds(marker) {
@@ -338,7 +598,7 @@ var BeatDetect = BeatDetect || {};
     var marker = markerCollection.getFirstMarker();
     while (marker) {
       var seconds = markerTimeSeconds(marker);
-      if (isBeatDetectMarker(marker) && seconds >= startSeconds && seconds <= endSeconds) {
+      if (isBeatDetectMarker(marker) && seconds >= startSeconds && seconds < endSeconds) {
         found.push(marker);
       }
       if (!markerCollection.getNextMarker) {
@@ -374,9 +634,28 @@ var BeatDetect = BeatDetect || {};
     return null;
   }
 
+  function activeFrameDuration(seq) {
+    var fallback = 1 / 30;
+    try {
+      var settings = seq && seq.getSettings ? seq.getSettings() : null;
+      if (settings && settings.videoFrameRate && settings.videoFrameRate.seconds) {
+        return Number(settings.videoFrameRate.seconds) || fallback;
+      }
+    } catch (_) {}
+    return fallback;
+  }
+
+  function snapToFrame(seconds, seq) {
+    var frame = activeFrameDuration(seq);
+    if (!isFinite(frame) || frame <= 0) {
+      return seconds;
+    }
+    return Math.round(seconds / frame) * frame;
+  }
+
   BeatDetect.getSelectedClipInfo = function () {
     try {
-      return ok({ clip: getClipInfo(getSelectedClip()) });
+      return ok({ clip: getClipInfo(getExactlyOneSelectedClip()) });
     } catch (error) {
       return fail(error.message || String(error));
     }
@@ -389,7 +668,7 @@ var BeatDetect = BeatDetect || {};
       var focus = payload.focus || "spikes";
       var events = payload.events || [];
       var seq = app.project.activeSequence;
-      var clip = getSelectedClip();
+      var clip = getExactlyOneSelectedClip();
       var info = getClipInfo(clip);
       var applied = 0;
       var skipped = 0;
@@ -397,14 +676,25 @@ var BeatDetect = BeatDetect || {};
       if (!seq) {
         throw new Error("No active sequence is open.");
       }
-      if (payload.mediaPath && payload.mediaPath !== info.mediaPath) {
-        throw new Error("Selection changed after analysis. Re-select the analyzed clip or run analysis again.");
+      verifyClipInfo(payload, info);
+
+      if (target === "clip") {
+        var clipCollection = clipMarkerCollection(clip);
+        var existingClipMarkers = collectMarkers(clipCollection, info.inPointSeconds, info.outPointSeconds);
+        for (var cm = 0; cm < existingClipMarkers.length; cm++) {
+          deleteMarker(clipCollection, existingClipMarkers[cm]);
+        }
+      } else {
+        var existingSeqMarkers = collectMarkers(seq.markers, info.startSeconds, info.endSeconds);
+        for (var sm = 0; sm < existingSeqMarkers.length; sm++) {
+          deleteMarker(seq.markers, existingSeqMarkers[sm]);
+        }
       }
 
       for (var i = 0; i < events.length; i++) {
         var eventTime = Number(events[i].time);
         var score = Number(events[i].score);
-        if (isNaN(eventTime) || eventTime < info.inPointSeconds || eventTime > info.outPointSeconds) {
+        if (isNaN(eventTime) || eventTime < info.inPointSeconds || eventTime >= info.outPointSeconds) {
           skipped++;
           continue;
         }
@@ -412,10 +702,11 @@ var BeatDetect = BeatDetect || {};
         var color = markerColorForEvent(events[i], focus, target);
 
         if (target === "clip") {
-          setMarkerFields(createClipMarker(clip, eventTime), color);
+          setMarkerFields(createClipMarker(clip, snapToFrame(eventTime, seq)), color);
         } else {
           var sequenceTime = info.startSeconds + (eventTime - info.inPointSeconds);
-          if (sequenceTime < info.startSeconds || sequenceTime > info.endSeconds) {
+          sequenceTime = snapToFrame(sequenceTime, seq);
+          if (sequenceTime < info.startSeconds || sequenceTime >= info.endSeconds) {
             skipped++;
             continue;
           }
@@ -435,7 +726,7 @@ var BeatDetect = BeatDetect || {};
       var payload = parseJson(payloadJson);
       var target = payload.target === "clip" ? "clip" : "sequence";
       var seq = app.project.activeSequence;
-      var clip = getSelectedClip();
+      var clip = getExactlyOneSelectedClip();
       var info = getClipInfo(clip);
       var collection;
       var startSeconds;
@@ -475,7 +766,7 @@ var BeatDetect = BeatDetect || {};
   BeatDetect.applyGimbalZoom = function (payloadJson) {
     try {
       var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0, style: "smooth_in" };
-      var zoomTarget = payload.zoom || 110.0;
+      var zoomTarget = Math.max(101.0, Math.min(150.0, Number(payload.zoom) || 110.0));
       var zoomStyle = payload.style || "smooth_in";
       
       var seq = app.project.activeSequence;
@@ -489,118 +780,127 @@ var BeatDetect = BeatDetect || {};
       }
 
       var appliedCount = 0;
+      var skipped = 0;
+      var errors = [];
       for (var i = 0; i < clips.length; i++) {
         var clip = clips[i];
-        if (clip.components) {
-          for (var c = 0; c < clip.components.numItems; c++) {
-            var component = clip.components[c];
-            if (component.matchName === "AE.ADBE Motion" || component.displayName === "Motion") {
-              for (var p = 0; p < component.properties.numItems; p++) {
-                var prop = component.properties[p];
-                if (prop.matchName === "ADBE Video Scale" || prop.displayName === "Scale") {
-                  try {
-                    prop.setTimeVarying(true);
-                    
-                    var inTime = clip.start.ticks ? (parseInt(clip.start.ticks, 10) / TICKS_PER_SECOND) : (clip.start.seconds || timeToSeconds(clip.start));
-                    var outTime = clip.end.ticks ? (parseInt(clip.end.ticks, 10) / TICKS_PER_SECOND) : (clip.end.seconds || timeToSeconds(clip.end));
-                    var duration = outTime - inTime;
-                    
-                    // Clear existing keyframes within range to prevent jitter
-                    if (prop.getKeys) {
-                      var keys = prop.getKeys() || [];
-                      for (var k = keys.length - 1; k >= 0; k--) {
-                        var kTime = keys[k].ticks ? (parseInt(keys[k].ticks, 10) / TICKS_PER_SECOND) : timeToSeconds(keys[k]);
-                        if (kTime >= inTime && kTime <= outTime) {
-                          try { prop.removeKey(kTime); } catch (e) {
-                            try { prop.removeKey(keys[k]); } catch (e2) {}
-                          }
-                        }
-                      }
-                    }
+        var prop = findMotionScaleProperty(clip);
+        var name = clipName(clip, i);
+        if (!prop) {
+          skipped++;
+          errors.push(name + ": Motion > Scale not found");
+          continue;
+        }
 
-                    // Apply corresponding keyframe track based on the selected style
-                    if (zoomStyle === "smooth_in") {
-                      prop.addKey(inTime);
-                      prop.setValueAtKey(inTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true); // 5 = Bezier
-                      
-                      prop.addKey(outTime);
-                      prop.setValueAtKey(outTime, zoomTarget, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
-
-                    } else if (zoomStyle === "smooth_out") {
-                      prop.addKey(inTime);
-                      prop.setValueAtKey(inTime, zoomTarget, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
-                      
-                      prop.addKey(outTime);
-                      prop.setValueAtKey(outTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
-
-                    } else if (zoomStyle === "crash_in") {
-                      // Speed ramp crash zoom-in at the end (fast punch in the last 25% or 0.35s of the clip)
-                      var rampDuration = Math.min(0.35, duration * 0.25);
-                      var rampStartTime = outTime - rampDuration;
-                      
-                      prop.addKey(inTime);
-                      prop.setValueAtKey(inTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
-                      
-                      prop.addKey(rampStartTime);
-                      prop.setValueAtKey(rampStartTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(rampStartTime, 5, true);
-                      
-                      prop.addKey(outTime);
-                      prop.setValueAtKey(outTime, zoomTarget, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
-
-                    } else if (zoomStyle === "crash_out") {
-                      // Speed ramp crash zoom-out at the start (fast pull out in the first 25% or 0.35s of the clip)
-                      var rampDuration = Math.min(0.35, duration * 0.25);
-                      var rampEndTime = inTime + rampDuration;
-                      
-                      prop.addKey(inTime);
-                      prop.setValueAtKey(inTime, zoomTarget, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
-                      
-                      prop.addKey(rampEndTime);
-                      prop.setValueAtKey(rampEndTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(rampEndTime, 5, true);
-                      
-                      prop.addKey(outTime);
-                      prop.setValueAtKey(outTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
-
-                    } else if (zoomStyle === "drift") {
-                      // Slow drifting zoom (subtle zoom from 100% to 103% or 104% over the full clip)
-                      var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3; // subtle 30% weighting
-                      prop.addKey(inTime);
-                      prop.setValueAtKey(inTime, 100.0, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(inTime, 5, true);
-                      
-                      prop.addKey(outTime);
-                      prop.setValueAtKey(outTime, driftTarget, true);
-                      if (prop.setInterpolationTypeAtKey) prop.setInterpolationTypeAtKey(outTime, 5, true);
-                    }
-                    
-                    appliedCount++;
-                  } catch (err) {
-                    // Gracefully handle if Motion Scale is restricted
-                  }
-                  break;
-                }
-              }
-              break; // Found Motion
-            }
+        try {
+          if (prop.areKeyframesSupported && !prop.areKeyframesSupported()) {
+            skipped++;
+            errors.push(name + ": Scale does not support keyframes");
+            continue;
           }
+
+          prop.setTimeVarying(true);
+
+          var inTime = timeToSeconds(clip.inPoint);
+          var rawOutTime = timeToSeconds(clip.outPoint);
+          var duration = rawOutTime - inTime;
+          if (!isFinite(duration) || duration <= 0) {
+            duration = timeToSeconds(clip.end) - timeToSeconds(clip.start);
+            rawOutTime = inTime + duration;
+          }
+          if (!isFinite(duration) || duration <= 0.001) {
+            skipped++;
+            errors.push(name + ": clip duration is too short");
+            continue;
+          }
+
+          var frameDuration = 1 / 30;
+          try {
+            var settings = seq.getSettings ? seq.getSettings() : null;
+            if (settings && settings.videoFrameRate && settings.videoFrameRate.seconds) {
+              frameDuration = Number(settings.videoFrameRate.seconds) || frameDuration;
+            }
+          } catch (_) {}
+
+          var endTime = Math.max(inTime + 0.001, rawOutTime - Math.min(frameDuration, duration * 0.25));
+          removeKeysInRange(prop, inTime, rawOutTime);
+
+          if (zoomStyle === "smooth_out") {
+            setScaleKey(prop, inTime, zoomTarget);
+            setScaleKey(prop, endTime, 100.0);
+          } else if (zoomStyle === "crash_in") {
+            var crashInStart = Math.max(inTime, endTime - Math.min(0.35, duration * 0.25));
+            setScaleKey(prop, inTime, 100.0);
+            setScaleKey(prop, crashInStart, 100.0);
+            setScaleKey(prop, endTime, zoomTarget);
+          } else if (zoomStyle === "crash_out") {
+            var crashOutEnd = Math.min(endTime, inTime + Math.min(0.35, duration * 0.25));
+            setScaleKey(prop, inTime, zoomTarget);
+            setScaleKey(prop, crashOutEnd, 100.0);
+            setScaleKey(prop, endTime, 100.0);
+          } else if (zoomStyle === "drift") {
+            var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3;
+            setScaleKey(prop, inTime, 100.0);
+            setScaleKey(prop, endTime, driftTarget);
+          } else {
+            setScaleKey(prop, inTime, 100.0);
+            setScaleKey(prop, endTime, zoomTarget);
+          }
+
+          appliedCount++;
+        } catch (err) {
+          skipped++;
+          errors.push(name + ": " + (err.message || String(err)));
         }
       }
 
       if (appliedCount === 0) {
-        throw new Error("Could not find Motion Scale properties on selected clips.");
+        throw new Error(errors.length ? errors.join(" | ") : "Could not apply Motion Scale keyframes to selected clips.");
       }
 
-      return ok({ applied: appliedCount });
+      return ok({ applied: appliedCount, skipped: skipped, errors: errors });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  BeatDetect.clearGimbalZoom = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var clips = getAllSelectedVideoClips(seq);
+      if (clips.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+
+      var cleared = 0;
+      var skipped = 0;
+      var errors = [];
+
+      for (var i = 0; i < clips.length; i++) {
+        var clip = clips[i];
+        var name = clipName(clip, i);
+        try {
+          if (resetZoomOnClip(clip)) {
+            cleared++;
+          } else {
+            skipped++;
+            errors.push(name + ": Motion > Scale not found");
+          }
+        } catch (error) {
+          skipped++;
+          errors.push(name + ": " + (error.message || String(error)));
+        }
+      }
+
+      if (cleared === 0) {
+        throw new Error(errors.length ? errors.join(" | ") : "No zoom keyframes were cleared.");
+      }
+
+      return ok({ cleared: cleared, skipped: skipped, errors: errors });
     } catch (error) {
       return fail(error.message || String(error));
     }

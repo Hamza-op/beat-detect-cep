@@ -42,7 +42,7 @@ typedef short int           int16;
 #define BUG_VERSION     0
 #define PF_Stage_DEVELOP 0
 #define STAGE_VERSION   PF_Stage_DEVELOP
-#define BUILD_VERSION   1
+#define BUILD_VERSION   2
 
 /* Parameter enumerations */
 enum {
@@ -63,6 +63,8 @@ enum {
     AUTOCUT_HIGHLIGHTS_TINT,
     AUTOCUT_AUTO_TRIGGER,
     AUTOCUT_CONFIDENCE,
+    AUTOCUT_CAPTURE_TOKEN,
+    AUTOCUT_CAPTURE_SECONDS,
     AUTOCUT_NUM_PARAMS
 };
 
@@ -82,7 +84,9 @@ enum {
     HIGHLIGHTS_TEMP_DISK_ID,
     HIGHLIGHTS_TINT_DISK_ID,
     AUTO_TRIGGER_DISK_ID,
-    CONFIDENCE_DISK_ID
+    CONFIDENCE_DISK_ID,
+    CAPTURE_TOKEN_DISK_ID,
+    CAPTURE_SECONDS_DISK_ID
 };
 
 extern "C" {

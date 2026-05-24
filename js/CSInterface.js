@@ -7,6 +7,23 @@
 
   function CSInterface() {}
 
+  if (!window.SystemPath) {
+    window.SystemPath = {
+      EXTENSION: "extension"
+    };
+  }
+
+  CSInterface.prototype.getSystemPath = function (path) {
+    if (path !== window.SystemPath.EXTENSION) {
+      return "";
+    }
+    var locationPath = decodeURIComponent(window.location.pathname);
+    if (/^\/[A-Za-z]:\//.test(locationPath)) {
+      locationPath = locationPath.slice(1);
+    }
+    return locationPath.replace(/[\\/][^\\/]*$/, "");
+  };
+
   CSInterface.prototype.evalScript = function (script, callback) {
     if (window.__adobe_cep__ && typeof window.__adobe_cep__.evalScript === "function") {
       window.__adobe_cep__.evalScript(script, callback);
@@ -71,6 +88,7 @@
           ],
           engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
           usedNativeAuto: true,
+          captureFrameSeconds: 12.5,
           colorScience: "mixed selected clips"
         }));
         return;

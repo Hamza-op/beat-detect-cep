@@ -20,5 +20,7 @@ typedef enum {
     StrID_HighlightsTint_Param_Name,
     StrID_AutoTrigger_Param_Name,
     StrID_Confidence_Param_Name,
+    StrID_CaptureToken_Param_Name,
+    StrID_CaptureSeconds_Param_Name,
     StrID_NUMTYPES
 } StrIDType;

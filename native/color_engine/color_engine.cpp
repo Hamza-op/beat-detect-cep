@@ -1,6 +1,7 @@
 #include "color_engine.h"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 static int PercentileFromHistogram(const int histogram[256], int total_pixels, float percentile)
 {
@@ -21,6 +22,16 @@ static float ClampFloat(float value, float min_value, float max_value)
     return std::max(min_value, std::min(max_value, value));
 }
 
+static float Rec709Luma(float r, float g, float b)
+{
+    return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+}
+
+static unsigned char Standard16To8(unsigned short value)
+{
+    return static_cast<unsigned char>((static_cast<unsigned int>(value) * 255u + 32767u) / 65535u);
+}
+
 static float ApplyDeadZone(float value, float dead_zone)
 {
     if (std::fabs(value) <= dead_zone) {
@@ -37,6 +48,9 @@ bool ColorEngine::AnalyzeFrame8(
     FrameAnalysisResult& result
 ) {
     if (!pixel_buffer || width <= 0 || height <= 0) {
+        return false;
+    }
+    if (width > std::numeric_limits<int>::max() / height || row_bytes / 4 < width) {
         return false;
     }
 
@@ -67,8 +81,7 @@ bool ColorEngine::AnalyzeFrame8(
             g_sum += g;
             b_sum += b;
 
-            // Simple Yuv luminance approximation (Rec. 709)
-            int luma = static_cast<int>(0.299f * r + 0.587f * g + 0.114f * b);
+            int luma = static_cast<int>(Rec709Luma(static_cast<float>(r), static_cast<float>(g), static_cast<float>(b)));
             luma = std::max(0, std::min(255, luma));
             histogram[luma]++;
             r_histogram[r]++;
@@ -128,7 +141,7 @@ bool ColorEngine::AnalyzeFrame8(
     float mean_r = static_cast<float>(r_sum) / total_pixels;
     float mean_g = static_cast<float>(g_sum) / total_pixels;
     float mean_b = static_cast<float>(b_sum) / total_pixels;
-    float mean_y = 0.299f * mean_r + 0.587f * mean_g + 0.114f * mean_b;
+    float mean_y = Rec709Luma(mean_r, mean_g, mean_b);
 
     // Waveform and RGB Parade percentiles.
     int shadow_luma = PercentileFromHistogram(histogram, total_pixels, 0.01f);
@@ -302,6 +315,9 @@ bool ColorEngine::AnalyzeFrame16(
     if (!pixel_buffer || width <= 0 || height <= 0) {
         return false;
     }
+    if (width > std::numeric_limits<int>::max() / height || row_bytes / 8 < width) {
+        return false;
+    }
 
     // Convert 16-bpc buffer coordinates to 8-bpc representation for analysis
     std::vector<unsigned char> temp_buffer(width * height * 4);
@@ -310,11 +326,11 @@ bool ColorEngine::AnalyzeFrame16(
             reinterpret_cast<const unsigned char*>(pixel_buffer) + (y * row_bytes)
         );
         for (int x = 0; x < width; ++x) {
-            // Rescale 16-bit [0, 65535] to 8-bit [0, 255]
-            temp_buffer[(y * width + x) * 4 + 0] = static_cast<unsigned char>(row[x * 4 + 0] >> 8);
-            temp_buffer[(y * width + x) * 4 + 1] = static_cast<unsigned char>(row[x * 4 + 1] >> 8);
-            temp_buffer[(y * width + x) * 4 + 2] = static_cast<unsigned char>(row[x * 4 + 2] >> 8);
-            temp_buffer[(y * width + x) * 4 + 3] = static_cast<unsigned char>(row[x * 4 + 3] >> 8);
+            // Rescale standard 16-bit [0, 65535] RGBA to 8-bit [0, 255].
+            temp_buffer[(y * width + x) * 4 + 0] = Standard16To8(row[x * 4 + 0]);
+            temp_buffer[(y * width + x) * 4 + 1] = Standard16To8(row[x * 4 + 1]);
+            temp_buffer[(y * width + x) * 4 + 2] = Standard16To8(row[x * 4 + 2]);
+            temp_buffer[(y * width + x) * 4 + 3] = Standard16To8(row[x * 4 + 3]);
         }
     }
 

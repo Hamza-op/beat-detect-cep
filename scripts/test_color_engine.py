@@ -24,6 +24,9 @@ def percentile_from_histogram(histogram, total_pixels, percentile):
 def clamp(value, min_value, max_value):
     return max(min_value, min(max_value, value))
 
+def rec709_luma(r, g, b):
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
 def dead_zone(value, threshold):
     if abs(value) <= threshold:
         return 0.0
@@ -71,8 +74,7 @@ def analyze_image(image_path):
             g_sum += g
             b_sum += b
 
-            # Rec.709 luma approximation
-            luma = int(0.299 * r + 0.587 * g + 0.114 * b)
+            luma = int(rec709_luma(r, g, b))
             luma = max(0, min(255, luma))
             histogram[luma] += 1
             r_histogram[r] += 1
@@ -122,7 +124,7 @@ def analyze_image(image_path):
     mean_r = r_sum / total_pixels
     mean_g = g_sum / total_pixels
     mean_b = b_sum / total_pixels
-    mean_y = 0.299 * mean_r + 0.587 * mean_g + 0.114 * mean_b
+    mean_y = rec709_luma(mean_r, mean_g, mean_b)
 
     shadow_luma = percentile_from_histogram(histogram, total_pixels, 0.01)
     luma_p10 = percentile_from_histogram(histogram, total_pixels, 0.10)

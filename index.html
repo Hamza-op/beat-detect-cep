@@ -4,9 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>AutoCut Studio</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
+    <link rel="stylesheet" href="./css/fonts.css">
     <link rel="stylesheet" href="./css/styles.css">
   </head>
   <body>
@@ -79,8 +77,19 @@
             </div>
           </div>
 
-          <!-- Hidden inputs kept for JS logic compatibility -->
-          <input type="radio" name="detectionFocus" value="beats" checked hidden>
+          <div class="form-row">
+            <div class="form-group flex-1">
+              <label class="field-label" for="detectionFocus">Detection Engine</label>
+              <div class="select-wrapper">
+                <select id="detectionFocus" name="detectionFocus">
+                  <option value="beats" selected>Beat Grid</option>
+                  <option value="spikes">Percussion Spikes</option>
+                  <option value="music">Music Onsets</option>
+                  <option value="vocal">Vocal Entries</option>
+                </select>
+              </div>
+            </div>
+          </div>
 
           <!-- Active Engine — instrument card -->
           <div class="mode-summary-deck">
@@ -89,11 +98,11 @@
               <div class="mode-meta-row">
                 <div class="engine-indicator">
                   <span class="pulse-dot"></span>
-                  <span class="engine-name">BEAT&nbsp;ENGINE</span>
+                  <span class="engine-name">MARKER&nbsp;ENGINE</span>
                 </div>
                 <span class="engine-badge">FRAME&nbsp;LOCKED</span>
               </div>
-              <p class="engine-desc">A native Rust analyzer rendering a frame-accurate beat grid &mdash; precision-tuned for the cut.</p>
+              <p class="engine-desc">A native Rust analyzer rendering frame-accurate event markers from the selected detection engine.</p>
             </div>
           </div>
 
@@ -117,8 +126,8 @@
             </button>
           </div>
 
-          <!-- Beat result panel (Revealed after successful analysis) -->
-          <section id="densityPanel" class="density-panel is-hidden" aria-label="Detected beat markers">
+          <!-- Marker result panel (revealed after successful analysis) -->
+          <section id="densityPanel" class="density-panel is-hidden" aria-label="Detected event markers">
 
             <!-- Sleek Tab Switcher to coordinate UX Modes -->
             <div class="filter-tabs">
@@ -183,7 +192,7 @@
             <div class="events-badge-deck">
               <div class="lcd-screen">
                 <div class="lcd-value"><span id="filteredCount">0</span></div>
-                <div class="lcd-label"><span id="totalCount">of 0 beats active</span></div>
+                <div class="lcd-label"><span id="totalCount">of 0 events active</span></div>
               </div>
             </div>
 
@@ -246,12 +255,12 @@
                 </div>
                 <span class="engine-badge color-badge">NATIVE</span>
               </div>
-              <p class="engine-desc">Applies AutoCutStudio's proprietary, pixel-analyzed native C++ color correction directly to selected video clips.</p>
+              <p class="engine-desc">Captures the current playhead frame, computes one native C++ correction, and applies that fixed grade across the selected clip.</p>
             </div>
 
             <div class="lcd-screen color-auto-readout grid-span-full">
               <div class="lcd-value">AUTO</div>
-              <div class="lcd-label">selected clips</div>
+              <div class="lcd-label">playhead frame</div>
             </div>
 
             <button id="autoColorButton" class="btn-tool color-action grid-span-full" type="button">
@@ -262,7 +271,7 @@
                 <circle cx="6.5" cy="12.5" r="2.5"/>
                 <path d="M12 22a10 10 0 1 1 10-10c0 2-1.5 3-3.5 3H17a2 2 0 0 0-2 2v1.5c0 2-1 3.5-3 3.5Z"/>
               </svg>
-              <span class="full-label">Auto Color Selected Clips</span>
+              <span class="full-label">Auto Color Selected Clip</span>
               <span class="short-label">Auto Color</span>
             </button>
 

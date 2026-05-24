@@ -46,7 +46,7 @@ public static class AutoCutGradeHarness {
     }
 
     private static float Luma(float r, float g, float b) {
-        return 0.299f * r + 0.587f * g + 0.114f * b;
+        return 0.2126f * r + 0.7152f * g + 0.0722f * b;
     }
 
     private static float WhiteBalanceProtect(float luma) {
@@ -112,7 +112,7 @@ public static class AutoCutGradeHarness {
                         int i = row + x * 4;
                         int b = bytes[i + 0], g = bytes[i + 1], r = bytes[i + 2];
                         rSum += r; gSum += g; bSum += b;
-                        int yv = Math.Max(0, Math.Min(255, (int)(0.299f * r + 0.587f * g + 0.114f * b)));
+                        int yv = Math.Max(0, Math.Min(255, (int)Luma(r, g, b)));
                         histogram[yv]++;
                         rHistogram[r]++;
                         gHistogram[g]++;
@@ -138,7 +138,7 @@ public static class AutoCutGradeHarness {
                 float meanR = (float)rSum / total;
                 float meanG = (float)gSum / total;
                 float meanB = (float)bSum / total;
-                float meanY = 0.299f * meanR + 0.587f * meanG + 0.114f * meanB;
+                float meanY = Luma(meanR, meanG, meanB);
 
                 int shadowLuma = Percentile(histogram, total, 0.01f);
                 int lumaP10 = Percentile(histogram, total, 0.10f);

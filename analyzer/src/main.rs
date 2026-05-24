@@ -1,4 +1,8 @@
-use std::env;
+mod cli;
+
+use cli::parse_args;
+#[cfg(test)]
+use cli::parse_args_from;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
@@ -27,18 +31,11 @@ struct Event {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DetectionMode {
+pub(crate) enum DetectionMode {
     Spikes,
     Music,
     Vocal,
     Beats,
-}
-
-struct AnalyzerOptions {
-    mode: DetectionMode,
-    media_path: String,
-    start_seconds: Option<f64>,
-    duration_seconds: Option<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -87,83 +84,6 @@ fn run() -> Result<(), Box<dyn Error>> {
     }
     println!("{}", serde_json::to_string(&events)?);
     Ok(())
-}
-
-fn parse_args() -> Result<AnalyzerOptions, Box<dyn Error>> {
-    parse_args_from(env::args().skip(1))
-}
-
-fn parse_args_from<I>(args: I) -> Result<AnalyzerOptions, Box<dyn Error>>
-where
-    I: IntoIterator<Item = String>,
-{
-    let mut args = args.into_iter().peekable();
-    if args.peek().is_none() {
-        return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] [--start seconds] [--duration seconds] <media-file-path>".into());
-    }
-
-    let mut mode = DetectionMode::Beats;
-    let mut start_seconds = None;
-    let mut duration_seconds = None;
-    let mut path_parts = Vec::new();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--mode" => {
-                let raw = args.next().ok_or("--mode requires a value")?;
-                mode = match raw.as_str() {
-                    "spikes" => DetectionMode::Spikes,
-                    "music" => DetectionMode::Music,
-                    "vocal" => DetectionMode::Vocal,
-                    "beats" => DetectionMode::Beats,
-                    other => return Err(format!("unsupported detection mode: {other}").into()),
-                };
-            }
-            "--start" => {
-                start_seconds = Some(parse_seconds_flag(args.next(), "--start", true)?);
-            }
-            "--duration" => {
-                duration_seconds = Some(parse_seconds_flag(args.next(), "--duration", false)?);
-            }
-            "--help" | "-h" => {
-                return Err("usage: beat_analyzer [--mode spikes|music|vocal|beats] [--start seconds] [--duration seconds] <media-file-path>".into());
-            }
-            other if other.starts_with("--") => {
-                return Err(format!("unsupported option: {other}").into());
-            }
-            path_part => {
-                path_parts.push(path_part.to_string());
-                path_parts.extend(args);
-                break;
-            }
-        }
-    }
-
-    if path_parts.is_empty() {
-        return Err("media file path is required".into());
-    }
-
-    Ok(AnalyzerOptions {
-        mode,
-        media_path: path_parts.join(" "),
-        start_seconds,
-        duration_seconds,
-    })
-}
-
-fn parse_seconds_flag(
-    value: Option<String>,
-    flag: &str,
-    allow_zero: bool,
-) -> Result<f64, Box<dyn Error>> {
-    let raw = value.ok_or_else(|| format!("{flag} requires a seconds value"))?;
-    let seconds = raw
-        .parse::<f64>()
-        .map_err(|_| format!("{flag} requires a numeric seconds value: {raw}"))?;
-    if !seconds.is_finite() || seconds < 0.0 || (!allow_zero && seconds <= 0.0) {
-        return Err(format!("{flag} must be {}", if allow_zero { ">= 0" } else { "> 0" }).into());
-    }
-    Ok(seconds)
 }
 
 fn decode_mono_audio(

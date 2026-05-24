@@ -28,6 +28,7 @@
     filteredCount:    document.getElementById("filteredCount"),
     totalCount:       document.getElementById("totalCount"),
     markerTarget:     document.getElementById("markerTarget"),
+    detectionFocus:   document.getElementById("detectionFocus"),
     zoomSlider:       document.getElementById("zoomSlider"),
     zoomLabel:        document.getElementById("zoomLabel"),
     targetCountInput: document.getElementById("targetCountInput"),
@@ -51,8 +52,27 @@
   };
 
   function getDetectionFocus() {
+    if (dom.detectionFocus && dom.detectionFocus.value) {
+      return dom.detectionFocus.value;
+    }
     var selected = document.querySelector("input[name='detectionFocus']:checked");
     return selected ? selected.value : "beats";
+  }
+
+  function getDetectionFocusLabel(focus) {
+    var labels = {
+      beats: "beat-grid",
+      spikes: "percussion-spike",
+      music: "music-onset",
+      vocal: "vocal-entry"
+    };
+    return labels[focus] || labels.beats;
+  }
+
+  function dispatchInputEvent(element) {
+    if (!element) return;
+    var event = new Event("input", { bubbles: true, cancelable: true });
+    element.dispatchEvent(event);
   }
 
   function syncModeSelection() {
@@ -176,6 +196,12 @@
   }
 
   function getExtensionRoot() {
+    if (cs && typeof cs.getSystemPath === "function" && typeof SystemPath !== "undefined" && SystemPath.EXTENSION) {
+      var extensionPath = cs.getSystemPath(SystemPath.EXTENSION);
+      if (extensionPath) {
+        return extensionPath;
+      }
+    }
     var locationPath = decodeURIComponent(window.location.pathname);
     if (/^\/[A-Za-z]:\//.test(locationPath)) {
       locationPath = locationPath.slice(1);
@@ -808,7 +834,13 @@ function keepStrongestPerSecond(events) {
   }
 
   function markerColorIndexForEvent(event, focus) {
-    return 3;
+    var mapped = {
+      beats: 3,
+      spikes: 1,
+      music: 6,
+      vocal: 11
+    };
+    return mapped[focus] || mapped.beats;
   }
 
   function getOffsetMs() {
@@ -858,8 +890,9 @@ function keepStrongestPerSecond(events) {
         if (!range) {
           throw new Error("Selected clip has an invalid source in/out range. Trim or reselect the timeline clip and try again.");
         }
-        setStatus("Analyzing selected cut only (" + formatSeconds(range.duration) + ") from " + state.clip.name + " for Resolve-style music beats...", false, true);
-        return runHybridAnalyzer(state.clip.mediaPath, "beats", state.clip);
+        var focus = getDetectionFocus();
+        setStatus("Analyzing selected cut only (" + formatSeconds(range.duration) + ") from " + state.clip.name + " for " + getDetectionFocusLabel(focus) + " markers...", false, true);
+        return runHybridAnalyzer(state.clip.mediaPath, focus, state.clip);
       })
       .then(function (analysis) {
         state.allEvents = cropEventsToSelectedClip(sanitizeEvents(analysis.events || []), state.clip);
@@ -869,7 +902,7 @@ function keepStrongestPerSecond(events) {
         dom.densityPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
-          "found " + state.allEvents.length + " beat markers in the selected cut using Rust analyzer.",
+          "found " + state.allEvents.length + " " + getDetectionFocusLabel(getDetectionFocus()) + " markers in the selected cut using Rust analyzer.",
           false, false, true
         );
       })
@@ -996,15 +1029,16 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Running AutoCut color correction on selected clips...", false, true);
+    setStatus("Capturing the current playhead frame for AutoCut color correction...", false, true);
 
-    cepEval("AutoCutStudio.autoColorSelectedClips()")
+    cepEval("AutoCutStudio.autoColorAtPlayhead()")
       .then(function(result) {
         var engine = result.engine || "AutoCut custom correction";
         var skipped = Number(result.skipped) || 0;
         var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
         var csInfo = result.colorScience ? " [Color Science: " + result.colorScience + "]" : "";
-        setStatus("Auto color applied to " + result.applied + " selected clip" + (result.applied === 1 ? "" : "s") + " using " + engine + (skipped ? "; skipped " + skipped : "") + "." + csInfo + details, false, false, true);
+        var capture = result.captureFrameSeconds !== undefined ? " from playhead frame " + formatSeconds(Number(result.captureFrameSeconds)) : "";
+        setStatus("Auto color applied to " + result.applied + " selected clip" + (result.applied === 1 ? "" : "s") + capture + " using " + engine + (skipped ? "; skipped " + skipped : "") + "." + csInfo + details, false, false, true);
       })
       .catch(function(error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -1162,12 +1196,13 @@ function keepStrongestPerSecond(events) {
 
         // Show report in confirm modal and copy to clipboard only upon explicit user action.
         if (confirm("DIAGNOSTICS REPORT:\n\n" + formatted + "\n\nWould you like to copy this report to the clipboard?")) {
-          try {
-            copyToClipboard(formatted);
-            setStatus("Diagnostics copied to clipboard.");
-          } catch (_) {
-            setStatus("Failed to copy diagnostics to clipboard.", true);
-          }
+          copyToClipboard(formatted)
+            .then(function () {
+              setStatus("Diagnostics copied to clipboard.");
+            })
+            .catch(function () {
+              setStatus("Failed to copy diagnostics to clipboard.", true);
+            });
         }
       })
       .catch(function (error) {
@@ -1207,17 +1242,32 @@ function keepStrongestPerSecond(events) {
   }
 
   function copyToClipboard(text) {
-    var textarea = document.createElement("textarea");
-    textarea.value = text;
-    textarea.style.position = "fixed";
-    textarea.style.opacity = "0";
-    document.body.appendChild(textarea);
-    textarea.select();
-    try {
-      document.execCommand("copy");
-    } finally {
-      document.body.removeChild(textarea);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text);
     }
+    var req = getNodeRequire();
+    if (req) {
+      return new Promise(function (resolve, reject) {
+        try {
+          var childProcess = req("child_process");
+          var os = req("os");
+          var command = os.platform() === "win32" ? "clip" : "pbcopy";
+          var child = childProcess.spawn(command);
+          child.on("error", reject);
+          child.on("close", function (code) {
+            if (code === 0) {
+              resolve();
+            } else {
+              reject(new Error(command + " exited with code " + code));
+            }
+          });
+          child.stdin.end(text);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    }
+    return Promise.reject(new Error("Clipboard API is unavailable in this host."));
   }
 
   function activateMainTab(tabName) {
@@ -1321,9 +1371,7 @@ function keepStrongestPerSecond(events) {
       if (state.isBusy) return;
       if (dom.targetCountInput) {
         dom.targetCountInput.value = "";
-        var event = document.createEvent("Event");
-        event.initEvent("input", true, true);
-        dom.targetCountInput.dispatchEvent(event);
+        dispatchInputEvent(dom.targetCountInput);
       }
       syncFilterTabUI();
     });
@@ -1338,9 +1386,7 @@ function keepStrongestPerSecond(events) {
           var minVal = dom.targetCountInput.min || "10";
           dom.targetCountInput.value = minVal;
         }
-        var event = document.createEvent("Event");
-        event.initEvent("input", true, true);
-        dom.targetCountInput.dispatchEvent(event);
+        dispatchInputEvent(dom.targetCountInput);
       }
       syncFilterTabUI();
     });
@@ -1349,6 +1395,14 @@ function keepStrongestPerSecond(events) {
   var modeInputs = document.querySelectorAll("input[name='detectionFocus']");
   for (var modeIndex = 0; modeIndex < modeInputs.length; modeIndex++) {
     modeInputs[modeIndex].addEventListener("change", function () {
+      syncModeSelection();
+      if (state.allEvents.length > 0) {
+        filterEvents();
+      }
+    });
+  }
+  if (dom.detectionFocus) {
+    dom.detectionFocus.addEventListener("change", function () {
       syncModeSelection();
       if (state.allEvents.length > 0) {
         filterEvents();
@@ -1378,7 +1432,7 @@ function keepStrongestPerSecond(events) {
   }
 
   if (isBrowserPreview()) {
-    setStatus("Browser preview mode. Analyze uses simulated beat markers; Premiere actions are mocked.");
+    setStatus("Browser preview mode. Analyze uses simulated event markers; Premiere actions are mocked.");
   }
 
   window.onerror = function (message, source, line, column, error) {

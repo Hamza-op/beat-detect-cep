@@ -23,8 +23,10 @@ TableString     g_strs[StrID_NUMTYPES] = {
     StrID_ShadowsTint_Param_Name,   "Shadows Tint (Lift)",
     StrID_HighlightsTemp_Param_Name,"Highlights Temp (Gain)",
     StrID_HighlightsTint_Param_Name,"Highlights Tint (Gain)",
-    StrID_AutoTrigger_Param_Name,   "Auto Calibrate Now",
+    StrID_AutoTrigger_Param_Name,   "Auto Analysis",
     StrID_Confidence_Param_Name,    "Analysis Confidence",
+    StrID_CaptureToken_Param_Name,  "Frame Capture Token",
+    StrID_CaptureSeconds_Param_Name,"Frame Capture Seconds",
 };
 
 char    *GetStringPtr(int strNum)

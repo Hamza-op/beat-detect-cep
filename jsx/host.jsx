@@ -63,7 +63,7 @@ var AutoCutStudio = AutoCutStudio || {};
     if (typeof JSON !== "undefined" && JSON.parse) {
       return JSON.parse(text);
     }
-    return eval("(" + text + ")");
+    throw new Error("JSON.parse is unavailable in this Premiere scripting host.");
   }
 
   function timeToSeconds(time) {
@@ -588,6 +588,42 @@ var AutoCutStudio = AutoCutStudio || {};
     return missing;
   }
 
+  function setAutoCutCaptureControls(component, token, localSeconds) {
+    var tokenSet = setLumetriProperty(component, ["frame capture token", "capture token"], token);
+    var secondsSet = setLumetriProperty(component, ["frame capture seconds", "capture seconds"], localSeconds);
+    return tokenSet && secondsSet;
+  }
+
+  function sequencePlayheadSeconds(seq) {
+    if (!seq || !seq.getPlayerPosition) {
+      throw new Error("Premiere did not expose the active playhead position.");
+    }
+    return timeToSeconds(seq.getPlayerPosition());
+  }
+
+  function clipSequenceStartSeconds(clip) {
+    return timeToSeconds(clip && clip.start);
+  }
+
+  function clipSequenceEndSeconds(clip) {
+    return timeToSeconds(clip && clip.end);
+  }
+
+  function assertPlayheadInsideClip(ref, playheadSeconds) {
+    var start = clipSequenceStartSeconds(ref.clip);
+    var end = clipSequenceEndSeconds(ref.clip);
+    if (!isFinite(start) || !isFinite(end) || end <= start) {
+      throw new Error(ref.name + ": selected clip has an invalid timeline range.");
+    }
+    if (playheadSeconds < start || playheadSeconds >= end) {
+      throw new Error("Move the playhead over the selected clip before running Auto Color.");
+    }
+  }
+
+  function clipLocalSecondsAtPlayhead(ref, playheadSeconds) {
+    return Math.max(0, playheadSeconds - clipSequenceStartSeconds(ref.clip));
+  }
+
   function propertyName(prop) {
     return normalizedName((prop && prop.displayName) || (prop && prop.matchName) || "");
   }
@@ -761,7 +797,13 @@ var AutoCutStudio = AutoCutStudio || {};
   }
 
   function markerColorForFocus(focus, target) {
-    return 3;
+    var colors = {
+      beats: 3,
+      spikes: 1,
+      music: 6,
+      vocal: 11
+    };
+    return colors[focus] || colors.beats;
   }
 
   function markerColorForEvent(event, focus, target) {
@@ -772,7 +814,7 @@ var AutoCutStudio = AutoCutStudio || {};
     return markerColorForFocus(focus, target);
   }
 
-  var BD_COLOR_INDICES = [3];
+  var BD_COLOR_INDICES = [1, 3, 6, 11];
 
   function isAutoCutStudioMarker(marker) {
     if (!marker) {
@@ -883,6 +925,18 @@ var AutoCutStudio = AutoCutStudio || {};
     return Math.round(seconds / frame) * frame;
   }
 
+  function isClipSourceTimeInRange(seconds, info) {
+    return isFinite(seconds) && seconds >= info.inPointSeconds && seconds < info.outPointSeconds;
+  }
+
+  function clipSourceTimeToSequenceTime(seconds, info) {
+    return info.startSeconds + (seconds - info.inPointSeconds);
+  }
+
+  function isSequenceTimeInClipRange(seconds, info) {
+    return isFinite(seconds) && seconds >= info.startSeconds && seconds < info.endSeconds;
+  }
+
   AutoCutStudio.getSelectedClipInfo = function () {
     try {
       return ok({ clip: getClipInfo(getExactlyOneSelectedClip()) });
@@ -895,7 +949,7 @@ var AutoCutStudio = AutoCutStudio || {};
     try {
       var payload = parseJson(payloadJson);
       var target = payload.target === "clip" ? "clip" : "sequence";
-      var focus = payload.focus || "spikes";
+      var focus = payload.focus || "beats";
       var events = payload.events || [];
       var seq = app.project.activeSequence;
       var clip = getExactlyOneSelectedClip();
@@ -924,7 +978,7 @@ var AutoCutStudio = AutoCutStudio || {};
       for (var i = 0; i < events.length; i++) {
         var eventTime = Number(events[i].time);
         var score = Number(events[i].score);
-        if (isNaN(eventTime) || eventTime < info.inPointSeconds || eventTime >= info.outPointSeconds) {
+        if (!isClipSourceTimeInRange(eventTime, info)) {
           skipped++;
           continue;
         }
@@ -934,9 +988,9 @@ var AutoCutStudio = AutoCutStudio || {};
         if (target === "clip") {
           setMarkerFields(createClipMarker(clip, snapToFrame(eventTime, seq)), color);
         } else {
-          var sequenceTime = info.startSeconds + (eventTime - info.inPointSeconds);
+          var sequenceTime = clipSourceTimeToSequenceTime(eventTime, info);
           sequenceTime = snapToFrame(sequenceTime, seq);
-          if (sequenceTime < info.startSeconds || sequenceTime >= info.endSeconds) {
+          if (!isSequenceTimeInClipRange(sequenceTime, info)) {
             skipped++;
             continue;
           }
@@ -1227,10 +1281,29 @@ var AutoCutStudio = AutoCutStudio || {};
     };
   }
 
-  function applyNativeAutoColor(ref) {
+  function applyNativeAutoColor(ref, captureFrameSeconds, captureToken) {
+    var hadExistingComponent = Boolean(findAutoCutColorComponent(ref.clip));
     var component = ensureAutoCutColorComponent(ref);
     var values = defaultAutoCutColorValues();
-    var missing = applyAutoCutColorValues(component, values);
+    var captureLocalSeconds = clipLocalSecondsAtPlayhead(ref, captureFrameSeconds);
+    var missing = [];
+    var warnings = [];
+
+    try {
+      missing = applyAutoCutColorValues(component, values);
+    } catch (error) {
+      missing = ["script_properties_unavailable"];
+      warnings.push(hadExistingComponent
+        ? "Native effect is present, but Premiere did not expose its controls to scripting; existing manual overrides could not be reset."
+        : "Native effect was applied with live default auto-analysis; Premiere did not expose its controls to scripting.");
+    }
+
+    if (!setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)) {
+      warnings.push(hadExistingComponent
+        ? "Native capture token was not exposed to scripting; existing effect may keep its previous captured frame."
+        : "Native capture controls were not exposed to scripting; the effect will fall back to live frame analysis.");
+    }
+
     var colorInfo = getClipColorScience(ref.clip);
 
     return {
@@ -1240,7 +1313,10 @@ var AutoCutStudio = AutoCutStudio || {};
       engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
       usedNativeAuto: true,
       missing: missing,
+      warnings: warnings,
       values: values,
+      captureFrameSeconds: captureFrameSeconds,
+      captureLocalSeconds: captureLocalSeconds,
       colorSpace: colorInfo.colorSpace,
       colorScience: colorInfo.colorScience
     };
@@ -1254,19 +1330,29 @@ var AutoCutStudio = AutoCutStudio || {};
       }
 
       var refs = getSelectedVideoClipRefs(seq);
-      if (refs.length === 0) {
-        throw new Error("Select at least one video clip in the active sequence.");
+      if (refs.length !== 1) {
+        throw new Error(refs.length < 1
+          ? "Select one video clip in the active sequence."
+          : "Select exactly one video clip for playhead-frame Auto Color.");
       }
 
+      var playheadSeconds = sequencePlayheadSeconds(seq);
+      assertPlayheadInsideClip(refs[0], playheadSeconds);
+      var captureToken = Math.max(1, Math.round((new Date()).getTime() % 1000000));
       var applied = 0;
       var skipped = 0;
       var errors = [];
+      var warnings = [];
       var clips = [];
 
       for (var i = 0; i < refs.length; i++) {
         var ref = refs[i];
         try {
-          clips.push(applyNativeAutoColor(ref));
+          var clipResult = applyNativeAutoColor(ref, playheadSeconds, captureToken);
+          clips.push(clipResult);
+          if (clipResult.warnings && clipResult.warnings.length) {
+            warnings.push(ref.name + ": " + clipResult.warnings.join("; "));
+          }
           applied++;
         } catch (error) {
           skipped++;
@@ -1283,11 +1369,12 @@ var AutoCutStudio = AutoCutStudio || {};
       return ok({
         applied: applied,
         skipped: skipped,
-        errors: errors,
+        errors: errors.concat(warnings),
         clips: clips,
         engine: clips[0].engine,
         usedNativeAuto: true,
         name: applied === 1 ? clips[0].name : applied + " selected clips",
+        captureFrameSeconds: playheadSeconds,
         colorScience: applied === 1 ? clips[0].colorScience : "mixed selected clips"
       });
     } catch (error) {
@@ -1295,9 +1382,7 @@ var AutoCutStudio = AutoCutStudio || {};
     }
   };
 
-  AutoCutStudio.autoColorAtPlayhead = function () {
-    return AutoCutStudio.autoColorSelectedClips();
-  };
+  AutoCutStudio.autoColorAtPlayhead = AutoCutStudio.autoColorSelectedClips;
 
   AutoCutStudio.resetColorGrade = function () {
     try {
@@ -1324,6 +1409,7 @@ var AutoCutStudio = AutoCutStudio || {};
           // 1. Try to find and reset AutoCut Color Engine first
           var autocutComponent = findAutoCutColorComponent(ref.clip);
           if (autocutComponent) {
+            setAutoCutCaptureControls(autocutComponent, 0, 0);
             applyAutoCutColorValues(autocutComponent, defaults);
             appliedToThisClip = true;
           }

@@ -41,7 +41,7 @@ resource 'PiPL' (16000) {
         },
         /* [8] */
         AE_Effect_Version {
-            524289  /* 1.0 */
+            524290  /* 1.0 build 2 */
         },
         /* [9] */
         AE_Effect_Info_Flags {
@@ -52,7 +52,7 @@ resource 'PiPL' (16000) {
             0x02000000 // DEEP_COLOR_AWARE
         },
         AE_Effect_Global_OutFlags_2 {
-            0x00000000
+            0x10001000 // FLOAT_COLOR_AWARE | MUTABLE_RENDER_SEQUENCE_DATA_SLOWER
         },
         /* [11] */
         AE_Effect_Match_Name {

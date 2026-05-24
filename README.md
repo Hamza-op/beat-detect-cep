@@ -19,7 +19,7 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 - Final marker selection keeps only the strongest event per whole second
 - Score/mode-based marker colors while marker name/comment fields remain blank
 - Exact marker count mode with Balanced, Strongest, and Spread selection strategies
-- Native AutoCutStudio color correction for selected video clips
+- Native AutoCutStudio color correction that samples the current playhead frame and applies one fixed 8/16/32-bpc grade across the selected clip
 - One-by-one Warp Stabilizer queue for selected video clips
 - Remove blank AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
@@ -83,8 +83,9 @@ Prerequisites:
 - Windows
 - PowerShell
 - Rust stable toolchain
+- Visual Studio Build Tools 2022 or newer with MSBuild and the Windows 10 SDK
 
-These prerequisites are only for building the installer. Editing machines do not need them.
+These prerequisites are only for building the installer and native color plugin. Editing machines do not need them.
 
 Build the analyzer only:
 
@@ -116,7 +117,9 @@ Output:
 AutoCutStudioSetup.exe
 ```
 
-The setup builder embeds only the whitelisted runtime files needed by the beats-only workflow, so stale optional binaries cannot enter a release accidentally.
+The package script builds the Rust analyzer and the native `AutoCutColorEngine.aex` before embedding runtime files. If MSBuild is unavailable, it refuses to package a missing or stale native plugin instead of silently shipping an old color engine.
+
+Production releases must sign the native plugin, analyzer, and installer. See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md).
 
 ## GitHub Release Build
 

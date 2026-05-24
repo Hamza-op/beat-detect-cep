@@ -536,6 +536,16 @@ if (!JSON.parse) {
     }
 
     applyVideoEffectToClipRef(ref, getLumetriEffect());
+    
+    // Refresh the clip reference from the timeline track to force ExtendScript to clear its components cache
+    var seq = app.project.activeSequence;
+    if (seq && seq.videoTracks) {
+      var track = seq.videoTracks[ref.trackIndex];
+      if (track && track.clips) {
+        ref.clip = track.clips[ref.clipIndex];
+      }
+    }
+
     component = findLumetriComponent(ref.clip);
     if (!component) {
       throw new Error("Lumetri Color was applied but its properties were not exposed to ExtendScript.");
@@ -572,6 +582,16 @@ if (!JSON.parse) {
     }
 
     applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
+    
+    // Refresh the clip reference from the timeline track to force ExtendScript to clear its components cache
+    var seq = app.project.activeSequence;
+    if (seq && seq.videoTracks) {
+      var track = seq.videoTracks[ref.trackIndex];
+      if (track && track.clips) {
+        ref.clip = track.clips[ref.clipIndex];
+      }
+    }
+
     component = findAutoCutColorComponent(ref.clip);
     if (!component) {
       throw new Error("AutoCutStudio Color Engine was applied but its properties were not exposed to ExtendScript.");

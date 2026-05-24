@@ -1,4 +1,4 @@
-var BeatDetect = BeatDetect || {};
+var AutoCutStudio = AutoCutStudio || {};
 
 (function () {
   var TICKS_PER_SECOND = 254016000000;
@@ -258,6 +258,51 @@ var BeatDetect = BeatDetect || {};
     return selected;
   }
 
+  function getPlayheadSeconds(seq) {
+    if (!seq) {
+      return 0;
+    }
+    if (seq.getPlayerPosition) {
+      return timeToSeconds(seq.getPlayerPosition());
+    }
+    if (seq.getCTI) {
+      return timeToSeconds(seq.getCTI());
+    }
+    throw new Error("This Premiere version does not expose the current playhead position to scripts.");
+  }
+
+  function getVideoClipRefAtPlayhead(seq) {
+    if (!seq || !seq.videoTracks) {
+      throw new Error("No active sequence video tracks are available.");
+    }
+
+    var playhead = getPlayheadSeconds(seq);
+    for (var i = 0; i < seq.videoTracks.numTracks; i++) {
+      var track = seq.videoTracks[i];
+      if (!track || !track.clips) {
+        continue;
+      }
+      for (var j = 0; j < track.clips.numItems; j++) {
+        var clip = track.clips[j];
+        if (!clip) {
+          continue;
+        }
+        var start = timeToSeconds(clip.start);
+        var end = timeToSeconds(clip.end);
+        if (playhead >= start && playhead < end) {
+          return {
+            clip: clip,
+            trackIndex: i,
+            clipIndex: j,
+            name: clip.name || "Playhead clip"
+          };
+        }
+      }
+    }
+
+    throw new Error("No video clip exists under the playhead.");
+  }
+
   function clipHasWarpStabilizer(clip) {
     if (!clip || !clip.components) {
       return false;
@@ -433,6 +478,29 @@ var BeatDetect = BeatDetect || {};
     throw new Error("Could not find the Warp Stabilizer video effect in this Premiere installation.");
   }
 
+  function getVideoEffectByNames(names, label) {
+    if (!app.enableQE) {
+      throw new Error("Premiere QE DOM is unavailable; cannot apply " + label + " by script.");
+    }
+    app.enableQE();
+    if (typeof qe === "undefined" || !qe.project || !qe.project.getVideoEffectByName) {
+      throw new Error("Premiere QE project API is unavailable; cannot find " + label + ".");
+    }
+
+    for (var i = 0; i < names.length; i++) {
+      var effect = qe.project.getVideoEffectByName(names[i]);
+      if (effect) {
+        return effect;
+      }
+    }
+
+    throw new Error("Could not find " + label + " in this Premiere installation.");
+  }
+
+  function getLumetriEffect() {
+    return getVideoEffectByNames(["Lumetri Color", "Lumetri"], "Lumetri Color");
+  }
+
   function applyVideoEffectToClipRef(ref, effect) {
     if (!app.enableQE) {
       throw new Error("Premiere QE DOM is unavailable.");
@@ -454,6 +522,147 @@ var BeatDetect = BeatDetect || {};
     }
 
     qeClip.addVideoEffect(effect);
+  }
+
+  function componentName(component) {
+    return normalizedName((component && component.displayName) || (component && component.matchName) || "");
+  }
+
+  function isLumetriComponent(component) {
+    var name = componentName(component);
+    return name.indexOf("lumetri") >= 0;
+  }
+
+  function findLumetriComponent(clip) {
+    if (!clip || !clip.components) {
+      return null;
+    }
+    for (var c = 0; c < clip.components.numItems; c++) {
+      var component = clip.components[c];
+      if (isLumetriComponent(component)) {
+        return component;
+      }
+    }
+    return null;
+  }
+
+  function ensureLumetriComponent(ref) {
+    var component = findLumetriComponent(ref.clip);
+    if (component) {
+      return component;
+    }
+
+    applyVideoEffectToClipRef(ref, getLumetriEffect());
+    component = findLumetriComponent(ref.clip);
+    if (!component) {
+      throw new Error("Lumetri Color was applied but its properties were not exposed to ExtendScript.");
+    }
+    return component;
+  }
+
+  function propertyName(prop) {
+    return normalizedName((prop && prop.displayName) || (prop && prop.matchName) || "");
+  }
+
+  function propertyMatches(prop, needles) {
+    var name = propertyName(prop);
+    for (var i = 0; i < needles.length; i++) {
+      if (name.indexOf(needles[i]) >= 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findPropertyRecursive(container, needles, depth) {
+    if (!container || !container.properties || depth > 8) {
+      return null;
+    }
+
+    for (var p = 0; p < container.properties.numItems; p++) {
+      var prop = container.properties[p];
+      if (propertyMatches(prop, needles) && prop.setValue) {
+        return prop;
+      }
+      var nested = findPropertyRecursive(prop, needles, depth + 1);
+      if (nested) {
+        return nested;
+      }
+    }
+    return null;
+  }
+
+  function setLumetriProperty(component, needles, value) {
+    var prop = findPropertyRecursive(component, needles, 0);
+    if (!prop) {
+      return false;
+    }
+    prop.setValue(Number(value), 1);
+    return true;
+  }
+
+  function applyLumetriValues(component, values) {
+    var applied = 0;
+    var missing = [];
+    var map = [
+      { key: "temperature", names: ["temperature", "temp"], value: values.temperature },
+      { key: "tint", names: ["tint"], value: values.tint },
+      { key: "exposure", names: ["exposure"], value: values.exposure },
+      { key: "contrast", names: ["contrast"], value: values.contrast },
+      { key: "saturation", names: ["saturation"], value: values.saturation },
+      { key: "vibrance", names: ["vibrance"], value: values.vibrance }
+    ];
+
+    for (var i = 0; i < map.length; i++) {
+      if (setLumetriProperty(component, map[i].names, map[i].value)) {
+        applied++;
+      } else {
+        missing.push(map[i].key);
+      }
+    }
+
+    if (applied === 0) {
+      throw new Error("Lumetri properties were not exposed by this Premiere version.");
+    }
+    return missing;
+  }
+
+  function triggerLumetriAuto(component) {
+    var prop = findPropertyRecursive(component, ["auto"], 0);
+    if (!prop || !prop.setValue) {
+      return false;
+    }
+    try {
+      prop.setValue(1, 1);
+      return true;
+    } catch (_) {
+      try {
+        prop.setValue(true, 1);
+        return true;
+      } catch (error) {
+        return false;
+      }
+    }
+  }
+
+  function normalizedColorPayload(payload) {
+    payload = payload || {};
+    function bounded(value, min, max, fallback) {
+      var number = Number(value);
+      if (isNaN(number)) {
+        number = fallback;
+      }
+      return Math.max(min, Math.min(max, number));
+    }
+
+    return {
+      temperature: bounded(payload.temperature, -100, 100, 0),
+      tint: bounded(payload.tint, -100, 100, 0),
+      exposure: bounded(payload.exposure, -5, 5, 0),
+      contrast: bounded(payload.contrast, -100, 100, 0),
+      saturation: bounded(payload.saturation, 0, 200, 100),
+      vibrance: bounded(payload.vibrance, -100, 100, 0)
+    };
   }
 
   function getMediaPath(projectItem) {
@@ -544,7 +753,7 @@ var BeatDetect = BeatDetect || {};
 
   var BD_COLOR_INDICES = [3];
 
-  function isBeatDetectMarker(marker) {
+  function isAutoCutStudioMarker(marker) {
     if (!marker) {
       return false;
     }
@@ -598,7 +807,7 @@ var BeatDetect = BeatDetect || {};
     var marker = markerCollection.getFirstMarker();
     while (marker) {
       var seconds = markerTimeSeconds(marker);
-      if (isBeatDetectMarker(marker) && seconds >= startSeconds && seconds < endSeconds) {
+      if (isAutoCutStudioMarker(marker) && seconds >= startSeconds && seconds < endSeconds) {
         found.push(marker);
       }
       if (!markerCollection.getNextMarker) {
@@ -653,7 +862,7 @@ var BeatDetect = BeatDetect || {};
     return Math.round(seconds / frame) * frame;
   }
 
-  BeatDetect.getSelectedClipInfo = function () {
+  AutoCutStudio.getSelectedClipInfo = function () {
     try {
       return ok({ clip: getClipInfo(getExactlyOneSelectedClip()) });
     } catch (error) {
@@ -661,7 +870,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.applyMarkers = function (payloadJson) {
+  AutoCutStudio.applyMarkers = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
       var target = payload.target === "clip" ? "clip" : "sequence";
@@ -721,7 +930,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.removeMarkers = function (payloadJson) {
+  AutoCutStudio.removeMarkers = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
       var target = payload.target === "clip" ? "clip" : "sequence";
@@ -763,7 +972,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.applyGimbalZoom = function (payloadJson) {
+  AutoCutStudio.applyGimbalZoom = function (payloadJson) {
     try {
       var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0, style: "smooth_in" };
       var zoomTarget = Math.max(101.0, Math.min(150.0, Number(payload.zoom) || 110.0));
@@ -864,7 +1073,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.clearGimbalZoom = function () {
+  AutoCutStudio.clearGimbalZoom = function () {
     try {
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -906,7 +1115,137 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.getSelectedVideoClipCount = function () {
+  AutoCutStudio.applyColorGrade = function (payloadJson) {
+    try {
+      var payload = payloadJson ? parseJson(payloadJson) : {};
+      var values = normalizedColorPayload(payload);
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var refs = getSelectedVideoClipRefs(seq);
+      if (refs.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+
+      var applied = 0;
+      var skipped = 0;
+      var errors = [];
+
+      for (var i = 0; i < refs.length; i++) {
+        var ref = refs[i];
+        try {
+          var component = ensureLumetriComponent(ref);
+          var missing = applyLumetriValues(component, values);
+          if (missing.length) {
+            errors.push(ref.name + ": missing " + missing.join(", "));
+          }
+          applied++;
+        } catch (error) {
+          skipped++;
+          errors.push(ref.name + ": " + (error.message || String(error)));
+        }
+      }
+
+      if (applied === 0) {
+        throw new Error(errors.length ? errors.join(" | ") : "Could not apply Lumetri Color to selected clips.");
+      }
+
+      return ok({ applied: applied, skipped: skipped, errors: errors });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  AutoCutStudio.autoColorAtPlayhead = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var ref = getVideoClipRefAtPlayhead(seq);
+      var component = ensureLumetriComponent(ref);
+      var usedNativeAuto = triggerLumetriAuto(component);
+
+      if (!usedNativeAuto) {
+        applyLumetriValues(component, {
+          temperature: 0,
+          tint: 0,
+          exposure: 0,
+          contrast: 12,
+          saturation: 108,
+          vibrance: 16
+        });
+      }
+
+      return ok({
+        name: ref.name,
+        trackIndex: ref.trackIndex,
+        clipIndex: ref.clipIndex,
+        usedNativeAuto: usedNativeAuto
+      });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  AutoCutStudio.resetColorGrade = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+
+      var refs = getSelectedVideoClipRefs(seq);
+      if (refs.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+
+      var defaults = {
+        temperature: 0,
+        tint: 0,
+        exposure: 0,
+        contrast: 0,
+        saturation: 100,
+        vibrance: 0
+      };
+      var reset = 0;
+      var skipped = 0;
+      var errors = [];
+
+      for (var i = 0; i < refs.length; i++) {
+        var ref = refs[i];
+        try {
+          var component = findLumetriComponent(ref.clip);
+          if (!component) {
+            skipped++;
+            errors.push(ref.name + ": Lumetri Color not found");
+            continue;
+          }
+          var missing = applyLumetriValues(component, defaults);
+          if (missing.length) {
+            errors.push(ref.name + ": missing " + missing.join(", "));
+          }
+          reset++;
+        } catch (error) {
+          skipped++;
+          errors.push(ref.name + ": " + (error.message || String(error)));
+        }
+      }
+
+      if (reset === 0) {
+        throw new Error(errors.length ? errors.join(" | ") : "No Lumetri Color controls were reset.");
+      }
+
+      return ok({ reset: reset, skipped: skipped, errors: errors });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  AutoCutStudio.getSelectedVideoClipCount = function () {
     try {
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -918,7 +1257,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.applyWarpStabilizerToSelectedClip = function (payloadJson) {
+  AutoCutStudio.applyWarpStabilizerToSelectedClip = function (payloadJson) {
     try {
       var payload = payloadJson ? parseJson(payloadJson) : {};
       var index = Number(payload.index) || 0;
@@ -960,7 +1299,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.isVideoEffectAnalysisDone = function () {
+  AutoCutStudio.isVideoEffectAnalysisDone = function () {
     try {
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -975,7 +1314,7 @@ var BeatDetect = BeatDetect || {};
     }
   };
 
-  BeatDetect.runDiagnostics = function () {
+  AutoCutStudio.runDiagnostics = function () {
     var diagnostics = [];
     try {
       diagnostics.push("Premiere bridge: OK");
@@ -1006,3 +1345,4 @@ var BeatDetect = BeatDetect || {};
     }
   };
 })();
+

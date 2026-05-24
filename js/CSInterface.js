@@ -14,12 +14,12 @@
     }
 
     if (typeof callback === "function") {
-      if (script.indexOf("BeatDetect.getSelectedClipInfo") === 0) {
+      if (script.indexOf("AutoCutStudio.getSelectedClipInfo") === 0) {
         callback(JSON.stringify({
           ok: true,
           clip: {
             name: "Browser Preview Track",
-            mediaPath: "__beat_detect_preview__",
+            mediaPath: "__autocut_studio_preview__",
             startSeconds: 0,
             endSeconds: 42,
             inPointSeconds: 0,
@@ -29,8 +29,8 @@
         return;
       }
 
-      if (script.indexOf("BeatDetect.applyMarkers") === 0) {
-        var match = script.match(/BeatDetect\.applyMarkers\((.*)\)/);
+      if (script.indexOf("AutoCutStudio.applyMarkers") === 0) {
+        var match = script.match(/AutoCutStudio\.applyMarkers\((.*)\)/);
         var applied = 0;
         if (match && match[1]) {
           try {
@@ -44,23 +44,44 @@
         return;
       }
 
-      if (script.indexOf("BeatDetect.removeMarkers") === 0) {
+      if (script.indexOf("AutoCutStudio.removeMarkers") === 0) {
         callback(JSON.stringify({ ok: true, removed: 12 }));
         return;
       }
 
-      if (script.indexOf("BeatDetect.applyGimbalZoom") === 0) {
+      if (script.indexOf("AutoCutStudio.applyGimbalZoom") === 0) {
         callback(JSON.stringify({ ok: true, applied: 3 }));
         return;
       }
 
-      if (script.indexOf("BeatDetect.getSelectedVideoClipCount") === 0) {
+      if (script.indexOf("AutoCutStudio.clearGimbalZoom") === 0) {
+        callback(JSON.stringify({ ok: true, cleared: 3, skipped: 0, errors: [] }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.autoColorAtPlayhead") === 0) {
+        callback(JSON.stringify({
+          ok: true,
+          name: "Preview Clip 1",
+          trackIndex: 0,
+          clipIndex: 0,
+          usedNativeAuto: false
+        }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.resetColorGrade") === 0) {
+        callback(JSON.stringify({ ok: true, reset: 1, skipped: 0, errors: [] }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.getSelectedVideoClipCount") === 0) {
         callback(JSON.stringify({ ok: true, count: 3 }));
         return;
       }
 
-      if (script.indexOf("BeatDetect.applyWarpStabilizerToSelectedClip") === 0) {
-        var warpMatch = script.match(/BeatDetect\.applyWarpStabilizerToSelectedClip\((.*)\)/);
+      if (script.indexOf("AutoCutStudio.applyWarpStabilizerToSelectedClip") === 0) {
+        var warpMatch = script.match(/AutoCutStudio\.applyWarpStabilizerToSelectedClip\((.*)\)/);
         var index = 0;
         if (warpMatch && warpMatch[1]) {
           try {
@@ -80,12 +101,12 @@
         return;
       }
 
-      if (script.indexOf("BeatDetect.isVideoEffectAnalysisDone") === 0) {
+      if (script.indexOf("AutoCutStudio.isVideoEffectAnalysisDone") === 0) {
         callback(JSON.stringify({ ok: true, done: true }));
         return;
       }
 
-      if (script.indexOf("BeatDetect.runDiagnostics") === 0) {
+      if (script.indexOf("AutoCutStudio.runDiagnostics") === 0) {
         callback(JSON.stringify({
           ok: true,
           diagnostics: [
@@ -103,3 +124,4 @@
 
   window.CSInterface = CSInterface;
 })();
+

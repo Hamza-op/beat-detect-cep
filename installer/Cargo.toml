@@ -1,5 +1,5 @@
 [package]
-name = "beat_detect_setup"
+name = "autocut_studio_setup"
 version = "0.1.0"
 edition = "2021"
 

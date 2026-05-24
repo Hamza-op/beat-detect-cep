@@ -56,12 +56,12 @@ jobs:
         shell: pwsh
         run: |
           $required = @(
-            ".\BeatDetectSetup.exe",
-            ".\dist\com.beatdetect.spikemarker\CSXS\manifest.xml",
-            ".\dist\com.beatdetect.spikemarker\index.html",
-            ".\dist\com.beatdetect.spikemarker\js\main.js",
-            ".\dist\com.beatdetect.spikemarker\jsx\host.jsx",
-            ".\dist\com.beatdetect.spikemarker\bin\beat_analyzer.exe"
+            ".\AutoCutStudioSetup.exe",
+            ".\dist\com.autocutstudio.panel\CSXS\manifest.xml",
+            ".\dist\com.autocutstudio.panel\index.html",
+            ".\dist\com.autocutstudio.panel\js\main.js",
+            ".\dist\com.autocutstudio.panel\jsx\host.jsx",
+            ".\dist\com.autocutstudio.panel\bin\beat_analyzer.exe"
           )
           foreach ($path in $required) {
             if (!(Test-Path -LiteralPath $path)) {
@@ -73,17 +73,17 @@ jobs:
         shell: pwsh
         run: |
           Compress-Archive `
-            -Path .\dist\com.beatdetect.spikemarker `
-            -DestinationPath .\BeatDetect-CEP-Windows.zip `
+            -Path .\dist\com.autocutstudio.panel `
+            -DestinationPath .\AutoCutStudio-CEP-Windows.zip `
             -Force
 
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: BeatDetect-Windows
+          name: AutoCutStudio-Windows
           path: |
-            BeatDetectSetup.exe
-            BeatDetect-CEP-Windows.zip
+            AutoCutStudioSetup.exe
+            AutoCutStudio-CEP-Windows.zip
           if-no-files-found: error
 
       - name: Publish GitHub release
@@ -92,6 +92,6 @@ jobs:
           tag_name: "build-${{ github.run_number }}"
           name: "Auto-Release Build ${{ github.run_number }}"
           files: |
-            BeatDetectSetup.exe
-            BeatDetect-CEP-Windows.zip
+            AutoCutStudioSetup.exe
+            AutoCutStudio-CEP-Windows.zip
           generate_release_notes: true

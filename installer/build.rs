@@ -3,7 +3,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-const EXTENSION_ID: &str = "com.beatdetect.spikemarker";
+const EXTENSION_ID: &str = "com.autocutstudio.panel";
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
@@ -15,6 +15,7 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let generated_path = out_dir.join("generated_files.rs");
 
+    println!("cargo:rerun-if-changed={}", package_dir.display());
     if !package_dir.exists() {
         write_compile_error(
             &generated_path,
@@ -23,8 +24,6 @@ fn main() {
         .expect("write generated installer source");
         return;
     }
-
-    println!("cargo:rerun-if-changed={}", package_dir.display());
 
     let mut files = Vec::new();
     collect_files(&package_dir, &mut files).expect("collect packaged extension files");

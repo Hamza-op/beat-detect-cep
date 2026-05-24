@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Beat Detect</title>
+    <title>AutoCut Studio</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700;12..96,800&family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap">
@@ -24,10 +24,10 @@
           <div class="wordmark">
             <span class="subtitle">
               <span class="led-dot" aria-hidden="true"></span>
-              <span class="full-label">PREMIERE&nbsp;·&nbsp;BEAT&nbsp;LAB</span>
-              <span class="short-label">BEAT&nbsp;LAB</span>
+              <span class="full-label">PREMIERE&nbsp;·&nbsp;CUT&nbsp;LAB</span>
+              <span class="short-label">CUT&nbsp;LAB</span>
             </span>
-            <h1>BEAT&nbsp;<em>DETECT</em></h1>
+            <h1>AUTOCUT&nbsp;<em>STUDIO</em></h1>
           </div>
         </div>
         <span class="version-tag"><span class="vt-mark">●</span>v1.0.0</span>
@@ -38,17 +38,34 @@
         Select one audio or linked clip in the active sequence.
       </div>
 
-      <!-- ── Section 1: Beat Marker Engine ───────────────── -->
-      <section class="panel-card animate-fade-in" style="animation-delay: 0.15s;" aria-label="Beat Marker Generation">
-        <div class="card-header">
-          <div class="header-indicator"></div>
-          <h2>Marker Configuration</h2>
-          <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </div>
+      <!-- Main workflow tabs -->
+      <nav class="main-tabs animate-fade-in" style="animation-delay: 0.12s;" aria-label="AutoCut Studio workspace">
+        <button type="button" id="mainTabMarkersButton" class="main-tab-btn is-active" aria-controls="mainTabMarkers" aria-selected="true">
+          <span>Markers</span>
+        </button>
+        <button type="button" id="mainTabColorButton" class="main-tab-btn" aria-controls="mainTabColor" aria-selected="false">
+          <span>Color</span>
+        </button>
+        <button type="button" id="mainTabToolsButton" class="main-tab-btn" aria-controls="mainTabTools" aria-selected="false">
+          <span>Tools</span>
+        </button>
+        <button type="button" id="mainTabDiagnosticsButton" class="main-tab-btn" aria-controls="mainTabDiagnostics" aria-selected="false">
+          <span>Diag</span>
+        </button>
+      </nav>
 
-        <div class="card-body">
+      <!-- ── Section 1: Beat Marker Engine ───────────────── -->
+      <div id="mainTabMarkers" class="main-tab-panel is-active" role="tabpanel" aria-labelledby="mainTabMarkersButton">
+        <section class="panel-card animate-fade-in" style="animation-delay: 0.15s;" aria-label="Beat Marker Generation">
+          <div class="card-header">
+            <div class="header-indicator"></div>
+            <h2>Marker Configuration</h2>
+            <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+
+          <div class="card-body">
           <!-- Marker Destination -->
           <div class="form-row">
             <div class="form-group flex-1">
@@ -72,7 +89,7 @@
               <div class="mode-meta-row">
                 <div class="engine-indicator">
                   <span class="pulse-dot"></span>
-                  <span class="engine-name">BEATS&nbsp;DETECTOR</span>
+                  <span class="engine-name">BEAT&nbsp;ENGINE</span>
                 </div>
                 <span class="engine-badge">FRAME&nbsp;LOCKED</span>
               </div>
@@ -205,20 +222,74 @@
               <span class="short-label">Clear Markers</span>
             </button>
           </div>
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
+
+      <!-- ── Section 2: Native Color Controls ─────────────── -->
+      <div id="mainTabColor" class="main-tab-panel" role="tabpanel" aria-labelledby="mainTabColorButton" hidden>
+        <section class="panel-card animate-fade-in" style="animation-delay: 0.18s;" aria-label="Native Color Engine">
+          <div class="card-header">
+            <div class="header-indicator tint-color"></div>
+            <h2>Native Color Engine</h2>
+            <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+
+          <div class="card-body color-grid">
+            <div class="mode-summary-card color-engine-card">
+              <div class="mode-meta-row">
+                <div class="engine-indicator">
+                  <span class="pulse-dot color-dot"></span>
+                  <span class="engine-name">LUMETRI&nbsp;PIPELINE</span>
+                </div>
+                <span class="engine-badge color-badge">NATIVE</span>
+              </div>
+              <p class="engine-desc">Applies a controlled Lumetri grade to selected video clips without rendering or round-tripping.</p>
+            </div>
+
+            <div class="lcd-screen color-auto-readout grid-span-full">
+              <div class="lcd-value">AUTO</div>
+              <div class="lcd-label">clip under playhead</div>
+            </div>
+
+            <button id="autoColorButton" class="btn-tool color-action grid-span-full" type="button">
+              <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="13.5" cy="6.5" r="2.5"/>
+                <circle cx="17.5" cy="10.5" r="2.5"/>
+                <circle cx="8.5" cy="7.5" r="2.5"/>
+                <circle cx="6.5" cy="12.5" r="2.5"/>
+                <path d="M12 22a10 10 0 1 1 10-10c0 2-1.5 3-3.5 3H17a2 2 0 0 0-2 2v1.5c0 2-1 3.5-3 3.5Z"/>
+              </svg>
+              <span class="full-label">Auto Color Current Clip</span>
+              <span class="short-label">Auto Color</span>
+            </button>
+
+            <button id="resetColorButton" class="btn-tool btn-tool-danger grid-span-full" type="button">
+              <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 12a9 9 0 1 0 3-6.7"/>
+                <path d="M3 4v6h6"/>
+              </svg>
+              <span class="full-label">Reset Lumetri</span>
+              <span class="short-label">Reset</span>
+            </button>
+          </div>
+        </section>
+      </div>
 
       <!-- ── Section 2: Creative Editing Tools (Modular Toolbox) ── -->
-      <section class="panel-card animate-fade-in" style="animation-delay: 0.2s;" aria-label="Creative Toolbox">
-        <div class="card-header">
-          <div class="header-indicator tint-creative"></div>
-          <h2>Creative Editing Toolbox</h2>
-          <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="6 9 12 15 18 9"/>
-          </svg>
-        </div>
+      <div id="mainTabTools" class="main-tab-panel" role="tabpanel" aria-labelledby="mainTabToolsButton" hidden>
+        <section class="panel-card animate-fade-in" style="animation-delay: 0.2s;" aria-label="Creative Toolbox">
+          <div class="card-header">
+            <div class="header-indicator tint-creative"></div>
+            <h2>Creative Editing Toolbox</h2>
+            <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
 
-        <div class="card-body tools-grid">
+          <div class="card-body tools-grid">
           
           <!-- Gimbal Zoom Style Dropdown -->
           <div class="form-group grid-span-full">
@@ -267,7 +338,7 @@
             <span class="short-label">Stab</span>
           </button>
 
-          <button id="clearZoomButton" class="btn-tool btn-tool-danger grid-span-full" type="button" title="Remove Beat Detect zoom keyframes from selected video clips">
+            <button id="clearZoomButton" class="btn-tool btn-tool-danger grid-span-full" type="button" title="Remove AutoCut Studio zoom keyframes from selected video clips">
             <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M3 6h18"/>
               <path d="M8 6V4h8v2"/>
@@ -278,27 +349,40 @@
             <span class="short-label">Clear Zoom</span>
           </button>
 
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
 
       <!-- ── Footer ─────────────────────────────────────── -->
-      <footer class="panel-footer animate-fade-in" style="animation-delay: 0.25s;">
-        <div class="utility-row">
-          <button id="diagnosticsButton" class="btn-minor" type="button">
-            Diagnostics
-          </button>
-          <button id="clearLogsButton" class="btn-minor" type="button" title="Clear diagnostic logs">
-            Clear Logs
-          </button>
-        </div>
-        
-        <a href="https://github.com/Hamza-op" id="githubLink" class="github-link" target="_blank">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-            <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-          </svg>
-          Hamza-op / Beat Detect
-        </a>
-      </footer>
+      <div id="mainTabDiagnostics" class="main-tab-panel" role="tabpanel" aria-labelledby="mainTabDiagnosticsButton" hidden>
+        <footer class="panel-footer panel-card animate-fade-in" style="animation-delay: 0.25s;">
+          <div class="card-header">
+            <div class="header-indicator"></div>
+            <h2>Diagnostics</h2>
+            <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+
+          <div class="card-body">
+            <div class="utility-row">
+              <button id="diagnosticsButton" class="btn-minor" type="button">
+                Diagnostics
+              </button>
+              <button id="clearLogsButton" class="btn-minor" type="button" title="Clear diagnostic logs">
+                Clear Logs
+              </button>
+            </div>
+            
+            <a href="https://github.com/Hamza-op" id="githubLink" class="github-link" target="_blank">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+              </svg>
+              Hamza-op / AutoCut Studio
+            </a>
+          </div>
+        </footer>
+      </div>
 
     </main>
 

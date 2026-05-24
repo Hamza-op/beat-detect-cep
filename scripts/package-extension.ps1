@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$extensionId = "com.beatdetect.spikemarker"
+$extensionId = "com.autocutstudio.panel"
 $distRoot = Join-Path $root "dist"
 $packageDir = Join-Path $distRoot $extensionId
 
@@ -32,8 +32,16 @@ $packageBinDir = Join-Path $packageDir "bin"
 New-Item -ItemType Directory -Force -Path $packageBinDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "bin\beat_analyzer.exe") -Destination (Join-Path $packageBinDir "beat_analyzer.exe") -Force
 
+$nativeSource = Join-Path $root "native"
+if (Test-Path -LiteralPath $nativeSource) {
+  $nativeFiles = Get-ChildItem -LiteralPath $nativeSource -Recurse -File | Where-Object { $_.Name -ne ".gitkeep" }
+  if ($nativeFiles.Count -gt 0) {
+    Copy-Item -LiteralPath $nativeSource -Destination (Join-Path $packageDir "native") -Recurse -Force
+  }
+}
+
 $installText = @"
-Beat Detect install
+AutoCut Studio install
 
 Copy this whole folder:
   $extensionId
@@ -44,7 +52,7 @@ Into Adobe CEP extensions, usually:
 Final path should look like:
   C:\Program Files (x86)\Common Files\Adobe\CEP\extensions\$extensionId\CSXS\manifest.xml
 
-If it does not appear in Premiere under Window -> Extensions -> Beat Detect,
+If it does not appear in Premiere under Window -> Extensions -> AutoCut Studio,
 enable unsigned CEP extensions for your Premiere/CEP version:
 
   reg add "HKCU\Software\Adobe\CSXS.11" /v PlayerDebugMode /t REG_SZ /d 1 /f

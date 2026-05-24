@@ -19,6 +19,8 @@
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
     clearZoomButton:  document.getElementById("clearZoomButton"),
     warpStabilizerButton: document.getElementById("warpStabilizerButton"),
+    autoColorButton: document.getElementById("autoColorButton"),
+    resetColorButton: document.getElementById("resetColorButton"),
     status:           document.getElementById("status"),
     densityPanel:     document.getElementById("densityPanel"),
     densitySlider:    document.getElementById("densitySlider"),
@@ -37,7 +39,15 @@
     densityTabContent:document.getElementById("densityTabContent"),
     limitTabContent:  document.getElementById("limitTabContent"),
     offsetSlider:     document.getElementById("offsetSlider"),
-    offsetLabel:      document.getElementById("offsetLabel")
+    offsetLabel:      document.getElementById("offsetLabel"),
+    mainTabMarkersButton: document.getElementById("mainTabMarkersButton"),
+    mainTabColorButton: document.getElementById("mainTabColorButton"),
+    mainTabToolsButton: document.getElementById("mainTabToolsButton"),
+    mainTabDiagnosticsButton: document.getElementById("mainTabDiagnosticsButton"),
+    mainTabMarkers: document.getElementById("mainTabMarkers"),
+    mainTabColor: document.getElementById("mainTabColor"),
+    mainTabTools: document.getElementById("mainTabTools"),
+    mainTabDiagnostics: document.getElementById("mainTabDiagnostics")
   };
 
   function getDetectionFocus() {
@@ -62,6 +72,8 @@
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
     if (dom.clearZoomButton) dom.clearZoomButton.disabled = isBusy;
     if (dom.warpStabilizerButton) dom.warpStabilizerButton.disabled = isBusy;
+    if (dom.autoColorButton) dom.autoColorButton.disabled = isBusy;
+    if (dom.resetColorButton) dom.resetColorButton.disabled = isBusy;
     if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
   }
@@ -84,7 +96,7 @@
       var path = req("path");
       var os = req("os");
       var appData = typeof process !== "undefined" && process.env ? process.env.APPDATA : "";
-      var dir = path.join(appData || os.tmpdir(), "BeatDetect");
+      var dir = path.join(appData || os.tmpdir(), "AutoCutStudio");
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
@@ -191,7 +203,7 @@
       return devBuild;
     }
 
-    throw new Error("Analyzer executable is missing. Reinstall Beat Detect or run scripts/build-setup-exe.ps1.");
+    throw new Error("Analyzer executable is missing. Reinstall AutoCut Studio or run scripts/build-setup-exe.ps1.");
   }
 
   function clipAnalysisRange(clip) {
@@ -240,7 +252,7 @@
   }
 
   function runAnalyzer(mediaPath, focus, clip) {
-    if (mediaPath === "__beat_detect_preview__" || isBrowserPreview()) {
+    if (mediaPath === "__autocut_studio_preview__" || isBrowserPreview()) {
       return Promise.resolve(makePreviewEvents(focus));
     }
     if (!mediaPath || typeof mediaPath !== "string") {
@@ -836,7 +848,7 @@ function keepStrongestPerSecond(events) {
     dom.densityPanel.classList.add("is-hidden");
     setStatus("Reading the selected clip path from Premiere...", false, true);
 
-    cepEval("BeatDetect.getSelectedClipInfo()")
+    cepEval("AutoCutStudio.getSelectedClipInfo()")
       .then(function (result) {
         state.clip = result.clip;
         if (!state.clip.mediaPath) {
@@ -889,9 +901,9 @@ function keepStrongestPerSecond(events) {
       events: eventsForPremiere(state.filteredEvents, getDetectionFocus())
     };
 
-    cepEval("BeatDetect.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
+    cepEval("AutoCutStudio.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Replaced Beat Detect markers in range. Applied " + result.applied + "; skipped " + result.skipped + " outside the selected clip range.", false, false, true);
+        setStatus("Replaced AutoCut Studio markers in range. Applied " + result.applied + "; skipped " + result.skipped + " outside the selected clip range.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -908,15 +920,15 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Removing Beat Detect markers from the selected " + (dom.markerTarget.value === "clip" ? "clip" : "timeline range") + "...", false, true);
+    setStatus("Removing AutoCut Studio markers from the selected " + (dom.markerTarget.value === "clip" ? "clip" : "timeline range") + "...", false, true);
 
     var payload = {
       target: dom.markerTarget.value
     };
 
-    cepEval("BeatDetect.removeMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
+    cepEval("AutoCutStudio.removeMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
-        setStatus("Removed " + result.removed + " Beat Detect markers.", false, false, true);
+        setStatus("Removed " + result.removed + " AutoCut Studio markers.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -940,7 +952,7 @@ function keepStrongestPerSecond(events) {
     setStatus("Applying " + styleLabel + " gimbal zoom to selected clips (" + zoomValue + "%)...");
 
     var payload = { zoom: zoomValue, style: zoomStyle };
-    cepEval("BeatDetect.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
+    cepEval("AutoCutStudio.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
         var skipped = Number(result.skipped) || 0;
         var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
@@ -963,11 +975,56 @@ function keepStrongestPerSecond(events) {
     setBusy(true);
     setStatus("Clearing zoom keyframes from selected video clips...", false, true);
 
-    cepEval("BeatDetect.clearGimbalZoom()")
+    cepEval("AutoCutStudio.clearGimbalZoom()")
       .then(function(result) {
         var skipped = Number(result.skipped) || 0;
         var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
         setStatus("Cleared zoom keyframes on " + result.cleared + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
+      })
+      .catch(function(error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function() {
+        setBusy(false);
+      });
+  }
+
+  function autoColorAtPlayhead() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Auto correcting the video clip under the playhead...", false, true);
+
+    cepEval("AutoCutStudio.autoColorAtPlayhead()")
+      .then(function(result) {
+        var method = result.usedNativeAuto ? "Lumetri Auto" : "fallback Lumetri correction";
+        setStatus("Auto color applied to " + result.name + " using " + method + ".", false, false, true);
+      })
+      .catch(function(error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function() {
+        setBusy(false);
+      });
+  }
+
+  function resetColorGrade() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    setStatus("Resetting Lumetri color controls on selected video clips...", false, true);
+
+    cepEval("AutoCutStudio.resetColorGrade()")
+      .then(function(result) {
+        var skipped = Number(result.skipped) || 0;
+        var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
+        setStatus("Reset Lumetri controls on " + result.reset + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
       })
       .catch(function(error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -989,7 +1046,7 @@ function keepStrongestPerSecond(events) {
     var timeoutMs = 20 * 60 * 1000;
 
     return sleep(1200).then(function poll() {
-      return cepEval("BeatDetect.isVideoEffectAnalysisDone()")
+      return cepEval("AutoCutStudio.isVideoEffectAnalysisDone()")
         .then(function(result) {
           if (result.done) {
             return result;
@@ -1019,7 +1076,7 @@ function keepStrongestPerSecond(events) {
     setBusy(true);
     setStatus("Reading selected video clips for Warp Stabilizer...", false, true);
 
-    cepEval("BeatDetect.getSelectedVideoClipCount()")
+    cepEval("AutoCutStudio.getSelectedVideoClipCount()")
       .then(function(result) {
         var total = Number(result.count) || 0;
         if (total < 1) {
@@ -1037,7 +1094,7 @@ function keepStrongestPerSecond(events) {
 
           setStatus("Applying Warp Stabilizer to clip " + (index + 1) + " of " + total + "...", false, true);
           var payload = { index: index };
-          return cepEval("BeatDetect.applyWarpStabilizerToSelectedClip(" + JSON.stringify(JSON.stringify(payload)) + ")")
+          return cepEval("AutoCutStudio.applyWarpStabilizerToSelectedClip(" + JSON.stringify(JSON.stringify(payload)) + ")")
             .then(function(applyResult) {
               var name = applyResult.name || ("clip " + (index + 1));
               if (applyResult.skipped) {
@@ -1073,10 +1130,10 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Running Beat Detect diagnostics for v" + APP_VERSION + "...");
+    setStatus("Running AutoCut Studio diagnostics for v" + APP_VERSION + "...");
 
     var checks = [];
-    checks.push("Beat Detect: v" + APP_VERSION);
+    checks.push("AutoCut Studio: v" + APP_VERSION);
     var req = getNodeRequire();
     checks.push(req ? "CEP Node: OK" : (isBrowserPreview() ? "CEP Node: simulated in browser preview" : "CEP Node: FAIL"));
 
@@ -1091,7 +1148,7 @@ function keepStrongestPerSecond(events) {
       checks.push("Analyzer: simulated demo events");
     }
 
-    cepEval("BeatDetect.runDiagnostics()")
+    cepEval("AutoCutStudio.runDiagnostics()")
       .then(function (result) {
         if (result.diagnostics && result.diagnostics.length) {
           checks = checks.concat(result.diagnostics);
@@ -1132,7 +1189,7 @@ function keepStrongestPerSecond(events) {
       var path = req("path");
       var os = req("os");
       var appData = typeof process !== "undefined" && process.env ? process.env.APPDATA : "";
-      var dir = path.join(appData || os.tmpdir(), "BeatDetect");
+      var dir = path.join(appData || os.tmpdir(), "AutoCutStudio");
 
       var panelLog = path.join(dir, "panel.log");
 
@@ -1160,6 +1217,32 @@ function keepStrongestPerSecond(events) {
     }
   }
 
+  function activateMainTab(tabName) {
+    var tabs = [
+      { name: "markers", button: dom.mainTabMarkersButton, panel: dom.mainTabMarkers },
+      { name: "color", button: dom.mainTabColorButton, panel: dom.mainTabColor },
+      { name: "tools", button: dom.mainTabToolsButton, panel: dom.mainTabTools },
+      { name: "diagnostics", button: dom.mainTabDiagnosticsButton, panel: dom.mainTabDiagnostics }
+    ];
+
+    for (var i = 0; i < tabs.length; i++) {
+      var tab = tabs[i];
+      var active = tab.name === tabName;
+      if (tab.button) {
+        tab.button.classList.toggle("is-active", active);
+        tab.button.setAttribute("aria-selected", active ? "true" : "false");
+      }
+      if (tab.panel) {
+        tab.panel.classList.toggle("is-active", active);
+        if (active) {
+          tab.panel.removeAttribute("hidden");
+        } else {
+          tab.panel.setAttribute("hidden", "hidden");
+        }
+      }
+    }
+  }
+
   dom.analyzeButton.addEventListener("click", analyzeTrack);
   dom.diagnosticsButton.addEventListener("click", runDiagnostics);
   if (dom.clearLogsButton) dom.clearLogsButton.addEventListener("click", clearLogs);
@@ -1168,6 +1251,8 @@ function keepStrongestPerSecond(events) {
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
   if (dom.clearZoomButton) dom.clearZoomButton.addEventListener("click", clearGimbalZoom);
   if (dom.warpStabilizerButton) dom.warpStabilizerButton.addEventListener("click", applyWarpStabilizerQueue);
+  if (dom.autoColorButton) dom.autoColorButton.addEventListener("click", autoColorAtPlayhead);
+  if (dom.resetColorButton) dom.resetColorButton.addEventListener("click", resetColorGrade);
   if (dom.randomizeButton) {
     dom.randomizeButton.addEventListener("click", function() {
       // If no target count is set, default to current filtered count
@@ -1196,6 +1281,26 @@ function keepStrongestPerSecond(events) {
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function() {
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
+    });
+  }
+  if (dom.mainTabMarkersButton) {
+    dom.mainTabMarkersButton.addEventListener("click", function() {
+      activateMainTab("markers");
+    });
+  }
+  if (dom.mainTabColorButton) {
+    dom.mainTabColorButton.addEventListener("click", function() {
+      activateMainTab("color");
+    });
+  }
+  if (dom.mainTabToolsButton) {
+    dom.mainTabToolsButton.addEventListener("click", function() {
+      activateMainTab("tools");
+    });
+  }
+  if (dom.mainTabDiagnosticsButton) {
+    dom.mainTabDiagnosticsButton.addEventListener("click", function() {
+      activateMainTab("diagnostics");
     });
   }
   // Initialize collapsible card headers for Adobe Spectrum smart folders
@@ -1284,3 +1389,4 @@ function keepStrongestPerSecond(events) {
     appendLog("UNHANDLED PROMISE: " + (event.reason && event.reason.stack ? event.reason.stack : String(event.reason)));
   };
 })();
+

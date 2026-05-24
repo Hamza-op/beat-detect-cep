@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
-    ExtensionBundleId="com.beatdetect.spikemarker"
+    ExtensionBundleId="com.autocutstudio"
     ExtensionBundleVersion="1.0.0"
-    ExtensionBundleName="Beat Detect Spike Marker">
+    ExtensionBundleName="AutoCut Studio">
   <ExtensionList>
-    <Extension Id="com.beatdetect.spikemarker.panel" Version="1.0.0"/>
+    <Extension Id="com.autocutstudio.panel" Version="1.0.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
@@ -18,7 +18,7 @@
     </RequiredRuntimeList>
   </ExecutionEnvironment>
   <DispatchInfoList>
-    <Extension Id="com.beatdetect.spikemarker.panel">
+    <Extension Id="com.autocutstudio.panel">
       <DispatchInfo>
         <Resources>
           <MainPath>./index.html</MainPath>
@@ -33,7 +33,7 @@
         </Lifecycle>
         <UI>
           <Type>Panel</Type>
-          <Menu>Beat Detect</Menu>
+          <Menu>AutoCut Studio</Menu>
           <Geometry>
             <Size>
               <Width>280</Width>

@@ -1,5 +1,5 @@
 /* ============================================================
-   BEAT DETECT — ANALOG LAB
+   AUTOCUT STUDIO — ANALOG LAB
    A studio-rack-meets-CRT-phosphor panel for Premiere Pro.
    Display: Bricolage Grotesque · UI: Geist · Instruments: JetBrains Mono
    Signature: warm amber phosphor on oil-black, etched bezels, scanlined LCDs.
@@ -337,6 +337,60 @@ h1 em {
 .status-banner.is-success { color: #e8fcd2; }
 .status-banner.is-success::before { background: var(--lime);  box-shadow: 0 0 8px var(--lime); }
 
+/* Main workspace tabs */
+.main-tabs {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  padding: 3px;
+  background: #07080a;
+  border: 1px solid var(--rim);
+  border-radius: var(--r-lg);
+  box-shadow:
+    inset 0 1px 2px rgba(0,0,0,0.7),
+    0 1px 0 rgba(255,255,255,0.02);
+}
+
+.main-tab-btn {
+  height: 26px;
+  min-width: 0;
+  padding: 0 8px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.main-tab-btn:hover:not(.is-active):not(:disabled) {
+  color: var(--ink);
+  border-color: var(--rim-mid);
+  background: linear-gradient(180deg, #17191f 0%, #101217 100%);
+}
+
+.main-tab-btn.is-active {
+  color: #1a0f02;
+  background: linear-gradient(180deg, #ffc079 0%, #ff9b2f 100%);
+  border-color: #c97714;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.45),
+    0 1px 2px rgba(0,0,0,0.45),
+    0 0 0 1px rgba(0,0,0,0.5);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.25);
+}
+
+.main-tab-panel { display: none; }
+.main-tab-panel.is-active {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
 /* ── Panel cards — rack modules with etched bezels ───── */
 .panel-card {
   position: relative;
@@ -411,6 +465,10 @@ h1 em {
   background: var(--teal);
   box-shadow: 0 0 8px var(--teal-edge), inset 0 0 0 1px rgba(0,0,0,0.3);
 }
+.header-indicator.tint-color {
+  background: var(--sky);
+  box-shadow: 0 0 8px rgba(125,211,252,0.34), inset 0 0 0 1px rgba(0,0,0,0.3);
+}
 
 .card-header h2 {
   font-family: var(--font-display);
@@ -449,6 +507,11 @@ h1 em {
 /* ── Grids ────────────────────────────────────────────── */
 .form-row { display: flex; gap: 8px; width: 100%; }
 .tools-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.color-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
@@ -604,6 +667,34 @@ select:focus, .input-text:focus {
   font-size: 10px;
   color: var(--ink-mute);
   line-height: 1.45;
+}
+
+.color-engine-card {
+  grid-column: span 2;
+}
+.color-dot {
+  background: var(--sky);
+  box-shadow:
+    0 0 8px rgba(125,211,252,0.55),
+    0 0 0 1px rgba(0,0,0,0.6),
+    inset 0 0 0 1px rgba(255,255,255,0.25);
+}
+.color-badge {
+  color: var(--sky);
+  border-color: rgba(125,211,252,0.34);
+  background: var(--sky-veil);
+}
+.color-auto-readout {
+  padding: 12px 8px;
+}
+.color-auto-readout .lcd-value {
+  color: var(--sky);
+  text-shadow:
+    0 0 6px rgba(125,211,252,0.55),
+    0 0 14px rgba(125,211,252,0.35);
+}
+.color-auto-readout .lcd-label {
+  color: rgba(125,211,252,0.55);
 }
 
 /* ── Buttons — tactile push controls ──────────────────── */
@@ -1001,6 +1092,14 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
     0 0 0 3px rgba(251,113,133,0.10);
 }
 
+.color-action:hover:not(:disabled) {
+  border-color: rgba(125,211,252,0.36);
+  color: #d9f3ff;
+  box-shadow:
+    inset 0 1px 0 var(--rim-soft),
+    0 0 0 3px var(--sky-veil);
+}
+
 .future-tool-slot {
   grid-column: span 2;
   border: 1px dashed var(--rim-mid);
@@ -1029,15 +1128,15 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 
 /* ── Footer — service rail ────────────────────────────── */
 .panel-footer {
-  margin-top: auto;
-  padding: 12px 2px 4px;
+  margin-top: 0;
+  padding: 10px 12px 12px;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 8px;
+  align-items: stretch;
+  gap: 10px;
   position: relative;
 }
-.panel-footer::before {
+.panel-footer:not(.panel-card)::before {
   content: "";
   position: absolute;
   left: 0; right: 0; top: 0;
@@ -1047,6 +1146,10 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
     var(--rim-bright) 20%,
     var(--rim-bright) 80%,
     transparent 100%);
+}
+
+.panel-footer .card-body {
+  align-items: center;
 }
 
 .utility-row {
@@ -1078,6 +1181,7 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  align-self: center;
   color: var(--ink-low);
   text-decoration: none;
   font-family: var(--font-mono);
@@ -1106,13 +1210,18 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
   .short-label { display: inline !important; }
 
   .panel-shell { padding: 8px; gap: 8px; }
+  .main-tab-btn { font-size: 8.5px; padding: 0 5px; }
   .panel-card  { padding: 9px 10px 10px; gap: 8px; }
   .tools-grid  { grid-template-columns: 1fr; }
+  .color-grid  { grid-template-columns: 1fr; }
+  .color-engine-card { grid-column: span 1; }
   .future-tool-slot { grid-column: span 1; }
+  .grid-span-full { grid-column: span 1; }
   .strategy-row { flex-direction: column; gap: 6px; }
 }
 
 @media (max-width: 220px) {
+  .main-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .subtitle, .version-tag { display: none !important; }
   .logo-area { gap: 8px; }
   h1 { font-size: 14px; }

@@ -2,8 +2,8 @@ $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
 $installerDir = Join-Path $root "installer"
-$setupExe = Join-Path $installerDir "target\release\beat_detect_setup.exe"
-$finalExe = Join-Path $root "BeatDetectSetup.exe"
+$setupExe = Join-Path $installerDir "target\release\autocut_studio_setup.exe"
+$finalExe = Join-Path $root "AutoCutStudioSetup.exe"
 
 & (Join-Path $PSScriptRoot "package-extension.ps1")
 

@@ -1,14 +1,14 @@
-# Beat Detect Spike Marker
+# AutoCut Studio
 
 Version: `1.0.0`
 
-Beat Detect is a Windows-first Adobe Premiere Pro CEP extension for adding edit markers from music/audio events. It is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, drops, and strong musical section changes.
+AutoCut Studio is a Windows-first Adobe Premiere Pro tool for music-aware edit markers, automated timeline helpers, and native color-correction work. It is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, drops, and strong musical section changes.
 
-The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The editor machine only needs Premiere Pro and `BeatDetectSetup.exe`; Python, Cargo, Rust, FFmpeg, and manual library installs are not user requirements.
+The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The editor machine only needs Premiere Pro and `AutoCutStudioSetup.exe`; Python, Cargo, Rust, FFmpeg, and manual library installs are not user requirements.
 
 ## Features
 
-- Premiere Pro CEP panel: `Window -> Extensions -> Beat Detect`
+- Premiere Pro CEP panel: `Window -> Extensions -> AutoCut Studio`
 - One-click analysis of the selected timeline clip's source media
 - Resolve-style `Beats` mode for a consistent music beat grid
 - Marker target:
@@ -20,7 +20,7 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 - Score/mode-based marker colors while marker name/comment fields remain blank
 - Exact marker count mode with Balanced, Strongest, and Spread selection strategies
 - One-by-one Warp Stabilizer queue for selected video clips
-- Remove blank Beat Detect markers from the selected target/range
+- Remove blank AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
 - Browser preview mode by opening `index.html` without Premiere
 - Single Windows setup executable
@@ -44,35 +44,35 @@ Generated files are ignored by Git:
 ```text
 bin/beat_analyzer.exe
 dist/
-BeatDetectSetup.exe
-BeatDetect-CEP-Windows.zip
+AutoCutStudioSetup.exe
+AutoCutStudio-CEP-Windows.zip
 analyzer/target/
 installer/target/
 ```
 
 ## User Install
 
-Download `BeatDetectSetup.exe` from a GitHub release and run it.
+Download `AutoCutStudioSetup.exe` from a GitHub release and run it.
 
 The installer:
 
 - installs the extension to:
 
 ```text
-%APPDATA%\Adobe\CEP\extensions\com.beatdetect.spikemarker
+%APPDATA%\Adobe\CEP\extensions\com.autocutstudio.panel
 ```
 
 - enables unsigned CEP loading for common Adobe `CSXS.7` through `CSXS.15` registry keys
 - writes install logs to:
 
 ```text
-%APPDATA%\BeatDetect\install.log
+%APPDATA%\AutoCutStudio\install.log
 ```
 
 Restart Premiere Pro after installing, then open:
 
 ```text
-Window -> Extensions -> Beat Detect
+Window -> Extensions -> AutoCut Studio
 ```
 
 ## Local Build On Windows
@@ -100,7 +100,7 @@ Create a copy-paste CEP folder:
 Output:
 
 ```text
-dist\com.beatdetect.spikemarker
+dist\com.autocutstudio.panel
 ```
 
 Build the single setup executable:
@@ -112,7 +112,7 @@ Build the single setup executable:
 Output:
 
 ```text
-BeatDetectSetup.exe
+AutoCutStudioSetup.exe
 ```
 
 The setup builder embeds only the whitelisted runtime files needed by the beats-only workflow, so stale optional binaries cannot enter a release accidentally.
@@ -135,11 +135,11 @@ Releases are generated automatically for every push with the tag `build-<run_num
 The workflow builds and publishes:
 
 ```text
-BeatDetectSetup.exe
-BeatDetect-CEP-Windows.zip
+AutoCutStudioSetup.exe
+AutoCutStudio-CEP-Windows.zip
 ```
 
-`BeatDetectSetup.exe` is the recommended download for editors. The ZIP is included for manual CEP installation/debugging.
+`AutoCutStudioSetup.exe` is the recommended download for editors. The ZIP is included for manual CEP installation/debugging.
 
 ## Analyzer CLI
 
@@ -187,7 +187,7 @@ foreach ($mode in "beats") {
     ForEach-Object { $_.Group | Sort-Object score -Descending | Select-Object -First 1 } |
     Sort-Object time
   $lines = @(
-    "Beat Detect Analysis Report",
+    "AutoCut Studio Analysis Report",
     "Mode: $mode",
     "Media: $media",
     "Threshold: $threshold",
@@ -218,14 +218,14 @@ analysis-reports\o-rangrez-beats-threshold-050.txt
 To clean generated markers, keep the same marker target selected and click:
 
 ```text
-Remove Beat Detect Markers
+Remove AutoCut Studio Markers
 ```
 
-Beat Detect applies blank markers: marker name and comments are intentionally empty. Marker color carries the event category signal. Because the markers are intentionally blank, avoid using the remove button on ranges that contain user-created blank markers you want to keep.
+AutoCut Studio applies blank markers: marker name and comments are intentionally empty. Marker color carries the event category signal. Because the markers are intentionally blank, avoid using the remove button on ranges that contain user-created blank markers you want to keep.
 
 ## Warp Stabilizer Queue
 
-Select multiple video clips and click `Apply Warp Stabilizer`. Beat Detect applies the effect to one selected clip, waits for Premiere's video-effect analysis state to report complete, then moves to the next selected clip.
+Select multiple video clips and click `Apply Warp Stabilizer`. AutoCut Studio applies the effect to one selected clip, waits for Premiere's video-effect analysis state to report complete, then moves to the next selected clip.
 
 This uses Premiere's QE DOM to apply the named video effect and `Sequence.isDoneAnalyzingForVideoEffects()` to wait between clips. If a Premiere version does not expose either API, the panel reports the failure instead of continuing blindly.
 
@@ -265,13 +265,13 @@ The panel uses one Rust `beats` grid path so marker output stays coherent instea
 Installer log:
 
 ```text
-%APPDATA%\BeatDetect\install.log
+%APPDATA%\AutoCutStudio\install.log
 ```
 
 Panel runtime log:
 
 ```text
-%APPDATA%\BeatDetect\panel.log
+%APPDATA%\AutoCutStudio\panel.log
 ```
 
 ## Current Scope

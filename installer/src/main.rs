@@ -1,6 +1,6 @@
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("Beat Detect setup is currently Windows-only.");
+    eprintln!("AutoCut Studio setup is currently Windows-only.");
     std::process::exit(1);
 }
 
@@ -20,8 +20,8 @@ fn main() {
     }
 
     println!();
-    println!("Beat Detect installed.");
-    println!("Restart Premiere Pro, then open: Window -> Extensions -> Beat Detect");
+    println!("AutoCut Studio installed.");
+    println!("Restart Premiere Pro, then open: Window -> Extensions -> AutoCut Studio");
     pause();
 }
 
@@ -46,7 +46,8 @@ mod windows_installer {
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
-    const EXTENSION_ID: &str = "com.beatdetect.spikemarker";
+    const EXTENSION_ID: &str = "com.autocutstudio.panel";
+    const NATIVE_PLUGIN_PREFIX: &str = "native/MediaCore/";
 
     struct FileEntry {
         relative_path: &'static str,
@@ -58,13 +59,15 @@ mod windows_installer {
     pub fn run() -> Result<(), Box<dyn Error>> {
         let mut log = InstallLog::new()?;
         log.run_header();
-        log.line("Beat Detect setup started.");
+        log.line("AutoCut Studio setup started.");
 
         let target_dir = target_extension_dir()?;
         log.line(&format!("Target: {}", target_dir.display()));
 
         install_files(&target_dir)?;
         verify_files(&target_dir)?;
+
+        let native_install = install_native_plugins(&mut log);
 
         let registry_warnings = enable_unsigned_cep();
         for warning in &registry_warnings {
@@ -73,6 +76,21 @@ mod windows_installer {
 
         println!("Installed to:");
         println!("{}", target_dir.display());
+        println!();
+        match native_install {
+            NativeInstallStatus::NotPackaged => {
+                println!("Native plugin payload: not packaged in this build.");
+            }
+            NativeInstallStatus::Installed(path) => {
+                println!("Native plugin payload installed to:");
+                println!("{}", path.display());
+            }
+            NativeInstallStatus::Failed(message) => {
+                println!("Native plugin payload was packaged but could not be installed:");
+                println!("{message}");
+                println!("Run this setup as Administrator if native .aex plugins are included.");
+            }
+        }
         println!();
         if registry_warnings.is_empty() {
             println!("Unsigned CEP debug mode enabled for CSXS.7 through CSXS.15.");
@@ -86,7 +104,7 @@ mod windows_installer {
         println!("Install log:");
         println!("{}", log.path.display());
 
-        log.line("Beat Detect setup finished.");
+        log.line("AutoCut Studio setup finished.");
         Ok(())
     }
 
@@ -118,7 +136,7 @@ mod windows_installer {
             .ok_or("invalid extension folder name")?;
 
         if expected_name != EXTENSION_ID {
-            return Err("refusing to install outside the Beat Detect extension folder".into());
+            return Err("refusing to install outside the AutoCut Studio extension folder".into());
         }
 
         if target_dir.exists() {
@@ -129,6 +147,9 @@ mod windows_installer {
         }
 
         for file in FILES {
+            if file.relative_path.starts_with(NATIVE_PLUGIN_PREFIX) {
+                continue;
+            }
             let path = target_dir.join(file.relative_path);
             if let Some(parent) = path.parent() {
                 fs::create_dir_all(parent)?;
@@ -141,12 +162,81 @@ mod windows_installer {
 
     fn verify_files(target_dir: &Path) -> Result<(), Box<dyn Error>> {
         for file in FILES {
+            if file.relative_path.starts_with(NATIVE_PLUGIN_PREFIX) {
+                continue;
+            }
             let path = target_dir.join(file.relative_path);
             let metadata = fs::metadata(&path)
                 .map_err(|error| format!("missing installed file {}: {error}", path.display()))?;
             if metadata.len() == 0 {
                 return Err(format!("installed file is empty: {}", path.display()).into());
             }
+        }
+        Ok(())
+    }
+
+    enum NativeInstallStatus {
+        NotPackaged,
+        Installed(PathBuf),
+        Failed(String),
+    }
+
+    fn install_native_plugins(log: &mut InstallLog) -> NativeInstallStatus {
+        let native_files: Vec<&FileEntry> = FILES
+            .iter()
+            .filter(|file| file.relative_path.starts_with(NATIVE_PLUGIN_PREFIX))
+            .collect();
+
+        if native_files.is_empty() {
+            log.line("Native plugin payload: not packaged.");
+            return NativeInstallStatus::NotPackaged;
+        }
+
+        match native_plugin_dir() {
+            Ok(target_dir) => {
+                if let Err(error) = write_native_plugins(&target_dir, &native_files) {
+                    let message = error.to_string();
+                    log.line(&format!("Native plugin install failed: {message}"));
+                    return NativeInstallStatus::Failed(message);
+                }
+                log.line(&format!(
+                    "Native plugin payload installed to {}",
+                    target_dir.display()
+                ));
+                NativeInstallStatus::Installed(target_dir)
+            }
+            Err(error) => {
+                let message = error.to_string();
+                log.line(&format!("Native plugin path failed: {message}"));
+                NativeInstallStatus::Failed(message)
+            }
+        }
+    }
+
+    fn native_plugin_dir() -> Result<PathBuf, Box<dyn Error>> {
+        let program_files =
+            env::var_os("ProgramFiles").ok_or("%ProgramFiles% is not set; cannot locate Adobe plugin folder")?;
+        Ok(PathBuf::from(program_files)
+            .join("Adobe")
+            .join("Common")
+            .join("Plug-ins")
+            .join("7.0")
+            .join("MediaCore")
+            .join("AutoCutStudio"))
+    }
+
+    fn write_native_plugins(target_dir: &Path, files: &[&FileEntry]) -> Result<(), Box<dyn Error>> {
+        fs::create_dir_all(target_dir)?;
+        for file in files {
+            let relative = file
+                .relative_path
+                .strip_prefix(NATIVE_PLUGIN_PREFIX)
+                .ok_or("invalid native plugin payload path")?;
+            let path = target_dir.join(relative);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(path, file.bytes)?;
         }
         Ok(())
     }
@@ -176,7 +266,7 @@ mod windows_installer {
     impl InstallLog {
         fn new() -> Result<Self, Box<dyn Error>> {
             let appdata = env::var_os("APPDATA").ok_or("%APPDATA% is not set")?;
-            let log_dir = PathBuf::from(appdata).join("BeatDetect");
+            let log_dir = PathBuf::from(appdata).join("AutoCutStudio");
             fs::create_dir_all(&log_dir)?;
             let path = log_dir.join("install.log");
             let file = fs::OpenOptions::new()
@@ -193,7 +283,7 @@ mod windows_installer {
         fn run_header(&mut self) {
             let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S %:z");
             let _ = writeln!(self.file);
-            let _ = writeln!(self.file, "==== Beat Detect setup run {timestamp} ====");
+            let _ = writeln!(self.file, "==== AutoCut Studio setup run {timestamp} ====");
         }
     }
 }

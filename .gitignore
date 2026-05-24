@@ -1,6 +1,8 @@
 analyzer/target/
 installer/target/
 dist/
+AutoCutStudioSetup.exe
+AutoCutStudio-CEP-Windows.zip
 BeatDetectSetup.exe
 BeatDetect-CEP-Windows.zip
 bin/beat_analyzer.exe
@@ -8,4 +10,6 @@ bin/beat_analyzer
 bin/essentia_beats.exe
 bin/essentia_beats
 *.log
-
+.local-sdks/
+native/MediaCore/**/*.aex
+native/MediaCore/**/*.pdb

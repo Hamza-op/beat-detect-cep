@@ -1312,6 +1312,14 @@ if (!JSON.parse) {
   function applyNativeAutoColor(ref, captureFrameSeconds, captureToken) {
     var hadExistingComponent = Boolean(findAutoCutColorComponent(ref.clip));
     var component = ensureAutoCutColorComponent(ref);
+    
+    // Ensure component is enabled when applying new auto color
+    if (component) {
+      try {
+        component.enabled = true;
+      } catch (_) {}
+    }
+
     var values = defaultAutoCutColorValues();
     var captureLocalSeconds = clipLocalSecondsAtPlayhead(ref, captureFrameSeconds);
     var missing = [];
@@ -1437,7 +1445,11 @@ if (!JSON.parse) {
           // 1. Try to find and reset AutoCut Color Engine first
           var autocutComponent = findAutoCutColorComponent(ref.clip);
           if (autocutComponent) {
+            try {
+              autocutComponent.enabled = false;
+            } catch (_) {}
             setAutoCutCaptureControls(autocutComponent, 0, 0);
+            setLumetriProperty(autocutComponent, ["analysis confidence", "confidence"], 0.0);
             applyAutoCutColorValues(autocutComponent, defaults);
             appliedToThisClip = true;
           }
@@ -1445,6 +1457,9 @@ if (!JSON.parse) {
           // 2. Try to find and reset Lumetri Color
           var lumetriComponent = findLumetriComponent(ref.clip);
           if (lumetriComponent) {
+            try {
+              lumetriComponent.enabled = false;
+            } catch (_) {}
             applyLumetriValues(lumetriComponent, defaults);
             appliedToThisClip = true;
           }

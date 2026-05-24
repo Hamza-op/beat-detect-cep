@@ -537,16 +537,25 @@ if (!JSON.parse) {
 
     applyVideoEffectToClipRef(ref, getLumetriEffect());
     
-    // Refresh the clip reference from the timeline track to force ExtendScript to clear its components cache
-    var seq = app.project.activeSequence;
-    if (seq && seq.videoTracks) {
-      var track = seq.videoTracks[ref.trackIndex];
-      if (track && track.clips) {
-        ref.clip = track.clips[ref.clipIndex];
+    // Robust 1.5-second retry loop with 50ms sleeps to wait for Premiere to initialize the effect and populate its properties
+    var startTime = (new Date()).getTime();
+    while ((new Date()).getTime() - startTime < 1500) {
+      var seq = app.project.activeSequence;
+      if (seq && seq.videoTracks) {
+        var track = seq.videoTracks[ref.trackIndex];
+        if (track && track.clips) {
+          ref.clip = track.clips[ref.clipIndex];
+        }
       }
+      component = findLumetriComponent(ref.clip);
+      if (component) {
+        break;
+      }
+      // 50ms synchronous delay
+      var delayStart = (new Date()).getTime();
+      while ((new Date()).getTime() - delayStart < 50) {}
     }
 
-    component = findLumetriComponent(ref.clip);
     if (!component) {
       throw new Error("Lumetri Color was applied but its properties were not exposed to ExtendScript.");
     }
@@ -583,16 +592,25 @@ if (!JSON.parse) {
 
     applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
     
-    // Refresh the clip reference from the timeline track to force ExtendScript to clear its components cache
-    var seq = app.project.activeSequence;
-    if (seq && seq.videoTracks) {
-      var track = seq.videoTracks[ref.trackIndex];
-      if (track && track.clips) {
-        ref.clip = track.clips[ref.clipIndex];
+    // Robust 1.5-second retry loop with 50ms sleeps to wait for Premiere to initialize the effect and populate its properties
+    var startTime = (new Date()).getTime();
+    while ((new Date()).getTime() - startTime < 1500) {
+      var seq = app.project.activeSequence;
+      if (seq && seq.videoTracks) {
+        var track = seq.videoTracks[ref.trackIndex];
+        if (track && track.clips) {
+          ref.clip = track.clips[ref.clipIndex];
+        }
       }
+      component = findAutoCutColorComponent(ref.clip);
+      if (component) {
+        break;
+      }
+      // 50ms synchronous delay
+      var delayStart = (new Date()).getTime();
+      while ((new Date()).getTime() - delayStart < 50) {}
     }
 
-    component = findAutoCutColorComponent(ref.clip);
     if (!component) {
       throw new Error("AutoCutStudio Color Engine was applied but its properties were not exposed to ExtendScript.");
     }

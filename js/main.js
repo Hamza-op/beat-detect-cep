@@ -1336,6 +1336,35 @@ function keepStrongestPerSecond(events) {
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
     });
   }
+
+  // Interactive movement preview animations changer
+  var previewSubject = document.getElementById("previewSubject");
+  var zoomModeSelect = document.getElementById("zoomMode");
+  if (zoomModeSelect && previewSubject) {
+    zoomModeSelect.addEventListener("change", function() {
+      var val = zoomModeSelect.value;
+      // Reset classes
+      previewSubject.className = "preview-subject";
+      // Apply the matching CSS keyframe animation class
+      if (val === "smooth_in") previewSubject.classList.add("animate-smooth-in");
+      else if (val === "smooth_out") previewSubject.classList.add("animate-smooth-out");
+      else if (val === "crash_in") previewSubject.classList.add("animate-crash-in");
+      else if (val === "crash_out") previewSubject.classList.add("animate-crash-out");
+      else if (val === "drift") previewSubject.classList.add("animate-drift");
+    });
+  }
+
+  // Zoom preset shortcuts click handler
+  var presetButtons = document.querySelectorAll(".btn-preset");
+  for (var pb = 0; pb < presetButtons.length; pb++) {
+    presetButtons[pb].addEventListener("click", function() {
+      var ratio = this.getAttribute("data-ratio");
+      if (dom.zoomSlider && ratio) {
+        dom.zoomSlider.value = ratio;
+        dispatchInputEvent(dom.zoomSlider);
+      }
+    });
+  }
   if (dom.mainTabMarkersButton) {
     dom.mainTabMarkersButton.addEventListener("click", function() {
       activateMainTab("markers");

@@ -59,14 +59,19 @@
         return;
       }
 
-      if (script.indexOf("AutoCutStudio.autoColorAtPlayhead") === 0) {
+      if (script.indexOf("AutoCutStudio.autoColorSelectedClips") === 0 || script.indexOf("AutoCutStudio.autoColorAtPlayhead") === 0) {
         callback(JSON.stringify({
           ok: true,
-          name: "Preview Clip 1",
-          trackIndex: 0,
-          clipIndex: 0,
-          engine: "AutoCut custom correction",
-          usedNativeAuto: false
+          applied: 2,
+          skipped: 0,
+          errors: [],
+          clips: [
+            { name: "Preview Clip 1", trackIndex: 0, clipIndex: 0 },
+            { name: "Preview Clip 2", trackIndex: 0, clipIndex: 1 }
+          ],
+          engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
+          usedNativeAuto: true,
+          colorScience: "mixed selected clips"
         }));
         return;
       }

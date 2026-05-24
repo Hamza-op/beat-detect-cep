@@ -1,0 +1,15 @@
+* text=auto
+
+# Vendored Adobe/Premiere SDK files used by the native color plugin build.
+native/sdk/**/*.h text eol=lf
+native/sdk/**/*.hpp text eol=lf
+native/sdk/**/*.c text eol=lf
+native/sdk/**/*.cpp text eol=lf
+native/sdk/**/*.r text eol=lf
+native/sdk/**/*.exe binary
+
+# Visual Studio project files should stay Windows-friendly.
+*.sln text eol=crlf
+*.vcxproj text eol=crlf
+*.vcxproj.filters text eol=crlf
+*.rc text eol=crlf

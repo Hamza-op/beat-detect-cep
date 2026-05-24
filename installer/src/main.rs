@@ -214,8 +214,8 @@ mod windows_installer {
     }
 
     fn native_plugin_dir() -> Result<PathBuf, Box<dyn Error>> {
-        let program_files =
-            env::var_os("ProgramFiles").ok_or("%ProgramFiles% is not set; cannot locate Adobe plugin folder")?;
+        let program_files = env::var_os("ProgramFiles")
+            .ok_or("%ProgramFiles% is not set; cannot locate Adobe plugin folder")?;
         Ok(PathBuf::from(program_files)
             .join("Adobe")
             .join("Common")

@@ -258,51 +258,6 @@ var AutoCutStudio = AutoCutStudio || {};
     return selected;
   }
 
-  function getPlayheadSeconds(seq) {
-    if (!seq) {
-      return 0;
-    }
-    if (seq.getPlayerPosition) {
-      return timeToSeconds(seq.getPlayerPosition());
-    }
-    if (seq.getCTI) {
-      return timeToSeconds(seq.getCTI());
-    }
-    throw new Error("This Premiere version does not expose the current playhead position to scripts.");
-  }
-
-  function getVideoClipRefAtPlayhead(seq) {
-    if (!seq || !seq.videoTracks) {
-      throw new Error("No active sequence video tracks are available.");
-    }
-
-    var playhead = getPlayheadSeconds(seq);
-    for (var i = 0; i < seq.videoTracks.numTracks; i++) {
-      var track = seq.videoTracks[i];
-      if (!track || !track.clips) {
-        continue;
-      }
-      for (var j = 0; j < track.clips.numItems; j++) {
-        var clip = track.clips[j];
-        if (!clip) {
-          continue;
-        }
-        var start = timeToSeconds(clip.start);
-        var end = timeToSeconds(clip.end);
-        if (playhead >= start && playhead < end) {
-          return {
-            clip: clip,
-            trackIndex: i,
-            clipIndex: j,
-            name: clip.name || "Playhead clip"
-          };
-        }
-      }
-    }
-
-    throw new Error("No video clip exists under the playhead.");
-  }
-
   function clipHasWarpStabilizer(clip) {
     if (!clip || !clip.components) {
       return false;
@@ -560,6 +515,79 @@ var AutoCutStudio = AutoCutStudio || {};
     return component;
   }
 
+  function getAutoCutColorEffect() {
+    return getVideoEffectByNames(["AutoCutStudio Color Engine"], "AutoCutStudio Color Engine");
+  }
+
+  function isAutoCutColorComponent(component) {
+    var name = componentName(component);
+    return name.indexOf("autocutstudio color engine") >= 0 || name.indexOf("autocutstudiocolorengine") >= 0 || name.indexOf("autocut color engine") >= 0 || name.indexOf("autocutcolorengine") >= 0;
+  }
+
+  function findAutoCutColorComponent(clip) {
+    if (!clip || !clip.components) {
+      return null;
+    }
+    for (var c = 0; c < clip.components.numItems; c++) {
+      var component = clip.components[c];
+      if (isAutoCutColorComponent(component)) {
+        return component;
+      }
+    }
+    return null;
+  }
+
+  function ensureAutoCutColorComponent(ref) {
+    var component = findAutoCutColorComponent(ref.clip);
+    if (component) {
+      return component;
+    }
+
+    applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
+    component = findAutoCutColorComponent(ref.clip);
+    if (!component) {
+      throw new Error("AutoCutStudio Color Engine was applied but its properties were not exposed to ExtendScript.");
+    }
+    return component;
+  }
+
+  function applyAutoCutColorValues(component, values) {
+    var applied = 0;
+    var missing = [];
+    var map = [
+      { key: "temperature", names: ["temperature"], value: values.temperature },
+      { key: "tint", names: ["tint"], value: values.tint },
+      { key: "exposure", names: ["exposure"], value: values.exposure },
+      { key: "contrast", names: ["contrast"], value: values.contrast },
+      { key: "highlights", names: ["highlights"], value: values.highlights },
+      { key: "shadows", names: ["shadows"], value: values.shadows },
+      { key: "whites", names: ["whites"], value: values.whites },
+      { key: "blacks", names: ["blacks"], value: values.blacks },
+      { key: "saturation", names: ["saturation"], value: values.saturation },
+      { key: "vibrance", names: ["vibrance"], value: values.vibrance },
+      { key: "shadows_temp", names: ["shadows temp", "shadows temp (lift)", "shadows_temp"], value: values.shadows_temp },
+      { key: "shadows_tint", names: ["shadows tint", "shadows tint (lift)", "shadows_tint"], value: values.shadows_tint },
+      { key: "highlights_temp", names: ["highlights temp", "highlights temp (gain)", "highlights_temp"], value: values.highlights_temp },
+      { key: "highlights_tint", names: ["highlights tint", "highlights tint (gain)", "highlights_tint"], value: values.highlights_tint }
+    ];
+
+    for (var i = 0; i < map.length; i++) {
+      if (map[i].value === undefined || map[i].value === null) {
+        continue;
+      }
+      if (setLumetriProperty(component, map[i].names, map[i].value)) {
+        applied++;
+      } else {
+        missing.push(map[i].key);
+      }
+    }
+
+    if (applied === 0) {
+      throw new Error("AutoCut Color Engine properties were not exposed by this Premiere version.");
+    }
+    return missing;
+  }
+
   function propertyName(prop) {
     return normalizedName((prop && prop.displayName) || (prop && prop.matchName) || "");
   }
@@ -656,50 +684,6 @@ var AutoCutStudio = AutoCutStudio || {};
       saturation: bounded(payload.saturation, 0, 200, 100),
       vibrance: bounded(payload.vibrance, -100, 100, 0)
     };
-  }
-
-  function autoCutColorValuesForClip(ref) {
-    var name = normalizedName(ref && ref.name ? ref.name : "");
-    var values = {
-      temperature: 0,
-      tint: 0,
-      exposure: 0,
-      contrast: 18,
-      highlights: -18,
-      shadows: 16,
-      whites: 6,
-      blacks: -8,
-      saturation: 112,
-      vibrance: 22
-    };
-
-    if (name.indexOf("log") >= 0 || name.indexOf("slog") >= 0 || name.indexOf("vlog") >= 0 || name.indexOf("c-log") >= 0) {
-      values.contrast = 28;
-      values.highlights = -24;
-      values.shadows = 22;
-      values.whites = 12;
-      values.blacks = -14;
-      values.saturation = 118;
-      values.vibrance = 28;
-    } else if (name.indexOf("night") >= 0 || name.indexOf("lowlight") >= 0 || name.indexOf("low light") >= 0) {
-      values.exposure = 0.15;
-      values.contrast = 12;
-      values.highlights = -28;
-      values.shadows = 24;
-      values.whites = 2;
-      values.blacks = -4;
-      values.saturation = 106;
-      values.vibrance = 18;
-    } else if (name.indexOf("drone") >= 0 || name.indexOf("outdoor") >= 0 || name.indexOf("sun") >= 0) {
-      values.temperature = -2;
-      values.contrast = 16;
-      values.highlights = -30;
-      values.shadows = 14;
-      values.saturation = 110;
-      values.vibrance = 20;
-    }
-
-    return values;
   }
 
   function getMediaPath(projectItem) {
@@ -1014,7 +998,7 @@ var AutoCutStudio = AutoCutStudio || {};
       var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0, style: "smooth_in" };
       var zoomTarget = Math.max(101.0, Math.min(150.0, Number(payload.zoom) || 110.0));
       var zoomStyle = payload.style || "smooth_in";
-      
+
       var seq = app.project.activeSequence;
       if (!seq) {
         throw new Error("No active sequence is open.");
@@ -1195,33 +1179,124 @@ var AutoCutStudio = AutoCutStudio || {};
     }
   };
 
-  AutoCutStudio.autoColorAtPlayhead = function () {
+  function defaultAutoCutColorValues() {
+    return {
+      temperature: 0,
+      tint: 0,
+      exposure: 0,
+      contrast: 0,
+      highlights: 0,
+      shadows: 0,
+      whites: 0,
+      blacks: 0,
+      saturation: 100,
+      vibrance: 0,
+      shadows_temp: 0,
+      shadows_tint: 0,
+      highlights_temp: 0,
+      highlights_tint: 0
+    };
+  }
+
+  function getClipColorScience(clip) {
+    var colorSpaceName = "Rec. 709 (Default)";
+    var detectedColorScience = "SDR Standard";
+
+    try {
+      var projectItem = clip && clip.projectItem;
+      if (projectItem && projectItem.getColorSpace) {
+        var cs = projectItem.getColorSpace();
+        if (cs) {
+          colorSpaceName = cs.name || "Unknown";
+          var lowerName = colorSpaceName.toLowerCase();
+          var transfer = String(cs.transferCharacteristic || "").toLowerCase();
+          if (lowerName.indexOf("log") >= 0 || transfer.indexOf("log") >= 0) {
+            detectedColorScience = "Camera Log Curve (" + colorSpaceName + ")";
+          } else if (lowerName.indexOf("hlg") >= 0 || lowerName.indexOf("hdr") >= 0 || transfer.indexOf("hlg") >= 0 || transfer.indexOf("pq") >= 0) {
+            detectedColorScience = "High Dynamic Range (" + colorSpaceName + ")";
+          } else {
+            detectedColorScience = "SDR Standard (" + colorSpaceName + ")";
+          }
+        }
+      }
+    } catch (_) {}
+
+    return {
+      colorSpace: colorSpaceName,
+      colorScience: detectedColorScience
+    };
+  }
+
+  function applyNativeAutoColor(ref) {
+    var component = ensureAutoCutColorComponent(ref);
+    var values = defaultAutoCutColorValues();
+    var missing = applyAutoCutColorValues(component, values);
+    var colorInfo = getClipColorScience(ref.clip);
+
+    return {
+      name: ref.name,
+      trackIndex: ref.trackIndex,
+      clipIndex: ref.clipIndex,
+      engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
+      usedNativeAuto: true,
+      missing: missing,
+      values: values,
+      colorSpace: colorInfo.colorSpace,
+      colorScience: colorInfo.colorScience
+    };
+  }
+
+  AutoCutStudio.autoColorSelectedClips = function () {
     try {
       var seq = app.project.activeSequence;
       if (!seq) {
         throw new Error("No active sequence is open.");
       }
 
-      var ref = getVideoClipRefAtPlayhead(seq);
-      var component = ensureLumetriComponent(ref);
-      var values = autoCutColorValuesForClip(ref);
-      var missing = applyLumetriValues(component, values);
-      if (missing.length >= 6) {
-        throw new Error(ref.name + ": Premiere did not expose enough Lumetri controls for AutoCut color.");
+      var refs = getSelectedVideoClipRefs(seq);
+      if (refs.length === 0) {
+        throw new Error("Select at least one video clip in the active sequence.");
+      }
+
+      var applied = 0;
+      var skipped = 0;
+      var errors = [];
+      var clips = [];
+
+      for (var i = 0; i < refs.length; i++) {
+        var ref = refs[i];
+        try {
+          clips.push(applyNativeAutoColor(ref));
+          applied++;
+        } catch (error) {
+          skipped++;
+          errors.push(ref.name + ": " + (error.message || String(error)));
+        }
+      }
+
+      if (applied === 0) {
+        throw new Error(errors.length
+          ? errors.join(" | ")
+          : "Could not load the AutoCutStudio Color Engine plugin. Run AutoCutStudioSetup.exe as Administrator to install native C++ assets.");
       }
 
       return ok({
-        name: ref.name,
-        trackIndex: ref.trackIndex,
-        clipIndex: ref.clipIndex,
-        engine: "AutoCut custom correction",
-        usedNativeAuto: false,
-        missing: missing,
-        values: values
+        applied: applied,
+        skipped: skipped,
+        errors: errors,
+        clips: clips,
+        engine: clips[0].engine,
+        usedNativeAuto: true,
+        name: applied === 1 ? clips[0].name : applied + " selected clips",
+        colorScience: applied === 1 ? clips[0].colorScience : "mixed selected clips"
       });
     } catch (error) {
       return fail(error.message || String(error));
     }
+  };
+
+  AutoCutStudio.autoColorAtPlayhead = function () {
+    return AutoCutStudio.autoColorSelectedClips();
   };
 
   AutoCutStudio.resetColorGrade = function () {
@@ -1236,18 +1311,7 @@ var AutoCutStudio = AutoCutStudio || {};
         throw new Error("Select at least one video clip in the active sequence.");
       }
 
-      var defaults = {
-        temperature: 0,
-        tint: 0,
-        exposure: 0,
-        contrast: 0,
-        highlights: 0,
-        shadows: 0,
-        whites: 0,
-        blacks: 0,
-        saturation: 100,
-        vibrance: 0
-      };
+      var defaults = defaultAutoCutColorValues();
       var reset = 0;
       var skipped = 0;
       var errors = [];
@@ -1255,17 +1319,28 @@ var AutoCutStudio = AutoCutStudio || {};
       for (var i = 0; i < refs.length; i++) {
         var ref = refs[i];
         try {
-          var component = findLumetriComponent(ref.clip);
-          if (!component) {
+          var appliedToThisClip = false;
+
+          // 1. Try to find and reset AutoCut Color Engine first
+          var autocutComponent = findAutoCutColorComponent(ref.clip);
+          if (autocutComponent) {
+            applyAutoCutColorValues(autocutComponent, defaults);
+            appliedToThisClip = true;
+          }
+
+          // 2. Try to find and reset Lumetri Color
+          var lumetriComponent = findLumetriComponent(ref.clip);
+          if (lumetriComponent) {
+            applyLumetriValues(lumetriComponent, defaults);
+            appliedToThisClip = true;
+          }
+
+          if (appliedToThisClip) {
+            reset++;
+          } else {
             skipped++;
-            errors.push(ref.name + ": Lumetri Color not found");
-            continue;
+            errors.push(ref.name + ": No color engine effects found to reset");
           }
-          var missing = applyLumetriValues(component, defaults);
-          if (missing.length) {
-            errors.push(ref.name + ": missing " + missing.join(", "));
-          }
-          reset++;
         } catch (error) {
           skipped++;
           errors.push(ref.name + ": " + (error.message || String(error)));
@@ -1273,7 +1348,7 @@ var AutoCutStudio = AutoCutStudio || {};
       }
 
       if (reset === 0) {
-        throw new Error(errors.length ? errors.join(" | ") : "No Lumetri Color controls were reset.");
+        throw new Error(errors.length ? errors.join(" | ") : "No color controls were reset.");
       }
 
       return ok({ reset: reset, skipped: skipped, errors: errors });

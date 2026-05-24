@@ -15,6 +15,28 @@ fn main() {
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let generated_path = out_dir.join("generated_files.rs");
 
+    // Dynamic search and compilation of the UAC requestedExecutionLevel manifest
+    if let Some(rc_path) = find_rc_exe() {
+        let rc_file = manifest_dir.join("src").join("manifest.rc");
+        let res_file = out_dir.join("manifest.res");
+
+        let status = std::process::Command::new(rc_path)
+            .arg("/fo")
+            .arg(&res_file)
+            .arg(&rc_file)
+            .status();
+
+        if let Ok(status) = status {
+            if status.success() {
+                // Link the compiled .res file natively
+                println!("cargo:rustc-link-arg={}", res_file.display());
+            }
+        }
+    } else {
+        // Fallback to UAC linker option if rc.exe is somehow not found
+        println!("cargo:rustc-link-arg=/MANIFESTUAC:level='requireAdministrator'");
+    }
+
     println!("cargo:rerun-if-changed={}", package_dir.display());
     if !package_dir.exists() {
         write_compile_error(
@@ -45,6 +67,35 @@ fn main() {
     generated.push_str("];\n");
 
     fs::write(generated_path, generated).expect("write generated installer source");
+}
+
+fn find_rc_exe() -> Option<PathBuf> {
+    let search_paths = [
+        Path::new("D:\\Windows Kits\\10\\bin"),
+        Path::new("C:\\Program Files (x86)\\Windows Kits\\10\\bin"),
+    ];
+
+    for base in &search_paths {
+        if !base.exists() {
+            continue;
+        }
+        if let Ok(entries) = fs::read_dir(base) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let x64_rc = path.join("x64").join("rc.exe");
+                    if x64_rc.exists() {
+                        return Some(x64_rc);
+                    }
+                    let x86_rc = path.join("x86").join("rc.exe");
+                    if x86_rc.exists() {
+                        return Some(x86_rc);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 fn collect_files(dir: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {

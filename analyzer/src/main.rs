@@ -166,8 +166,6 @@ fn parse_seconds_flag(
     Ok(seconds)
 }
 
-
-
 fn decode_mono_audio(
     media_path: &str,
     start_seconds: Option<f64>,
@@ -206,12 +204,24 @@ fn decode_mono_audio(
     let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
 
     let start = start_seconds.unwrap_or(0.0).max(0.0);
-    let time_base = track.codec_params.time_base.unwrap_or_else(|| symphonia::core::units::TimeBase::new(1, sample_rate));
-    
+    let time_base = track
+        .codec_params
+        .time_base
+        .unwrap_or_else(|| symphonia::core::units::TimeBase::new(1, sample_rate));
+
     // Seek to start_seconds if requested and > 0
     if start > 0.0 {
         let seek_time = symphonia::core::units::Time::new(start as u64, start.fract());
-        if format.seek(SeekMode::Accurate, SeekTo::Time { time: seek_time, track_id: Some(track_id) }).is_ok() {
+        if format
+            .seek(
+                SeekMode::Accurate,
+                SeekTo::Time {
+                    time: seek_time,
+                    track_id: Some(track_id),
+                },
+            )
+            .is_ok()
+        {
             decoder.reset();
         }
     }
@@ -253,7 +263,8 @@ fn decode_mono_audio(
         if first_packet_sample_index.is_none() {
             let packet_time = time_base.calc_time(packet.ts());
             let packet_seconds = packet_time.seconds as f64 + packet_time.frac;
-            first_packet_sample_index = Some((packet_seconds * sample_rate as f64).round() as usize);
+            first_packet_sample_index =
+                Some((packet_seconds * sample_rate as f64).round() as usize);
         }
 
         match decoder.decode(&packet) {
@@ -1828,7 +1839,11 @@ mod tests {
         assert_eq!(options.duration_seconds, Some(12.25));
     }
 
-    fn write_wav_file(path: &Path, samples: &[i16], sample_rate: u32) -> Result<(), std::io::Error> {
+    fn write_wav_file(
+        path: &Path,
+        samples: &[i16],
+        sample_rate: u32,
+    ) -> Result<(), std::io::Error> {
         use std::io::Write;
         let mut file = File::create(path)?;
         let data_size = (samples.len() * 2) as u32;
@@ -1861,18 +1876,15 @@ mod tests {
         let temp_path = std::env::temp_dir().join("test_seek_trim_1.wav");
         write_wav_file(&temp_path, &samples, sample_rate).expect("failed to write temp WAV file");
 
-        let (decoded, decoded_rate, offset) = decode_mono_audio(
-            temp_path.to_str().unwrap(),
-            Some(2.0),
-            Some(3.0),
-        )
-        .expect("decoding seek range should succeed");
+        let (decoded, decoded_rate, offset) =
+            decode_mono_audio(temp_path.to_str().unwrap(), Some(2.0), Some(3.0))
+                .expect("decoding seek range should succeed");
 
         let _ = std::fs::remove_file(temp_path);
 
         assert_eq!(decoded_rate, sample_rate);
         assert_eq!(decoded.len(), 300);
-        
+
         // i16 value converted to f32 sample by Symphonia
         let expected_first_sample = 200.0 / 32768.0;
         assert!((decoded[0] - expected_first_sample).abs() < 1.0e-3);
@@ -1886,11 +1898,7 @@ mod tests {
         let temp_path = std::env::temp_dir().join("test_seek_trim_2.wav");
         write_wav_file(&temp_path, &samples, sample_rate).expect("failed to write temp WAV file");
 
-        let result = decode_mono_audio(
-            temp_path.to_str().unwrap(),
-            Some(12.0),
-            Some(1.0),
-        );
+        let result = decode_mono_audio(temp_path.to_str().unwrap(), Some(12.0), Some(1.0));
 
         let _ = std::fs::remove_file(temp_path);
 

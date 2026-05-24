@@ -19,6 +19,7 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 - Final marker selection keeps only the strongest event per whole second
 - Score/mode-based marker colors while marker name/comment fields remain blank
 - Exact marker count mode with Balanced, Strongest, and Spread selection strategies
+- Native AutoCutStudio color correction for selected video clips
 - One-by-one Warp Stabilizer queue for selected video clips
 - Remove blank AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks

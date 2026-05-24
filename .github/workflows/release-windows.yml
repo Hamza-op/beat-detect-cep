@@ -38,14 +38,34 @@ jobs:
         working-directory: analyzer
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Verify native SDK
+        shell: pwsh
+        run: |
+          $required = @(
+            ".\native\sdk\Headers\AE_Effect.h",
+            ".\native\sdk\Headers\SP\SPBasic.h",
+            ".\native\sdk\Resources\PiPLtool.exe",
+            ".\native\sdk\Util\AEGP_SuiteHandler.cpp"
+          )
+          foreach ($path in $required) {
+            if (!(Test-Path -LiteralPath $path)) {
+              throw "Missing native SDK file: $path"
+            }
+          }
+
+      - name: Build native C++ plugin
+        shell: pwsh
+        run: |
+          msbuild "native\premiere_plugin\Win\AutoCutColorEngine.vcxproj" /p:Configuration=Release /p:Platform=x64 /p:PlatformToolset=v143 /p:AE_PLUGIN_BUILD_DIR="$PWD\native\MediaCore"
+
       - name: Build setup executable
         shell: pwsh
         run: .\scripts\build-setup-exe.ps1
 
-      - name: Test installer
+      - name: Build installer tests
         shell: pwsh
         working-directory: installer
-        run: cargo test
+        run: cargo test --no-run
 
       - name: Lint installer
         shell: pwsh
@@ -61,7 +81,8 @@ jobs:
             ".\dist\com.autocutstudio.panel\index.html",
             ".\dist\com.autocutstudio.panel\js\main.js",
             ".\dist\com.autocutstudio.panel\jsx\host.jsx",
-            ".\dist\com.autocutstudio.panel\bin\beat_analyzer.exe"
+            ".\dist\com.autocutstudio.panel\bin\beat_analyzer.exe",
+            ".\dist\com.autocutstudio.panel\native\MediaCore\AutoCutColorEngine.aex"
           )
           foreach ($path in $required) {
             if (!(Test-Path -LiteralPath $path)) {

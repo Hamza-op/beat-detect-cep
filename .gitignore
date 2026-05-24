@@ -10,6 +10,18 @@ bin/beat_analyzer
 bin/essentia_beats.exe
 bin/essentia_beats
 *.log
+artifacts/
 .local-sdks/
 native/MediaCore/**/*.aex
 native/MediaCore/**/*.pdb
+native/MediaCore/**/*.lib
+native/MediaCore/**/*.exp
+
+# MSVC and Visual Studio intermediate directories and files
+.vs/
+native/premiere_plugin/Win/x64/
+native/premiere_plugin/Win/Debug/
+native/premiere_plugin/Win/Release/
+native/premiere_plugin/Win/*.rc
+native/premiere_plugin/Win/*.user
+native/premiere_plugin/Win/*.aps

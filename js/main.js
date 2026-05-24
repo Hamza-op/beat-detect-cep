@@ -101,7 +101,7 @@
         fs.mkdirSync(dir, { recursive: true });
       }
       var logPath = path.join(dir, "panel.log");
-      
+
       // Rotate log if it exceeds 2MB to prevent unbounded disk usage
       if (fs.existsSync(logPath)) {
         try {
@@ -113,7 +113,7 @@
           }
         } catch (_) {}
       }
-      
+
       fs.appendFileSync(logPath, new Date().toISOString() + " " + message + "\n");
     } catch (_) {
       // Logging must never break panel behavior.
@@ -727,7 +727,7 @@ function keepStrongestPerSecond(events) {
             break;
           }
         }
-        
+
         selected.push(unused[pickIdx]);
         unused.splice(pickIdx, 1);
       }
@@ -990,19 +990,21 @@ function keepStrongestPerSecond(events) {
       });
   }
 
-  function autoColorAtPlayhead() {
+  function autoColorSelectedClips() {
     if (state.isBusy) {
       return;
     }
 
     setBusy(true);
-    setStatus("Running AutoCut color correction on the clip under the playhead...", false, true);
+    setStatus("Running AutoCut color correction on selected clips...", false, true);
 
-    cepEval("AutoCutStudio.autoColorAtPlayhead()")
+    cepEval("AutoCutStudio.autoColorSelectedClips()")
       .then(function(result) {
         var engine = result.engine || "AutoCut custom correction";
-        var missing = result.missing && result.missing.length ? " Missing controls: " + result.missing.join(", ") + "." : "";
-        setStatus("Auto color applied to " + result.name + " using " + engine + "." + missing, false, false, true);
+        var skipped = Number(result.skipped) || 0;
+        var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
+        var csInfo = result.colorScience ? " [Color Science: " + result.colorScience + "]" : "";
+        setStatus("Auto color applied to " + result.applied + " selected clip" + (result.applied === 1 ? "" : "s") + " using " + engine + (skipped ? "; skipped " + skipped : "") + "." + csInfo + details, false, false, true);
       })
       .catch(function(error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -1019,13 +1021,13 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Resetting Lumetri color controls on selected video clips...", false, true);
+    setStatus("Resetting color correction controls on selected video clips...", false, true);
 
     cepEval("AutoCutStudio.resetColorGrade()")
       .then(function(result) {
         var skipped = Number(result.skipped) || 0;
         var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
-        setStatus("Reset Lumetri controls on " + result.reset + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
+        setStatus("Reset color controls on " + result.reset + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
       })
       .catch(function(error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -1157,7 +1159,7 @@ function keepStrongestPerSecond(events) {
         var report = checks.join(" | ");
         var formatted = report.replace(/ \| /g, "\n");
         setStatus("Diagnostics complete.");
-        
+
         // Show report in confirm modal and copy to clipboard only upon explicit user action.
         if (confirm("DIAGNOSTICS REPORT:\n\n" + formatted + "\n\nWould you like to copy this report to the clipboard?")) {
           try {
@@ -1252,7 +1254,7 @@ function keepStrongestPerSecond(events) {
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
   if (dom.clearZoomButton) dom.clearZoomButton.addEventListener("click", clearGimbalZoom);
   if (dom.warpStabilizerButton) dom.warpStabilizerButton.addEventListener("click", applyWarpStabilizerQueue);
-  if (dom.autoColorButton) dom.autoColorButton.addEventListener("click", autoColorAtPlayhead);
+  if (dom.autoColorButton) dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
   if (dom.resetColorButton) dom.resetColorButton.addEventListener("click", resetColorGrade);
   if (dom.randomizeButton) {
     dom.randomizeButton.addEventListener("click", function() {

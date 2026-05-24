@@ -32,10 +32,11 @@ $packageBinDir = Join-Path $packageDir "bin"
 New-Item -ItemType Directory -Force -Path $packageBinDir | Out-Null
 Copy-Item -LiteralPath (Join-Path $root "bin\beat_analyzer.exe") -Destination (Join-Path $packageBinDir "beat_analyzer.exe") -Force
 
-$nativeSource = Join-Path $root "native"
+$nativeSource = Join-Path $root "native\MediaCore"
 if (Test-Path -LiteralPath $nativeSource) {
   $nativeFiles = Get-ChildItem -LiteralPath $nativeSource -Recurse -File | Where-Object { $_.Name -ne ".gitkeep" }
   if ($nativeFiles.Count -gt 0) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $packageDir "native") | Out-Null
     Copy-Item -LiteralPath $nativeSource -Destination (Join-Path $packageDir "native") -Recurse -Force
   }
 }

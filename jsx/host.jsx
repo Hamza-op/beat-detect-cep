@@ -954,7 +954,8 @@ if (!JSON.parse) {
   }
 
   function isClipSourceTimeInRange(seconds, info) {
-    return isFinite(seconds) && seconds >= info.inPointSeconds && seconds < info.outPointSeconds;
+    var tolerance = 0.05; // 50ms tolerance for snapping/float rounding
+    return isFinite(seconds) && seconds >= (info.inPointSeconds - tolerance) && seconds <= (info.outPointSeconds + tolerance);
   }
 
   function clipSourceTimeToSequenceTime(seconds, info) {
@@ -962,7 +963,8 @@ if (!JSON.parse) {
   }
 
   function isSequenceTimeInClipRange(seconds, info) {
-    return isFinite(seconds) && seconds >= info.startSeconds && seconds < info.endSeconds;
+    var tolerance = 0.05; // 50ms tolerance for snapping/float rounding
+    return isFinite(seconds) && seconds >= (info.startSeconds - tolerance) && seconds <= (info.endSeconds + tolerance);
   }
 
   AutoCutStudio.getSelectedClipInfo = function () {

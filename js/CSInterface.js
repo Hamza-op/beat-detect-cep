@@ -65,6 +65,7 @@
           name: "Preview Clip 1",
           trackIndex: 0,
           clipIndex: 0,
+          engine: "AutoCut custom correction",
           usedNativeAuto: false
         }));
         return;

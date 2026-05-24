@@ -609,11 +609,18 @@ var AutoCutStudio = AutoCutStudio || {};
       { key: "tint", names: ["tint"], value: values.tint },
       { key: "exposure", names: ["exposure"], value: values.exposure },
       { key: "contrast", names: ["contrast"], value: values.contrast },
+      { key: "highlights", names: ["highlights", "highlight"], value: values.highlights },
+      { key: "shadows", names: ["shadows", "shadow"], value: values.shadows },
+      { key: "whites", names: ["whites", "white"], value: values.whites },
+      { key: "blacks", names: ["blacks", "black"], value: values.blacks },
       { key: "saturation", names: ["saturation"], value: values.saturation },
       { key: "vibrance", names: ["vibrance"], value: values.vibrance }
     ];
 
     for (var i = 0; i < map.length; i++) {
+      if (map[i].value === undefined || map[i].value === null) {
+        continue;
+      }
       if (setLumetriProperty(component, map[i].names, map[i].value)) {
         applied++;
       } else {
@@ -625,24 +632,6 @@ var AutoCutStudio = AutoCutStudio || {};
       throw new Error("Lumetri properties were not exposed by this Premiere version.");
     }
     return missing;
-  }
-
-  function triggerLumetriAuto(component) {
-    var prop = findPropertyRecursive(component, ["auto"], 0);
-    if (!prop || !prop.setValue) {
-      return false;
-    }
-    try {
-      prop.setValue(1, 1);
-      return true;
-    } catch (_) {
-      try {
-        prop.setValue(true, 1);
-        return true;
-      } catch (error) {
-        return false;
-      }
-    }
   }
 
   function normalizedColorPayload(payload) {
@@ -660,9 +649,57 @@ var AutoCutStudio = AutoCutStudio || {};
       tint: bounded(payload.tint, -100, 100, 0),
       exposure: bounded(payload.exposure, -5, 5, 0),
       contrast: bounded(payload.contrast, -100, 100, 0),
+      highlights: bounded(payload.highlights, -100, 100, 0),
+      shadows: bounded(payload.shadows, -100, 100, 0),
+      whites: bounded(payload.whites, -100, 100, 0),
+      blacks: bounded(payload.blacks, -100, 100, 0),
       saturation: bounded(payload.saturation, 0, 200, 100),
       vibrance: bounded(payload.vibrance, -100, 100, 0)
     };
+  }
+
+  function autoCutColorValuesForClip(ref) {
+    var name = normalizedName(ref && ref.name ? ref.name : "");
+    var values = {
+      temperature: 0,
+      tint: 0,
+      exposure: 0,
+      contrast: 18,
+      highlights: -18,
+      shadows: 16,
+      whites: 6,
+      blacks: -8,
+      saturation: 112,
+      vibrance: 22
+    };
+
+    if (name.indexOf("log") >= 0 || name.indexOf("slog") >= 0 || name.indexOf("vlog") >= 0 || name.indexOf("c-log") >= 0) {
+      values.contrast = 28;
+      values.highlights = -24;
+      values.shadows = 22;
+      values.whites = 12;
+      values.blacks = -14;
+      values.saturation = 118;
+      values.vibrance = 28;
+    } else if (name.indexOf("night") >= 0 || name.indexOf("lowlight") >= 0 || name.indexOf("low light") >= 0) {
+      values.exposure = 0.15;
+      values.contrast = 12;
+      values.highlights = -28;
+      values.shadows = 24;
+      values.whites = 2;
+      values.blacks = -4;
+      values.saturation = 106;
+      values.vibrance = 18;
+    } else if (name.indexOf("drone") >= 0 || name.indexOf("outdoor") >= 0 || name.indexOf("sun") >= 0) {
+      values.temperature = -2;
+      values.contrast = 16;
+      values.highlights = -30;
+      values.shadows = 14;
+      values.saturation = 110;
+      values.vibrance = 20;
+    }
+
+    return values;
   }
 
   function getMediaPath(projectItem) {
@@ -1167,24 +1204,20 @@ var AutoCutStudio = AutoCutStudio || {};
 
       var ref = getVideoClipRefAtPlayhead(seq);
       var component = ensureLumetriComponent(ref);
-      var usedNativeAuto = triggerLumetriAuto(component);
-
-      if (!usedNativeAuto) {
-        applyLumetriValues(component, {
-          temperature: 0,
-          tint: 0,
-          exposure: 0,
-          contrast: 12,
-          saturation: 108,
-          vibrance: 16
-        });
+      var values = autoCutColorValuesForClip(ref);
+      var missing = applyLumetriValues(component, values);
+      if (missing.length >= 6) {
+        throw new Error(ref.name + ": Premiere did not expose enough Lumetri controls for AutoCut color.");
       }
 
       return ok({
         name: ref.name,
         trackIndex: ref.trackIndex,
         clipIndex: ref.clipIndex,
-        usedNativeAuto: usedNativeAuto
+        engine: "AutoCut custom correction",
+        usedNativeAuto: false,
+        missing: missing,
+        values: values
       });
     } catch (error) {
       return fail(error.message || String(error));
@@ -1208,6 +1241,10 @@ var AutoCutStudio = AutoCutStudio || {};
         tint: 0,
         exposure: 0,
         contrast: 0,
+        highlights: 0,
+        shadows: 0,
+        whites: 0,
+        blacks: 0,
         saturation: 100,
         vibrance: 0
       };

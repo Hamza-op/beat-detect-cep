@@ -996,12 +996,13 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Auto correcting the video clip under the playhead...", false, true);
+    setStatus("Running AutoCut color correction on the clip under the playhead...", false, true);
 
     cepEval("AutoCutStudio.autoColorAtPlayhead()")
       .then(function(result) {
-        var method = result.usedNativeAuto ? "Lumetri Auto" : "fallback Lumetri correction";
-        setStatus("Auto color applied to " + result.name + " using " + method + ".", false, false, true);
+        var engine = result.engine || "AutoCut custom correction";
+        var missing = result.missing && result.missing.length ? " Missing controls: " + result.missing.join(", ") + "." : "";
+        setStatus("Auto color applied to " + result.name + " using " + engine + "." + missing, false, false, true);
       })
       .catch(function(error) {
         appendLog(error && error.stack ? error.stack : String(error));

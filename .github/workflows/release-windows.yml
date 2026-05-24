@@ -38,6 +38,11 @@ jobs:
         working-directory: analyzer
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
       - name: Verify native SDK
         shell: pwsh
         run: |

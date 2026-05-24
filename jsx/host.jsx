@@ -1,5 +1,17 @@
 var AutoCutStudio = AutoCutStudio || {};
 
+// ExtendScript JSON polyfill
+var JSON = JSON || {};
+if (!JSON.parse) {
+  JSON.parse = function (text) {
+    try {
+      return eval("(" + text + ")");
+    } catch (e) {
+      throw new Error("JSON parsing failed: " + e.message);
+    }
+  };
+}
+
 (function () {
   var TICKS_PER_SECOND = 254016000000;
 
@@ -60,10 +72,11 @@ var AutoCutStudio = AutoCutStudio || {};
   }
 
   function parseJson(text) {
-    if (typeof JSON !== "undefined" && JSON.parse) {
+    try {
       return JSON.parse(text);
+    } catch (e) {
+      throw new Error("JSON parsing failed in scripting host: " + e.message);
     }
-    throw new Error("JSON.parse is unavailable in this Premiere scripting host.");
   }
 
   function timeToSeconds(time) {
@@ -108,8 +121,13 @@ var AutoCutStudio = AutoCutStudio || {};
   }
 
   function isTrackItemSelected(clip, selectedItems) {
-    if (clip && clip.isSelected && clip.isSelected()) {
-      return true;
+    if (clip && clip.isSelected) {
+      try {
+        var isSel = typeof clip.isSelected === "function" ? clip.isSelected() : clip.isSelected;
+        if (isSel) {
+          return true;
+        }
+      } catch (_) {}
     }
     if (!selectedItems) {
       return false;
@@ -189,8 +207,13 @@ var AutoCutStudio = AutoCutStudio || {};
         }
         for (var j = 0; j < track.clips.numItems; j++) {
           var clip = track.clips[j];
-          if (clip && clip.projectItem && clip.isSelected && clip.isSelected()) {
-            return clip;
+          if (clip && clip.projectItem && clip.isSelected) {
+            try {
+              var isSel = typeof clip.isSelected === "function" ? clip.isSelected() : clip.isSelected;
+              if (isSel) {
+                return clip;
+              }
+            } catch (_) {}
           }
         }
       }
@@ -221,8 +244,13 @@ var AutoCutStudio = AutoCutStudio || {};
         if (!track || !track.clips) continue;
         for (var j = 0; j < track.clips.numItems; j++) {
           var clip = track.clips[j];
-          if (clip && clip.isSelected && clip.isSelected()) {
-            selected.push(clip);
+          if (clip && clip.isSelected) {
+            try {
+              var isSel = typeof clip.isSelected === "function" ? clip.isSelected() : clip.isSelected;
+              if (isSel) {
+                selected.push(clip);
+              }
+            } catch (_) {}
           }
         }
       }
@@ -1534,6 +1562,20 @@ var AutoCutStudio = AutoCutStudio || {};
         diagnostics.push("Sequence marker API: " + (app.project.activeSequence.markers && app.project.activeSequence.markers.createMarker ? "OK" : "FAIL"));
         var clipMarkers = clipMarkerCollection(clip);
         diagnostics.push("Clip marker API: " + (clipMarkers && clipMarkers.createMarker ? "OK" : "Unavailable"));
+        
+        // Print properties of the AutoCutStudio Color Engine if it is present
+        var autocutComponent = findAutoCutColorComponent(clip);
+        if (autocutComponent) {
+          diagnostics.push("AutoCut Color Engine plugin: FOUND");
+          if (autocutComponent.properties) {
+            for (var p = 0; p < autocutComponent.properties.numItems; p++) {
+              var prop = autocutComponent.properties[p];
+              diagnostics.push("  - Param " + p + ": dn='" + prop.displayName + "', mn='" + prop.matchName + "', hasSetValue=" + Boolean(prop.setValue));
+            }
+          }
+        } else {
+          diagnostics.push("AutoCut Color Engine plugin: NOT applied to selected clip");
+        }
       } catch (selectionError) {
         diagnostics.push("Selection: FAIL - " + (selectionError.message || String(selectionError)));
       }

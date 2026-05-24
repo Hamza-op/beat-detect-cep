@@ -25,3 +25,10 @@ native/premiere_plugin/Win/Release/
 native/premiere_plugin/Win/*.rc
 native/premiere_plugin/Win/*.user
 native/premiere_plugin/Win/*.aps
+
+# Agent and temporary files
+.antigravitycli/
+.gemini/
+.env
+.DS_Store
+

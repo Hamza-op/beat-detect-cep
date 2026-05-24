@@ -590,7 +590,13 @@ if (!JSON.parse) {
       return component;
     }
 
-    applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
+    // Try to apply via QE DOM
+    try {
+      applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
+    } catch (_applyErr) {
+      // AutoCut Color Engine plugin may not be installed - return null so caller can fall back
+      return null;
+    }
     
     // Robust 1.5-second retry loop with 50ms sleeps to wait for Premiere to initialize the effect and populate its properties
     var startTime = (new Date()).getTime();
@@ -611,9 +617,7 @@ if (!JSON.parse) {
       while ((new Date()).getTime() - delayStart < 50) {}
     }
 
-    if (!component) {
-      throw new Error("AutoCutStudio Color Engine was applied but its properties were not exposed to ExtendScript.");
-    }
+    // Return null instead of throwing - caller will fall back to Lumetri
     return component;
   }
 
@@ -859,7 +863,7 @@ if (!JSON.parse) {
     if (collection && collection.createMarker) {
       return collection.createMarker(seconds);
     }
-    throw new Error("This selected clip does not support clip marker creation.");
+    throw new Error("This selected clip does not support clip marker creation. Try using Sequence Timeline Markers instead.");
   }
 
   function markerColorForFocus(focus, target) {
@@ -963,9 +967,18 @@ if (!JSON.parse) {
   }
 
   function clipMarkerCollection(clip) {
-    if (clip && clip.projectItem && clip.projectItem.getMarkers) {
-      return clip.projectItem.getMarkers();
+    // Try clip-level markers first (timeline clip markers in newer Premiere versions)
+    if (clip && clip.markers) {
+      return clip.markers;
     }
+    // Then try projectItem.getMarkers() - source/bin markers
+    if (clip && clip.projectItem && clip.projectItem.getMarkers) {
+      try {
+        var m = clip.projectItem.getMarkers();
+        if (m) return m;
+      } catch (_) {}
+    }
+    // Then try projectItem.markers
     if (clip && clip.projectItem && clip.projectItem.markers) {
       return clip.projectItem.markers;
     }
@@ -1352,7 +1365,14 @@ if (!JSON.parse) {
   function applyNativeAutoColor(ref, captureFrameSeconds, captureToken) {
     var hadExistingComponent = Boolean(findAutoCutColorComponent(ref.clip));
     var component = ensureAutoCutColorComponent(ref);
+    var usedLumetriFallback = false;
     
+    // If native AutoCut Color Engine is not accessible, fall back to Lumetri Color
+    if (!component) {
+      component = ensureLumetriComponent(ref);
+      usedLumetriFallback = true;
+    }
+
     // Ensure component is enabled when applying new auto color
     if (component) {
       try {
@@ -1366,28 +1386,53 @@ if (!JSON.parse) {
     var warnings = [];
 
     try {
-      missing = applyAutoCutColorValues(component, values);
+      if (usedLumetriFallback) {
+        missing = applyLumetriValues(component, values);
+        warnings.push("AutoCut native engine not accessible in this Premiere version; applied via Lumetri Color instead.");
+      } else {
+        missing = applyAutoCutColorValues(component, values);
+      }
     } catch (error) {
-      missing = ["script_properties_unavailable"];
-      warnings.push(hadExistingComponent
-        ? "Native effect is present, but Premiere did not expose its controls to scripting; existing manual overrides could not be reset."
-        : "Native effect was applied with live default auto-analysis; Premiere did not expose its controls to scripting.");
+      // If native component properties fail, fall back to Lumetri
+      if (!usedLumetriFallback) {
+        try {
+          component = ensureLumetriComponent(ref);
+          if (component) {
+            try { component.enabled = true; } catch (_) {}
+            missing = applyLumetriValues(component, values);
+            usedLumetriFallback = true;
+            warnings.push("Native engine properties not exposed; fell back to Lumetri Color.");
+          }
+        } catch (lumetriErr) {
+          missing = ["script_properties_unavailable"];
+          warnings.push("Neither native engine nor Lumetri controls were accessible: " + (lumetriErr.message || String(lumetriErr)));
+        }
+      } else {
+        missing = ["lumetri_properties_unavailable"];
+        warnings.push("Lumetri properties were not exposed: " + (error.message || String(error)));
+      }
     }
 
-    if (!setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)) {
-      warnings.push(hadExistingComponent
-        ? "Native capture token was not exposed to scripting; existing effect may keep its previous captured frame."
-        : "Native capture controls were not exposed to scripting; the effect will fall back to live frame analysis.");
+    if (!usedLumetriFallback) {
+      if (!setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)) {
+        warnings.push(hadExistingComponent
+          ? "Native capture token was not exposed to scripting; existing effect may keep its previous captured frame."
+          : "Native capture controls were not exposed to scripting; the effect will fall back to live frame analysis.");
+      }
     }
 
     var colorInfo = getClipColorScience(ref.clip);
+    var engineLabel = usedLumetriFallback
+      ? "Lumetri Color (Fallback from Native Engine)"
+      : "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)";
 
     return {
       name: ref.name,
       trackIndex: ref.trackIndex,
       clipIndex: ref.clipIndex,
-      engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
-      usedNativeAuto: true,
+      engine: engineLabel,
+      usedNativeAuto: !usedLumetriFallback,
+      usedLumetriFallback: usedLumetriFallback,
       missing: missing,
       warnings: warnings,
       values: values,
@@ -1460,6 +1505,42 @@ if (!JSON.parse) {
 
   AutoCutStudio.autoColorAtPlayhead = AutoCutStudio.autoColorSelectedClips;
 
+  function removeEffectViaQE(ref, effectNames) {
+    // Try to remove effects via QE DOM (works when ExtendScript can't see the component)
+    try {
+      if (!app.enableQE) return false;
+      app.enableQE();
+      var qeSeq = qe.project.getActiveSequence();
+      if (!qeSeq) return false;
+      var qeTrack = qeSeq.getVideoTrackAt(ref.trackIndex);
+      if (!qeTrack) return false;
+      var qeClip = qeTrack.getItemAt(ref.clipIndex);
+      if (!qeClip) return false;
+
+      // Try to remove effects by iterating QE clip's effects
+      if (qeClip.numComponents) {
+        var removed = false;
+        for (var c = qeClip.numComponents() - 1; c >= 0; c--) {
+          try {
+            var comp = qeClip.getComponentAt(c);
+            if (comp) {
+              var compName = (comp.name || "").toLowerCase();
+              for (var n = 0; n < effectNames.length; n++) {
+                if (compName.indexOf(effectNames[n].toLowerCase()) >= 0) {
+                  qeClip.removeComponentAt(c);
+                  removed = true;
+                  break;
+                }
+              }
+            }
+          } catch (_) {}
+        }
+        return removed;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   AutoCutStudio.resetColorGrade = function () {
     try {
       var seq = app.project.activeSequence;
@@ -1482,16 +1563,24 @@ if (!JSON.parse) {
         try {
           var appliedToThisClip = false;
 
-          // 1. Try to find and reset AutoCut Color Engine first
+          // 1. Try to find and reset AutoCut Color Engine via ExtendScript
           var autocutComponent = findAutoCutColorComponent(ref.clip);
           if (autocutComponent) {
             try {
               autocutComponent.enabled = false;
             } catch (_) {}
-            setAutoCutCaptureControls(autocutComponent, 0, 0);
-            setLumetriProperty(autocutComponent, ["analysis confidence", "confidence"], 0.0);
-            applyAutoCutColorValues(autocutComponent, defaults);
+            try {
+              setAutoCutCaptureControls(autocutComponent, 0, 0);
+              setLumetriProperty(autocutComponent, ["analysis confidence", "confidence"], 0.0);
+              applyAutoCutColorValues(autocutComponent, defaults);
+            } catch (_) {}
             appliedToThisClip = true;
+          } else {
+            // AutoCut component not found via ExtendScript - try removing via QE DOM
+            var qeRemoved = removeEffectViaQE(ref, ["AutoCutStudio Color Engine", "AutoCut Color", "autocutstudio"]);
+            if (qeRemoved) {
+              appliedToThisClip = true;
+            }
           }
 
           // 2. Try to find and reset Lumetri Color
@@ -1500,8 +1589,29 @@ if (!JSON.parse) {
             try {
               lumetriComponent.enabled = false;
             } catch (_) {}
-            applyLumetriValues(lumetriComponent, defaults);
+            try {
+              applyLumetriValues(lumetriComponent, defaults);
+            } catch (_) {}
             appliedToThisClip = true;
+          }
+
+          // 3. If nothing found via either method, do a broad search of ALL components
+          if (!appliedToThisClip && ref.clip && ref.clip.components) {
+            for (var c = 0; c < ref.clip.components.numItems; c++) {
+              var comp = ref.clip.components[c];
+              var name = componentName(comp);
+              // Skip built-in Motion, Opacity, Time Remapping
+              if (name.indexOf("motion") >= 0 || name.indexOf("opacity") >= 0 || name.indexOf("time remap") >= 0) {
+                continue;
+              }
+              // Check if it has color-related properties
+              if (name.indexOf("color") >= 0 || name.indexOf("lumetri") >= 0 || name.indexOf("autocut") >= 0) {
+                try {
+                  comp.enabled = false;
+                } catch (_) {}
+                appliedToThisClip = true;
+              }
+            }
           }
 
           if (appliedToThisClip) {
@@ -1608,28 +1718,72 @@ if (!JSON.parse) {
         diagnostics.push("Sequence: FAIL - no active sequence");
         return ok({ diagnostics: diagnostics });
       }
-      diagnostics.push("Sequence: OK - " + app.project.activeSequence.name);
+      var seq = app.project.activeSequence;
+      diagnostics.push("Sequence: OK - " + seq.name);
       try {
         var clip = getSelectedClip();
         var info = getClipInfo(clip);
         diagnostics.push("Selection: OK - " + info.name);
-        diagnostics.push("Media path: OK");
-        diagnostics.push("Sequence marker API: " + (app.project.activeSequence.markers && app.project.activeSequence.markers.createMarker ? "OK" : "FAIL"));
+        diagnostics.push("Media path: " + info.mediaPath);
+        diagnostics.push("Sequence marker API: " + (seq.markers && seq.markers.createMarker ? "OK" : "FAIL"));
         var clipMarkers = clipMarkerCollection(clip);
         diagnostics.push("Clip marker API: " + (clipMarkers && clipMarkers.createMarker ? "OK" : "Unavailable"));
+        diagnostics.push("clip.markers: " + (clip.markers ? "exists" : "null"));
+        diagnostics.push("projectItem.getMarkers: " + (clip.projectItem && clip.projectItem.getMarkers ? "exists" : "null"));
+        diagnostics.push("projectItem.markers: " + (clip.projectItem && clip.projectItem.markers ? "exists" : "null"));
         
-        // Print properties of the AutoCutStudio Color Engine if it is present
-        var autocutComponent = findAutoCutColorComponent(clip);
-        if (autocutComponent) {
-          diagnostics.push("AutoCut Color Engine plugin: FOUND");
-          if (autocutComponent.properties) {
-            for (var p = 0; p < autocutComponent.properties.numItems; p++) {
-              var prop = autocutComponent.properties[p];
-              diagnostics.push("  - Param " + p + ": dn='" + prop.displayName + "', mn='" + prop.matchName + "', hasSetValue=" + Boolean(prop.setValue));
+        // Dump ALL components on the clip for debugging
+        diagnostics.push("--- ALL CLIP COMPONENTS ---");
+        if (clip.components) {
+          diagnostics.push("Total components: " + clip.components.numItems);
+          for (var c = 0; c < clip.components.numItems; c++) {
+            var comp = clip.components[c];
+            var dn = "";
+            var mn = "";
+            try { dn = comp.displayName || ""; } catch (_) {}
+            try { mn = comp.matchName || ""; } catch (_) {}
+            diagnostics.push("  Component " + c + ": dn='" + dn + "', mn='" + mn + "', enabled=" + (comp.enabled !== undefined ? comp.enabled : "?"));
+            // Dump first-level properties of each component
+            if (comp.properties) {
+              try {
+                for (var p = 0; p < Math.min(comp.properties.numItems, 8); p++) {
+                  var prop = comp.properties[p];
+                  var pdn = "";
+                  try { pdn = prop.displayName || ""; } catch (_) {}
+                  diagnostics.push("    - Prop " + p + ": '" + pdn + "' hasSetValue=" + Boolean(prop.setValue));
+                }
+                if (comp.properties.numItems > 8) {
+                  diagnostics.push("    ... (" + (comp.properties.numItems - 8) + " more properties)");
+                }
+              } catch (_) {}
             }
           }
         } else {
-          diagnostics.push("AutoCut Color Engine plugin: NOT applied to selected clip");
+          diagnostics.push("No components collection on clip");
+        }
+
+        // Print AutoCut Color Engine status
+        var autocutComponent = findAutoCutColorComponent(clip);
+        diagnostics.push("AutoCut Color Engine via findAutoCutColorComponent: " + (autocutComponent ? "FOUND" : "NOT FOUND"));
+
+        // Print Lumetri Color status
+        var lumetriComponent = findLumetriComponent(clip);
+        diagnostics.push("Lumetri Color via findLumetriComponent: " + (lumetriComponent ? "FOUND" : "NOT FOUND"));
+
+        // QE DOM check
+        try {
+          if (app.enableQE) {
+            app.enableQE();
+            var qeSeq = qe.project.getActiveSequence();
+            diagnostics.push("QE DOM: OK");
+            if (qeSeq) {
+              diagnostics.push("QE Sequence: OK");
+            }
+          } else {
+            diagnostics.push("QE DOM: UNAVAILABLE");
+          }
+        } catch (qeErr) {
+          diagnostics.push("QE DOM: ERROR - " + (qeErr.message || String(qeErr)));
         }
       } catch (selectionError) {
         diagnostics.push("Selection: FAIL - " + (selectionError.message || String(selectionError)));

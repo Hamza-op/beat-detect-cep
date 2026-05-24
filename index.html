@@ -314,6 +314,21 @@
             </div>
           </div>
 
+          <!-- Interactive Zoom Preview Monitor -->
+          <div class="form-group grid-span-full">
+            <span class="field-label">Interactive Movement Preview</span>
+            <div class="zoom-preview-monitor">
+              <div class="simulated-viewfinder">
+                <div class="viewfinder-grid"></div>
+                <div class="viewfinder-overlay">
+                  <div><span class="rec-dot"></span><span>LIVE</span></div>
+                  <span class="timecode">00:01:24:12</span>
+                </div>
+                <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='90' viewBox='0 0 160 90'><rect width='100%25' height='100%25' fill='%231b1d23'/><circle cx='80' cy='45' r='20' stroke='%23ffa845' stroke-width='2' fill='none' stroke-dasharray='4'/><circle cx='80' cy='45' r='10' fill='%235eead4' opacity='0.3'/><line x1='10' y1='45' x2='150' y2='45' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/><line x1='80' y1='5' x2='80' y2='85' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/></svg>" id="previewSubject" class="preview-subject animate-smooth-in" alt="Preview subject">
+              </div>
+            </div>
+          </div>
+
           <!-- Gimbal Ratio Slider -->
           <div class="form-group grid-span-full">
             <div class="density-head">
@@ -326,6 +341,13 @@
             <div class="slider-labels">
               <span>Subtle (101%)</span>
               <span>Intense (150%)</span>
+            </div>
+            
+            <!-- Zoom Ratio Presets -->
+            <div class="ratio-presets">
+              <button type="button" class="btn-preset" data-ratio="105">105% Subtle</button>
+              <button type="button" class="btn-preset" data-ratio="115">115% Moderate</button>
+              <button type="button" class="btn-preset" data-ratio="130">130% Intense</button>
             </div>
           </div>
 

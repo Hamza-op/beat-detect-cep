@@ -1,10 +1,7 @@
 use std::env;
 use std::error::Error;
 
-use crate::DetectionMode;
-
 pub(crate) struct AnalyzerOptions {
-    pub(crate) mode: DetectionMode,
     pub(crate) media_path: String,
     pub(crate) start_seconds: Option<f64>,
     pub(crate) duration_seconds: Option<f64>,
@@ -23,23 +20,12 @@ where
         return Err(usage().into());
     }
 
-    let mut mode = DetectionMode::Beats;
     let mut start_seconds = None;
     let mut duration_seconds = None;
     let mut path_parts = Vec::new();
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
-            "--mode" => {
-                let raw = args.next().ok_or("--mode requires a value")?;
-                mode = match raw.as_str() {
-                    "spikes" => DetectionMode::Spikes,
-                    "music" => DetectionMode::Music,
-                    "vocal" => DetectionMode::Vocal,
-                    "beats" => DetectionMode::Beats,
-                    other => return Err(format!("unsupported detection mode: {other}").into()),
-                };
-            }
             "--start" => {
                 start_seconds = Some(parse_seconds_flag(args.next(), "--start", true)?);
             }
@@ -65,7 +51,6 @@ where
     }
 
     Ok(AnalyzerOptions {
-        mode,
         media_path: path_parts.join(" "),
         start_seconds,
         duration_seconds,
@@ -88,5 +73,5 @@ fn parse_seconds_flag(
 }
 
 fn usage() -> &'static str {
-    "usage: beat_analyzer [--mode spikes|music|vocal|beats] [--start seconds] [--duration seconds] <media-file-path>"
+    "usage: beat_analyzer [--start seconds] [--duration seconds] <media-file-path>"
 }

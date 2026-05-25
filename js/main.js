@@ -28,9 +28,9 @@
     filteredCount:    document.getElementById("filteredCount"),
     totalCount:       document.getElementById("totalCount"),
     markerTarget:     document.getElementById("markerTarget"),
-    detectionFocus:   document.getElementById("detectionFocus"),
     zoomSlider:       document.getElementById("zoomSlider"),
     zoomLabel:        document.getElementById("zoomLabel"),
+    autoZoomRatio:    document.getElementById("autoZoomRatio"),
     targetCountInput: document.getElementById("targetCountInput"),
     targetStrategy:   document.getElementById("targetStrategy"),
     targetCountHint:  document.getElementById("targetCountHint"),
@@ -51,36 +51,14 @@
     mainTabDiagnostics: document.getElementById("mainTabDiagnostics")
   };
 
-  function getDetectionFocus() {
-    if (dom.detectionFocus && dom.detectionFocus.value) {
-      return dom.detectionFocus.value;
-    }
-    var selected = document.querySelector("input[name='detectionFocus']:checked");
-    return selected ? selected.value : "beats";
-  }
-
-  function getDetectionFocusLabel(focus) {
-    var labels = {
-      beats: "beat-grid",
-      spikes: "percussion-spike",
-      music: "music-onset",
-      vocal: "vocal-entry"
-    };
-    return labels[focus] || labels.beats;
+  function getBeatWorkflowLabel() {
+    return "beat-grid";
   }
 
   function dispatchInputEvent(element) {
     if (!element) return;
     var event = new Event("input", { bubbles: true, cancelable: true });
     element.dispatchEvent(event);
-  }
-
-  function syncModeSelection() {
-    var options = document.querySelectorAll(".mode-option");
-    for (var i = 0; i < options.length; i++) {
-      var input = options[i].querySelector("input");
-      options[i].classList.toggle("is-selected", Boolean(input && input.checked));
-    }
   }
 
   function setBusy(isBusy) {
@@ -277,9 +255,9 @@
     });
   }
 
-  function runAnalyzer(mediaPath, focus, clip) {
+  function runAnalyzer(mediaPath, clip) {
     if (mediaPath === "__autocut_studio_preview__" || isBrowserPreview()) {
-      return Promise.resolve(makePreviewEvents(focus));
+      return Promise.resolve(makePreviewEvents());
     }
     if (!mediaPath || typeof mediaPath !== "string") {
       return Promise.reject(new Error("Analyzer did not receive a valid media path."));
@@ -301,7 +279,7 @@
         return;
       }
 
-      var args = addClipRangeArgs(["--mode", focus || "beats"], clip);
+      var args = addClipRangeArgs([], clip);
       args.push(mediaPath);
 
       childProcess.execFile(
@@ -336,8 +314,8 @@
     });
   }
 
-  function runHybridAnalyzer(mediaPath, focus, clip) {
-    return runAnalyzer(mediaPath, focus || "beats", clip).then(function(primaryEvents) {
+  function runHybridAnalyzer(mediaPath, clip) {
+    return runAnalyzer(mediaPath, clip).then(function(primaryEvents) {
       return {
         events: sanitizeEvents(primaryEvents),
         primaryCount: primaryEvents.length
@@ -435,8 +413,6 @@ function keepStrongestPerSecond(events) {
   //   strongest = highest-scored beat inside each section.
   //   spread    = beat closest to the section center.
   //
-  // Legacy non-beat modes keep their old behavior for compatibility.
-  //
   function getTargetStrategy() {
     return dom.targetStrategy ? dom.targetStrategy.value : "balanced";
   }
@@ -487,82 +463,7 @@ function keepStrongestPerSecond(events) {
     }
     strategy = strategy || "balanced";
 
-    if (getDetectionFocus() === "beats") {
-      return selectBeatGridByTargetCount(pool, n, strategy);
-    }
-
-    if (strategy === "strongest") {
-      return pool.slice()
-        .sort(function(a, b) { return b.score - a.score; })
-        .slice(0, n)
-        .sort(function(a, b) { return a.time - b.time; });
-    }
-
-    var sorted = pool.slice();
-    var duration = sorted[sorted.length - 1].time;
-    if (duration <= 0) {
-      // No time axis — fall back to top-N by score
-      return pool.slice().sort(function(a,b){ return b.score - a.score; }).slice(0, n)
-        .sort(function(a,b){ return a.time - b.time; });
-    }
-
-    var segWidth = duration / n;
-    var selected = [];
-    var usedIndices = {};
-
-    for (var seg = 0; seg < n; seg++) {
-      var tLo = seg * segWidth;
-      var tHi = tLo + segWidth;
-
-      // Widen by 50 % on each side if segment is empty
-      var attempts = 0;
-      var expand = 0;
-      var best = null;
-      var bestIdx = -1;
-      var center = tLo + segWidth * 0.5;
-      var bestRank = -Infinity;
-
-      while (best === null && attempts < 6) {
-        var lo = tLo - expand * segWidth;
-        var hi = tHi + expand * segWidth;
-        for (var k = 0; k < sorted.length; k++) {
-          if (usedIndices[k]) continue;
-          var t = sorted[k].time;
-          if (t >= lo && t < hi) {
-            var rank = sorted[k].score;
-            if (strategy === "spread") {
-              var distance = Math.abs(t - center);
-              var closeness = 1 - Math.min(1, distance / Math.max(segWidth * (1 + expand), 0.001));
-              rank = closeness * 0.70 + sorted[k].score * 0.30;
-            }
-            if (best === null || rank > bestRank) {
-              best = sorted[k];
-              bestIdx = k;
-              bestRank = rank;
-            }
-          }
-        }
-        expand += 0.5;
-        attempts++;
-      }
-
-      if (best !== null) {
-        selected.push(best);
-        usedIndices[bestIdx] = true;
-      }
-    }
-
-    // Gap fill: if we still need more events, top up with globally strongest unused
-    if (selected.length < n) {
-      var remaining = sorted
-        .filter(function(_, i) { return !usedIndices[i]; })
-        .sort(function(a, b) { return b.score - a.score; });
-      for (var r = 0; r < remaining.length && selected.length < n; r++) {
-        selected.push(remaining[r]);
-      }
-    }
-
-    return selected.sort(function(a,b){ return a.time - b.time; });
+    return selectBeatGridByTargetCount(pool, n, strategy);
   }
 
   function selectBeatGridByTargetCount(pool, n, strategy) {
@@ -660,11 +561,7 @@ function keepStrongestPerSecond(events) {
     dom.targetCountInput.max = String(max);
     // Update hint with range
     if (dom.targetCountHint) {
-      if (getDetectionFocus() === "beats") {
-        dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Balanced favors strong centered beats; Strongest uses the highest score per section; Spread favors timing symmetry.";
-      } else {
-        dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " markers. Use Strategy to choose balanced, strongest, or spread.";
-      }
+      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " beat markers. Balanced favors strong centered beats; Strongest uses the highest score per section; Spread favors timing symmetry.";
     }
   }
 
@@ -682,11 +579,9 @@ function keepStrongestPerSecond(events) {
       return;
     }
     var sorted = pool.slice().sort(function(a,b){ return a.time - b.time; });
-    if (getDetectionFocus() === "beats") {
-      sorted = collapseBeatCandidatesBySecond(sorted, n);
-      n = Math.min(n, sorted.length);
-    }
-    var firstTime = getDetectionFocus() === "beats" ? sorted[0].time : 0;
+    sorted = collapseBeatCandidatesBySecond(sorted, n);
+    n = Math.min(n, sorted.length);
+    var firstTime = sorted[0].time;
     var lastTime = sorted[sorted.length - 1].time;
     var duration = Math.max(0, lastTime - firstTime);
     var segWidth = duration > 0 ? duration / n : 0;
@@ -727,35 +622,6 @@ function keepStrongestPerSecond(events) {
 
         selected.push(sorted[pickIndex]);
         usedIndices[pickIndex] = true;
-      }
-    }
-
-    // Legacy non-beat modes can still top up so older workflows keep exact N.
-    if (getDetectionFocus() !== "beats" && selected.length < n) {
-      var unused = sorted.filter(function(_, i){ return !usedIndices[i]; });
-      while (selected.length < n && unused.length > 0) {
-        var totalWeight = 0;
-        var weights = [];
-        for (var u = 0; u < unused.length; u++) {
-          var score = Number(unused[u].score) || 0.1;
-          var weight = Math.max(0.001, score * score);
-          totalWeight += weight;
-          weights.push(weight);
-        }
-
-        var randomValue = Math.random() * totalWeight;
-        var runningSum = 0;
-        var pickIdx = 0; // fallback
-        for (var u = 0; u < unused.length; u++) {
-          runningSum += weights[u];
-          if (randomValue <= runningSum) {
-            pickIdx = u;
-            break;
-          }
-        }
-
-        selected.push(unused[pickIdx]);
-        unused.splice(pickIdx, 1);
       }
     }
 
@@ -833,14 +699,8 @@ function keepStrongestPerSecond(events) {
       });
   }
 
-  function markerColorIndexForEvent(event, focus) {
-    var mapped = {
-      beats: 3,
-      spikes: 1,
-      music: 6,
-      vocal: 11
-    };
-    return mapped[focus] || mapped.beats;
+  function markerColorIndexForEvent(event) {
+    return 3;
   }
 
   function getOffsetMs() {
@@ -855,13 +715,13 @@ function keepStrongestPerSecond(events) {
     }
   }
 
-  function eventsForPremiere(events, focus) {
+  function eventsForPremiere(events) {
     var offsetSec = getOffsetMs() / 1000.0;
     return events.map(function(event) {
       return {
         time: event.time + offsetSec,
         score: event.score,
-        colorIndex: markerColorIndexForEvent(event, focus)
+        colorIndex: markerColorIndexForEvent(event)
       };
     });
   }
@@ -890,9 +750,8 @@ function keepStrongestPerSecond(events) {
         if (!range) {
           throw new Error("Selected clip has an invalid source in/out range. Trim or reselect the timeline clip and try again.");
         }
-        var focus = getDetectionFocus();
-        setStatus("Analyzing selected cut only (" + formatSeconds(range.duration) + ") from " + state.clip.name + " for " + getDetectionFocusLabel(focus) + " markers...", false, true);
-        return runHybridAnalyzer(state.clip.mediaPath, focus, state.clip);
+        setStatus("Analyzing selected cut only (" + formatSeconds(range.duration) + ") from " + state.clip.name + " for " + getBeatWorkflowLabel() + " markers...", false, true);
+        return runHybridAnalyzer(state.clip.mediaPath, state.clip);
       })
       .then(function (analysis) {
         state.allEvents = cropEventsToSelectedClip(sanitizeEvents(analysis.events || []), state.clip);
@@ -902,7 +761,7 @@ function keepStrongestPerSecond(events) {
         dom.densityPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview() ? "Preview analysis complete: " : "Analysis complete: ") +
-          "found " + state.allEvents.length + " " + getDetectionFocusLabel(getDetectionFocus()) + " markers in the selected cut using Rust analyzer.",
+          "found " + state.allEvents.length + " " + getBeatWorkflowLabel() + " markers in the selected cut using Rust analyzer.",
           false, false, true
         );
       })
@@ -930,8 +789,7 @@ function keepStrongestPerSecond(events) {
       endSeconds: state.clip ? state.clip.endSeconds : null,
       inPointSeconds: state.clip ? state.clip.inPointSeconds : null,
       outPointSeconds: state.clip ? state.clip.outPointSeconds : null,
-      focus: getDetectionFocus(),
-      events: eventsForPremiere(state.filteredEvents, getDetectionFocus())
+      events: eventsForPremiere(state.filteredEvents)
     };
 
     cepEval("AutoCutStudio.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
@@ -981,10 +839,11 @@ function keepStrongestPerSecond(events) {
     var zoomValue = dom.zoomSlider ? Number(dom.zoomSlider.value) : 110.0;
     var zoomModeEl = document.getElementById("zoomMode");
     var zoomStyle = zoomModeEl ? zoomModeEl.value : "smooth_in";
+    var autoRatio = !dom.autoZoomRatio || dom.autoZoomRatio.checked;
     var styleLabel = zoomStyle.replace("_", " ");
-    setStatus("Applying " + styleLabel + " gimbal zoom to selected clips (" + zoomValue + "%)...");
+    setStatus("Applying " + styleLabel + " gimbal zoom to selected clips (" + (autoRatio ? "auto ratio" : zoomValue + "%") + ")...");
 
-    var payload = { zoom: zoomValue, style: zoomStyle };
+    var payload = { zoom: zoomValue, style: zoomStyle, autoRatio: autoRatio };
     cepEval("AutoCutStudio.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {
         var skipped = Number(result.skipped) || 0;
@@ -1029,7 +888,7 @@ function keepStrongestPerSecond(events) {
     }
 
     setBusy(true);
-    setStatus("Capturing the current playhead frame for AutoCut color correction...", false, true);
+    setStatus("Capturing the playhead frame for AutoCut color correction...", false, true);
 
     cepEval("AutoCutStudio.autoColorAtPlayhead()")
       .then(function(result) {
@@ -1333,24 +1192,203 @@ function keepStrongestPerSecond(events) {
   }
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function() {
+      if (dom.autoZoomRatio) dom.autoZoomRatio.checked = false;
       if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
+      refreshZoomPreview();
     });
   }
 
   // Interactive movement preview animations changer
   var previewSubject = document.getElementById("previewSubject");
   var zoomModeSelect = document.getElementById("zoomMode");
+  var previewModeLabel = document.getElementById("previewModeLabel");
+  var previewRatioLabel = document.getElementById("previewRatioLabel");
+  var previewKeyframeTrack = document.getElementById("previewKeyframeTrack");
+  var previewStartLabel = document.getElementById("previewStartLabel");
+  var previewEndLabel = document.getElementById("previewEndLabel");
+  var selectedMomentLabel = document.getElementById("selectedMomentLabel");
+  var selectedMomentMeta = document.getElementById("selectedMomentMeta");
+  var movementButtons = document.querySelectorAll(".movement-btn");
+  var activeMovementLabel = "";
+  var autoRatioByMode = {
+    smooth_in: 108,
+    smooth_out: 108,
+    drift: 105,
+    breath: 106,
+    reveal: 112,
+    settle_in: 114,
+    swell: 110,
+    crash_in: 126,
+    crash_out: 124,
+    punch_in: 118,
+    punch_out: 116,
+    pulse: 112,
+    snap_back: 120,
+    triple_hit: 116
+  };
+  var previewNames = {
+    smooth_in: "Slow Advance",
+    smooth_out: "Elegant Pullback",
+    drift: "Subtle Drift",
+    breath: "Soft Breathing",
+    reveal: "Grace Reveal",
+    settle_in: "Refined Settle",
+    swell: "Closing Swell",
+    crash_in: "Impact Advance",
+    crash_out: "Impact Release",
+    punch_in: "Dance Accent",
+    punch_out: "Beat Release",
+    pulse: "Rhythm Pulse",
+    snap_back: "Percussion Snap",
+    triple_hit: "Procession Beat"
+  };
+  var movementDescriptions = {
+    smooth_in: "Gradual cinematic emphasis for portraits, vows, and emotional detail shots.",
+    smooth_out: "Elegant release that opens the frame near the end of the shot.",
+    drift: "Subtle motion for couple portraits and calm beauty shots.",
+    breath: "Soft organic movement that gently returns to neutral.",
+    reveal: "Held emphasis followed by a graceful reveal.",
+    settle_in: "Refined push with a controlled settle for detail emphasis.",
+    swell: "Quiet start with a closing lift for transitions and emotional exits.",
+    punch_in: "Strong beat accent for dance entries and energetic cuts.",
+    punch_out: "Fast release after a strong visual or music hit.",
+    pulse: "Controlled rhythmic pulse for claps and dance beats.",
+    snap_back: "Sharp percussion accent that quickly returns to neutral.",
+    triple_hit: "Three rhythmic accents for procession, dhol, and dance sections."
+  };
+
+  function setZoomRatio(value, keepAuto) {
+    if (!dom.zoomSlider || !value) return;
+    dom.zoomSlider.value = value;
+    if (dom.zoomLabel) dom.zoomLabel.textContent = dom.zoomSlider.value + "%";
+    if (dom.autoZoomRatio) dom.autoZoomRatio.checked = keepAuto !== false;
+    refreshZoomPreview();
+  }
+
+  function applyAutoRatioForMode() {
+    if (!zoomModeSelect || !dom.autoZoomRatio || !dom.autoZoomRatio.checked) return;
+    setZoomRatio(autoRatioByMode[zoomModeSelect.value] || 110, true);
+  }
+
+  function syncMovementButtons(mode) {
+    for (var i = 0; i < movementButtons.length; i++) {
+      var label = movementButtons[i].textContent || "";
+      var isActive = movementButtons[i].getAttribute("data-mode") === mode && (!activeMovementLabel || label === activeMovementLabel);
+      movementButtons[i].classList.toggle("is-active", isActive);
+      movementButtons[i].setAttribute("aria-pressed", isActive ? "true" : "false");
+    }
+  }
+
+  function selectZoomMode(mode, keepManualRatio, displayLabel) {
+    if (!zoomModeSelect || !mode) return;
+    zoomModeSelect.value = mode;
+    activeMovementLabel = displayLabel || "";
+    syncMovementButtons(mode);
+    if (!keepManualRatio) {
+      applyAutoRatioForMode();
+    }
+    refreshZoomPreview();
+  }
+
+  function refreshZoomPreview() {
+    if (!zoomModeSelect) return;
+    var mode = zoomModeSelect.value || "smooth_in";
+    var val = String(mode).replace(/_/g, "-");
+    var ratio = dom.zoomSlider ? Number(dom.zoomSlider.value) || 110 : 110;
+    var autoText = dom.autoZoomRatio && dom.autoZoomRatio.checked ? "AUTO " : "MANUAL ";
+    if (previewSubject) previewSubject.className = "preview-subject animate-" + val;
+    syncMovementButtons(mode);
+    var displayName = activeMovementLabel || previewNames[mode] || mode.replace(/_/g, " ");
+    if (previewModeLabel) previewModeLabel.textContent = displayName;
+    if (selectedMomentLabel) selectedMomentLabel.textContent = displayName;
+    if (selectedMomentMeta) selectedMomentMeta.textContent = movementDescriptions[mode] || "Clean scale movement across the selected clip.";
+    if (previewRatioLabel) previewRatioLabel.textContent = autoText + ratio + "%";
+    renderKeyframePreview(mode, ratio);
+  }
+
+  function keyframePreviewPoints(mode, ratio) {
+    var soft = Math.round(100 + (ratio - 100) * 0.45);
+    var drift = Math.round(100 + (ratio - 100) * 0.3);
+    var breath = Math.round(100 + (ratio - 100) * 0.22);
+    var over = Math.min(150, Math.round(100 + (ratio - 100) * 1.18));
+    var patterns = {
+      smooth_in: [[0, 100], [100, ratio]],
+      smooth_out: [[0, ratio], [100, 100]],
+      drift: [[0, 100], [100, drift]],
+      breath: [[0, 100], [50, breath], [100, 100]],
+      reveal: [[0, ratio], [62, ratio], [100, 100]],
+      settle_in: [[0, 100], [22, over], [55, soft], [100, ratio]],
+      swell: [[0, 100], [45, 100], [100, ratio]],
+      crash_in: [[0, 100], [72, 100], [100, ratio]],
+      crash_out: [[0, ratio], [24, 100], [100, 100]],
+      punch_in: [[0, 100], [8, ratio], [28, soft], [100, soft]],
+      punch_out: [[0, ratio], [10, 100], [100, 100]],
+      pulse: [[0, 100], [18, ratio], [38, 100], [62, soft], [100, 100]],
+      snap_back: [[0, 100], [10, ratio], [30, 100], [100, 100]],
+      triple_hit: [[0, 100], [15, ratio], [31, 100], [47, soft], [63, 100], [100, 100]]
+    };
+    return patterns[mode] || patterns.smooth_in;
+  }
+
+  function renderKeyframePreview(mode, ratio) {
+    if (!previewKeyframeTrack) return;
+    var points = keyframePreviewPoints(mode, ratio);
+    previewKeyframeTrack.innerHTML = "";
+    var minScale = 100;
+    var maxScale = Math.max(150, ratio);
+
+    function yFor(scale) {
+      var normalized = (scale - minScale) / (maxScale - minScale);
+      return 21 - Math.max(0, Math.min(1, normalized)) * 17;
+    }
+
+    for (var i = 0; i < points.length - 1; i++) {
+      var a = points[i];
+      var b = points[i + 1];
+      var x1 = a[0];
+      var y1 = yFor(a[1]);
+      var x2 = b[0];
+      var y2 = yFor(b[1]);
+      var dx = x2 - x1;
+      var dy = y2 - y1;
+      var line = document.createElement("span");
+      line.className = "key-line";
+      line.style.left = x1 + "%";
+      line.style.top = y1 + "px";
+      line.style.width = Math.sqrt(dx * dx + dy * dy) + "%";
+      line.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+      previewKeyframeTrack.appendChild(line);
+    }
+
+    for (var k = 0; k < points.length; k++) {
+      var point = points[k];
+      var node = document.createElement("span");
+      node.className = "key-node";
+      node.style.left = point[0] + "%";
+      node.style.top = yFor(point[1]) + "px";
+      node.setAttribute("data-scale", Math.round(point[1]) + "%");
+      previewKeyframeTrack.appendChild(node);
+    }
+
+    if (previewStartLabel) previewStartLabel.textContent = Math.round(points[0][1]) + "% start";
+    if (previewEndLabel) previewEndLabel.textContent = Math.round(points[points.length - 1][1]) + "% end";
+  }
   if (zoomModeSelect && previewSubject) {
     zoomModeSelect.addEventListener("change", function() {
-      var val = zoomModeSelect.value;
-      // Reset classes
-      previewSubject.className = "preview-subject";
-      // Apply the matching CSS keyframe animation class
-      if (val === "smooth_in") previewSubject.classList.add("animate-smooth-in");
-      else if (val === "smooth_out") previewSubject.classList.add("animate-smooth-out");
-      else if (val === "crash_in") previewSubject.classList.add("animate-crash-in");
-      else if (val === "crash_out") previewSubject.classList.add("animate-crash-out");
-      else if (val === "drift") previewSubject.classList.add("animate-drift");
+      selectZoomMode(zoomModeSelect.value);
+    });
+    applyAutoRatioForMode();
+    refreshZoomPreview();
+  }
+
+  for (var mb = 0; mb < movementButtons.length; mb++) {
+    movementButtons[mb].addEventListener("click", function() {
+      var isWeddingPreset = this.classList && this.classList.contains("wedding-preset");
+      selectZoomMode(this.getAttribute("data-mode"), false, isWeddingPreset ? this.textContent : "");
+      var ratio = this.getAttribute("data-ratio");
+      if (ratio) {
+        setZoomRatio(ratio, true);
+      }
     });
   }
 
@@ -1359,10 +1397,21 @@ function keepStrongestPerSecond(events) {
   for (var pb = 0; pb < presetButtons.length; pb++) {
     presetButtons[pb].addEventListener("click", function() {
       var ratio = this.getAttribute("data-ratio");
-      if (dom.zoomSlider && ratio) {
-        dom.zoomSlider.value = ratio;
-        dispatchInputEvent(dom.zoomSlider);
+      var mode = this.getAttribute("data-mode");
+      if (mode) {
+        selectZoomMode(mode, false, this.textContent || "");
       }
+      if (dom.zoomSlider && ratio) {
+        setZoomRatio(ratio, Boolean(mode));
+      }
+    });
+  }
+  if (dom.autoZoomRatio) {
+    dom.autoZoomRatio.addEventListener("change", function() {
+      if (dom.autoZoomRatio.checked) {
+        applyAutoRatioForMode();
+      }
+      refreshZoomPreview();
     });
   }
   if (dom.mainTabMarkersButton) {
@@ -1420,25 +1469,6 @@ function keepStrongestPerSecond(events) {
       syncFilterTabUI();
     });
   }
-
-  var modeInputs = document.querySelectorAll("input[name='detectionFocus']");
-  for (var modeIndex = 0; modeIndex < modeInputs.length; modeIndex++) {
-    modeInputs[modeIndex].addEventListener("change", function () {
-      syncModeSelection();
-      if (state.allEvents.length > 0) {
-        filterEvents();
-      }
-    });
-  }
-  if (dom.detectionFocus) {
-    dom.detectionFocus.addEventListener("change", function () {
-      syncModeSelection();
-      if (state.allEvents.length > 0) {
-        filterEvents();
-      }
-    });
-  }
-  syncModeSelection();
 
   var githubLink = document.getElementById("githubLink");
   if (githubLink) {

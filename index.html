@@ -77,20 +77,6 @@
             </div>
           </div>
 
-          <div class="form-row">
-            <div class="form-group flex-1">
-              <label class="field-label" for="detectionFocus">Detection Engine</label>
-              <div class="select-wrapper">
-                <select id="detectionFocus" name="detectionFocus">
-                  <option value="beats" selected>Beat Grid</option>
-                  <option value="spikes">Percussion Spikes</option>
-                  <option value="music">Music Onsets</option>
-                  <option value="vocal">Vocal Entries</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
           <!-- Active Engine — instrument card -->
           <div class="mode-summary-deck">
             <span class="field-label">Active&nbsp;Engine</span>
@@ -102,7 +88,7 @@
                 </div>
                 <span class="engine-badge">FRAME&nbsp;LOCKED</span>
               </div>
-              <p class="engine-desc">A native Rust analyzer rendering frame-accurate event markers from the selected detection engine.</p>
+              <p class="engine-desc">A native Rust analyzer rendering frame-accurate beat markers from the selected clip audio.</p>
             </div>
           </div>
 
@@ -255,12 +241,12 @@
                 </div>
                 <span class="engine-badge color-badge">NATIVE</span>
               </div>
-              <p class="engine-desc">Captures the current playhead frame, computes one native C++ correction, and applies that fixed grade across the selected clip.</p>
+              <p class="engine-desc">Captures the playhead frame, computes one native C++ correction, and applies that grade across the selected clip.</p>
             </div>
 
             <div class="lcd-screen color-auto-readout grid-span-full">
               <div class="lcd-value">AUTO</div>
-              <div class="lcd-label">playhead frame</div>
+              <div class="lcd-label">playhead frame analysis</div>
             </div>
 
             <button id="autoColorButton" class="btn-tool color-action grid-span-full" type="button">
@@ -300,54 +286,104 @@
 
           <div class="card-body tools-grid">
 
-          <!-- Gimbal Zoom Style Dropdown -->
-          <div class="form-group grid-span-full">
-            <label class="field-label" for="zoomMode">Gimbal Zoom Style</label>
-            <div class="select-wrapper">
-              <select id="zoomMode">
-                <option value="smooth_in">Slow Smooth Zoom-In</option>
-                <option value="smooth_out">Slow Smooth Zoom-Out</option>
-                <option value="crash_in">Speed Ramp Crash-In (End)</option>
-                <option value="crash_out">Speed Ramp Crash-Out (Start)</option>
-                <option value="drift">Slow Cinematic Drift</option>
-              </select>
-            </div>
-          </div>
-
-          <!-- Interactive Zoom Preview Monitor -->
-          <div class="form-group grid-span-full">
-            <span class="field-label">Interactive Movement Preview</span>
-            <div class="zoom-preview-monitor">
-              <div class="simulated-viewfinder">
-                <div class="viewfinder-grid"></div>
-                <div class="viewfinder-overlay">
-                  <div><span class="rec-dot"></span><span>LIVE</span></div>
-                  <span class="timecode">00:01:24:12</span>
+          <div class="zoom-smart-panel grid-span-full">
+            <div class="zoom-control-stack">
+              <div class="form-group">
+                <label class="field-label" for="zoomMode">Zoom Movement</label>
+                <select id="zoomMode" class="visually-hidden-select" aria-hidden="true" tabindex="-1">
+                  <option value="smooth_in" selected>Slow Push-In</option>
+                  <option value="smooth_out">Slow Pull-Out</option>
+                  <option value="drift">Micro Drift</option>
+                  <option value="breath">Breathing Hold</option>
+                  <option value="reveal">Hold Then Reveal</option>
+                  <option value="settle_in">Overshoot Settle</option>
+                  <option value="swell">Outro Swell</option>
+                  <option value="crash_in">Crash-In on Cut</option>
+                  <option value="crash_out">Crash-Out on Cut</option>
+                  <option value="punch_in">Beat Punch-In</option>
+                  <option value="punch_out">Beat Punch-Out</option>
+                  <option value="pulse">Double Pulse</option>
+                  <option value="snap_back">Snap Back</option>
+                  <option value="triple_hit">Triple Hit</option>
+                </select>
+                <div class="movement-bank movement-bank-wedding" role="group" aria-label="Wedding cinematic presets">
+                  <span class="movement-bank-label">Wedding Moments</span>
+                  <div class="wedding-preset-grid">
+                    <button type="button" class="movement-btn wedding-preset" data-mode="reveal" data-ratio="112">Bridal Reveal</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="smooth_in" data-ratio="108">Vow Emphasis</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="settle_in" data-ratio="114">Detail Focus</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="drift" data-ratio="105">Couple Portrait</button>
+                  </div>
                 </div>
-                <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='90' viewBox='0 0 160 90'><rect width='100%25' height='100%25' fill='%231b1d23'/><circle cx='80' cy='45' r='20' stroke='%23ffa845' stroke-width='2' fill='none' stroke-dasharray='4'/><circle cx='80' cy='45' r='10' fill='%235eead4' opacity='0.3'/><line x1='10' y1='45' x2='150' y2='45' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/><line x1='80' y1='5' x2='80' y2='85' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/></svg>" id="previewSubject" class="preview-subject animate-smooth-in" alt="Preview subject">
+                <div class="movement-bank movement-bank-wedding-beats" role="group" aria-label="Wedding hard-beat presets">
+                  <span class="movement-bank-label">Wedding Beats</span>
+                  <div class="wedding-preset-grid">
+                    <button type="button" class="movement-btn wedding-preset" data-mode="punch_in" data-ratio="118">Dance Accent</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="triple_hit" data-ratio="116">Procession Beat</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="snap_back" data-ratio="120">Percussion Snap</button>
+                    <button type="button" class="movement-btn wedding-preset" data-mode="pulse" data-ratio="112">Rhythm Pulse</button>
+                  </div>
+                </div>
+                <div class="movement-bank movement-bank-cinematic" role="group" aria-label="Cinematic zoom movements">
+                  <span class="movement-bank-label">Cinematic Moves</span>
+                  <div class="movement-button-grid">
+                    <button type="button" class="movement-btn is-active" data-mode="smooth_in">Slow Advance</button>
+                    <button type="button" class="movement-btn" data-mode="smooth_out">Elegant Pullback</button>
+                    <button type="button" class="movement-btn" data-mode="drift">Subtle Drift</button>
+                    <button type="button" class="movement-btn" data-mode="breath">Soft Breathing</button>
+                    <button type="button" class="movement-btn" data-mode="reveal">Grace Reveal</button>
+                    <button type="button" class="movement-btn" data-mode="settle_in">Refined Settle</button>
+                    <button type="button" class="movement-btn" data-mode="swell">Closing Swell</button>
+                  </div>
+                </div>
+                <div class="selected-moment-card">
+                  <span class="movement-bank-label">Selected</span>
+                  <strong id="selectedMomentLabel">Slow Advance</strong>
+                  <span id="selectedMomentMeta">Clean scale movement across the selected clip</span>
+                </div>
               </div>
-            </div>
-          </div>
 
-          <!-- Gimbal Ratio Slider -->
-          <div class="form-group grid-span-full">
-            <div class="density-head">
-              <span class="section-subtitle">Gimbal Zoom Ratio</span>
-              <strong id="zoomLabel" class="value-highlight">110%</strong>
             </div>
-            <div class="slider-wrapper">
-              <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
-            </div>
-            <div class="slider-labels">
-              <span>Subtle (101%)</span>
-              <span>Intense (150%)</span>
-            </div>
-            
-            <!-- Zoom Ratio Presets -->
-            <div class="ratio-presets">
-              <button type="button" class="btn-preset" data-ratio="105">105% Subtle</button>
-              <button type="button" class="btn-preset" data-ratio="115">115% Moderate</button>
-              <button type="button" class="btn-preset" data-ratio="130">130% Intense</button>
+
+            <div class="zoom-preview-compact" aria-label="Interactive movement preview">
+              <div class="preview-head">
+                <span class="field-label">Preview</span>
+                <strong id="previewModeLabel" class="preview-mode-label">Slow Push-In</strong>
+              </div>
+              <div class="zoom-preview-monitor">
+                <div class="simulated-viewfinder">
+                  <div class="viewfinder-grid"></div>
+                  <div class="viewfinder-overlay">
+                    <div><span class="rec-dot"></span><span id="previewRatioLabel">AUTO 108%</span></div>
+                  </div>
+                  <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='90' viewBox='0 0 160 90'><rect width='100%25' height='100%25' fill='%231b1d23'/><circle cx='80' cy='45' r='20' stroke='%23ffa845' stroke-width='2' fill='none' stroke-dasharray='4'/><circle cx='80' cy='45' r='10' fill='%235eead4' opacity='0.3'/><line x1='10' y1='45' x2='150' y2='45' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/><line x1='80' y1='5' x2='80' y2='85' stroke='%23ffffff' stroke-width='0.5' opacity='0.2'/></svg>" id="previewSubject" class="preview-subject animate-smooth-in" alt="Preview subject">
+                </div>
+              </div>
+              <div class="keyframe-preview" aria-label="Scale keyframe pattern">
+                <div id="previewKeyframeTrack" class="keyframe-track"></div>
+                <div class="preview-scale-row">
+                  <span id="previewStartLabel">100%</span>
+                  <span id="previewEndLabel">108%</span>
+                </div>
+              </div>
+              <div class="ratio-control-panel">
+                <div class="density-head compact-density-head">
+                  <span class="section-subtitle">Zoom Ratio</span>
+                  <strong id="zoomLabel" class="value-highlight">110%</strong>
+                </div>
+                <label class="toggle-line" for="autoZoomRatio">
+                  <input id="autoZoomRatio" type="checkbox" checked>
+                  <span>Auto ratio</span>
+                </label>
+                <div class="slider-wrapper">
+                  <input id="zoomSlider" type="range" min="101" max="150" value="110" step="1">
+                </div>
+                <div class="ratio-presets">
+                  <button type="button" class="btn-preset" data-ratio="105">105%</button>
+                  <button type="button" class="btn-preset" data-ratio="115">115%</button>
+                  <button type="button" class="btn-preset" data-ratio="130">130%</button>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -356,8 +392,8 @@
             <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
               <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
             </svg>
-            <span class="full-label">Gimbal Zoom</span>
-            <span class="short-label">Zoom</span>
+            <span class="full-label">Apply Movement</span>
+            <span class="short-label">Apply</span>
           </button>
 
           <button id="warpStabilizerButton" class="btn-tool" type="button">

@@ -79,17 +79,16 @@
       if (script.indexOf("AutoCutStudio.autoColorSelectedClips") === 0 || script.indexOf("AutoCutStudio.autoColorAtPlayhead") === 0) {
         callback(JSON.stringify({
           ok: true,
-          applied: 2,
+          applied: 1,
           skipped: 0,
           errors: [],
           clips: [
-            { name: "Preview Clip 1", trackIndex: 0, clipIndex: 0 },
-            { name: "Preview Clip 2", trackIndex: 0, clipIndex: 1 }
+            { name: "Preview Clip", trackIndex: 0, clipIndex: 0 }
           ],
-          engine: "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)",
+          engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
           usedNativeAuto: true,
           captureFrameSeconds: 12.5,
-          colorScience: "mixed selected clips"
+          colorScience: "SDR Standard (Preview)"
         }));
         return;
       }

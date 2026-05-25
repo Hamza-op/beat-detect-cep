@@ -414,19 +414,83 @@ if (!JSON.parse) {
     }
   }
 
+  function clampTime(seconds, startSeconds, endSeconds) {
+    return Math.max(startSeconds, Math.min(endSeconds, seconds));
+  }
+
+  function timeAt(startSeconds, duration, ratio) {
+    return startSeconds + (duration * Math.max(0, Math.min(1, ratio)));
+  }
+
+  function setScaleKeys(prop, keys) {
+    for (var i = 0; i < keys.length; i++) {
+      setScaleKey(prop, keys[i][0], keys[i][1]);
+    }
+  }
+
+  function boundedZoom(value) {
+    return Math.max(101.0, Math.min(150.0, Number(value) || 110.0));
+  }
+
+  function baseZoomForStyle(style) {
+    var bases = {
+      smooth_in: 108.0,
+      smooth_out: 108.0,
+      drift: 105.0,
+      breath: 106.0,
+      reveal: 112.0,
+      settle_in: 114.0,
+      swell: 110.0,
+      crash_in: 126.0,
+      crash_out: 124.0,
+      punch_in: 118.0,
+      punch_out: 116.0,
+      pulse: 112.0,
+      snap_back: 120.0,
+      triple_hit: 116.0
+    };
+    return bases[style] || 110.0;
+  }
+
+  function isFastZoomStyle(style) {
+    return style === "crash_in" || style === "crash_out" || style === "punch_in" || style === "punch_out" || style === "pulse" || style === "snap_back" || style === "triple_hit";
+  }
+
+  function durationZoomScale(style, duration) {
+    if (!isFinite(duration) || duration <= 0) {
+      return 1.0;
+    }
+
+    var fast = isFastZoomStyle(style);
+    if (duration < 0.35) return fast ? 0.52 : 0.62;
+    if (duration < 0.75) return fast ? 0.72 : 0.78;
+    if (duration < 1.25) return fast ? 0.88 : 0.92;
+    if (duration > 12.0) return fast ? 0.82 : 1.28;
+    if (duration > 6.0) return fast ? 0.9 : 1.16;
+    if (duration > 3.5) return fast ? 0.96 : 1.08;
+    return 1.0;
+  }
+
+  function resolveZoomTarget(payloadZoom, style, duration, autoRatio) {
+    if (!autoRatio) {
+      return boundedZoom(payloadZoom);
+    }
+
+    var base = baseZoomForStyle(style);
+    var intensity = (base - 100.0) * durationZoomScale(style, duration);
+    return boundedZoom(100.0 + intensity);
+  }
+
   function resetZoomOnClip(clip) {
     var prop = findMotionScaleProperty(clip);
     if (!prop) {
       return false;
     }
 
-    var inTime = timeToSeconds(clip.inPoint);
-    var outTime = timeToSeconds(clip.outPoint);
-    var duration = outTime - inTime;
-    if (!isFinite(duration) || duration <= 0) {
-      duration = timeToSeconds(clip.end) - timeToSeconds(clip.start);
-      outTime = inTime + duration;
-    }
+    var range = clipTimelineRange(clip);
+    var inTime = range.start;
+    var outTime = range.end;
+    var duration = range.duration;
     if (!isFinite(duration) || duration <= 0.001) {
       throw new Error("clip duration is too short");
     }
@@ -480,10 +544,6 @@ if (!JSON.parse) {
     throw new Error("Could not find " + label + " in this Premiere installation.");
   }
 
-  function getLumetriEffect() {
-    return getVideoEffectByNames(["Lumetri Color", "Lumetri"], "Lumetri Color");
-  }
-
   function applyVideoEffectToClipRef(ref, effect) {
     if (!app.enableQE) {
       throw new Error("Premiere QE DOM is unavailable.");
@@ -529,39 +589,6 @@ if (!JSON.parse) {
     return null;
   }
 
-  function ensureLumetriComponent(ref) {
-    var component = findLumetriComponent(ref.clip);
-    if (component) {
-      return component;
-    }
-
-    applyVideoEffectToClipRef(ref, getLumetriEffect());
-    
-    // Robust 1.5-second retry loop with 50ms sleeps to wait for Premiere to initialize the effect and populate its properties
-    var startTime = (new Date()).getTime();
-    while ((new Date()).getTime() - startTime < 1500) {
-      var seq = app.project.activeSequence;
-      if (seq && seq.videoTracks) {
-        var track = seq.videoTracks[ref.trackIndex];
-        if (track && track.clips) {
-          ref.clip = track.clips[ref.clipIndex];
-        }
-      }
-      component = findLumetriComponent(ref.clip);
-      if (component) {
-        break;
-      }
-      // 50ms synchronous delay
-      var delayStart = (new Date()).getTime();
-      while ((new Date()).getTime() - delayStart < 50) {}
-    }
-
-    if (!component) {
-      throw new Error("Lumetri Color was applied but its properties were not exposed to ExtendScript.");
-    }
-    return component;
-  }
-
   function getAutoCutColorEffect() {
     return getVideoEffectByNames(["AutoCutStudio Color Engine"], "AutoCutStudio Color Engine");
   }
@@ -594,7 +621,6 @@ if (!JSON.parse) {
     try {
       applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
     } catch (_applyErr) {
-      // AutoCut Color Engine plugin may not be installed - return null so caller can fall back
       return null;
     }
     
@@ -617,7 +643,6 @@ if (!JSON.parse) {
       while ((new Date()).getTime() - delayStart < 50) {}
     }
 
-    // Return null instead of throwing - caller will fall back to Lumetri
     return component;
   }
 
@@ -671,12 +696,29 @@ if (!JSON.parse) {
     return timeToSeconds(seq.getPlayerPosition());
   }
 
+  function newCaptureToken() {
+    var millis = (new Date()).getTime();
+    var randomPart = Math.floor(Math.random() * 99999);
+    return Math.max(1, Math.min(999999, ((millis + randomPart) % 999999) + 1));
+  }
+
   function clipSequenceStartSeconds(clip) {
     return timeToSeconds(clip && clip.start);
   }
 
   function clipSequenceEndSeconds(clip) {
     return timeToSeconds(clip && clip.end);
+  }
+
+  function clipTimelineRange(clip) {
+    var start = clipSequenceStartSeconds(clip);
+    var end = clipSequenceEndSeconds(clip);
+    var duration = end - start;
+    return {
+      start: start,
+      end: end,
+      duration: duration
+    };
   }
 
   function assertPlayheadInsideClip(ref, playheadSeconds) {
@@ -768,30 +810,6 @@ if (!JSON.parse) {
     return missing;
   }
 
-  function normalizedColorPayload(payload) {
-    payload = payload || {};
-    function bounded(value, min, max, fallback) {
-      var number = Number(value);
-      if (isNaN(number)) {
-        number = fallback;
-      }
-      return Math.max(min, Math.min(max, number));
-    }
-
-    return {
-      temperature: bounded(payload.temperature, -100, 100, 0),
-      tint: bounded(payload.tint, -100, 100, 0),
-      exposure: bounded(payload.exposure, -5, 5, 0),
-      contrast: bounded(payload.contrast, -100, 100, 0),
-      highlights: bounded(payload.highlights, -100, 100, 0),
-      shadows: bounded(payload.shadows, -100, 100, 0),
-      whites: bounded(payload.whites, -100, 100, 0),
-      blacks: bounded(payload.blacks, -100, 100, 0),
-      saturation: bounded(payload.saturation, 0, 200, 100),
-      vibrance: bounded(payload.vibrance, -100, 100, 0)
-    };
-  }
-
   function getMediaPath(projectItem) {
     if (!projectItem) {
       return "";
@@ -866,22 +884,16 @@ if (!JSON.parse) {
     throw new Error("This selected clip does not support clip marker creation. Try using Sequence Timeline Markers instead.");
   }
 
-  function markerColorForFocus(focus, target) {
-    var colors = {
-      beats: 3,
-      spikes: 1,
-      music: 6,
-      vocal: 11
-    };
-    return colors[focus] || colors.beats;
+  function beatMarkerColor(target) {
+    return 3;
   }
 
-  function markerColorForEvent(event, focus, target) {
+  function markerColorForEvent(event, target) {
     var color = Number(event && event.colorIndex);
     if (!isNaN(color) && color >= 0 && color <= 16) {
       return Math.round(color);
     }
-    return markerColorForFocus(focus, target);
+    return beatMarkerColor(target);
   }
 
   var BD_COLOR_INDICES = [1, 3, 6, 11];
@@ -1030,7 +1042,6 @@ if (!JSON.parse) {
     try {
       var payload = parseJson(payloadJson);
       var target = payload.target === "clip" ? "clip" : "sequence";
-      var focus = payload.focus || "beats";
       var events = payload.events || [];
       var seq = app.project.activeSequence;
       var clip = getExactlyOneSelectedClip();
@@ -1064,7 +1075,7 @@ if (!JSON.parse) {
           continue;
         }
 
-        var color = markerColorForEvent(events[i], focus, target);
+        var color = markerColorForEvent(events[i], target);
 
         if (target === "clip") {
           setMarkerFields(createClipMarker(clip, snapToFrame(eventTime, seq)), color);
@@ -1131,8 +1142,9 @@ if (!JSON.parse) {
   AutoCutStudio.applyGimbalZoom = function (payloadJson) {
     try {
       var payload = payloadJson ? parseJson(payloadJson) : { zoom: 110.0, style: "smooth_in" };
-      var zoomTarget = Math.max(101.0, Math.min(150.0, Number(payload.zoom) || 110.0));
+      var payloadZoom = boundedZoom(payload.zoom);
       var zoomStyle = payload.style || "smooth_in";
+      var autoRatio = payload.autoRatio !== false;
 
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -1166,18 +1178,16 @@ if (!JSON.parse) {
 
           prop.setTimeVarying(true);
 
-          var inTime = timeToSeconds(clip.inPoint);
-          var rawOutTime = timeToSeconds(clip.outPoint);
-          var duration = rawOutTime - inTime;
-          if (!isFinite(duration) || duration <= 0) {
-            duration = timeToSeconds(clip.end) - timeToSeconds(clip.start);
-            rawOutTime = inTime + duration;
-          }
+          var range = clipTimelineRange(clip);
+          var inTime = range.start;
+          var rawOutTime = range.end;
+          var duration = range.duration;
           if (!isFinite(duration) || duration <= 0.001) {
             skipped++;
             errors.push(name + ": clip duration is too short");
             continue;
           }
+          var zoomTarget = resolveZoomTarget(payloadZoom, zoomStyle, duration, autoRatio);
 
           var frameDuration = 1 / 30;
           try {
@@ -1188,28 +1198,117 @@ if (!JSON.parse) {
           } catch (_) {}
 
           var endTime = Math.max(inTime + 0.001, rawOutTime - Math.min(frameDuration, duration * 0.25));
+          var safeEndTime = endTime;
+          var punchWindow = Math.min(0.22, duration * 0.2);
+          var pulseWindow = Math.min(0.42, duration * 0.45);
+          var midTime = timeAt(inTime, safeEndTime - inTime, 0.5);
+          var beatSettle = clampTime(inTime + punchWindow, inTime, safeEndTime);
+          var pulseA = clampTime(inTime + pulseWindow * 0.28, inTime, safeEndTime);
+          var pulseB = clampTime(inTime + pulseWindow * 0.58, inTime, safeEndTime);
+          var pulseC = clampTime(inTime + pulseWindow, inTime, safeEndTime);
+          var tripleA = clampTime(inTime + pulseWindow * 0.2, inTime, safeEndTime);
+          var tripleB = clampTime(inTime + pulseWindow * 0.38, inTime, safeEndTime);
+          var tripleC = clampTime(inTime + pulseWindow * 0.56, inTime, safeEndTime);
+          var tripleD = clampTime(inTime + pulseWindow * 0.74, inTime, safeEndTime);
+          var snapReturn = clampTime(inTime + Math.min(0.28, duration * 0.28), inTime, safeEndTime);
+          var softTarget = 100.0 + (zoomTarget - 100.0) * 0.45;
+          var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3;
+          var breathTarget = 100.0 + (zoomTarget - 100.0) * 0.22;
+          var overshootTarget = boundedZoom(100.0 + (zoomTarget - 100.0) * 1.18);
           removeKeysInRange(prop, inTime, rawOutTime);
 
           if (zoomStyle === "smooth_out") {
-            setScaleKey(prop, inTime, zoomTarget);
-            setScaleKey(prop, endTime, 100.0);
+            setScaleKeys(prop, [
+              [inTime, zoomTarget],
+              [safeEndTime, 100.0]
+            ]);
           } else if (zoomStyle === "crash_in") {
-            var crashInStart = Math.max(inTime, endTime - Math.min(0.35, duration * 0.25));
-            setScaleKey(prop, inTime, 100.0);
-            setScaleKey(prop, crashInStart, 100.0);
-            setScaleKey(prop, endTime, zoomTarget);
+            var crashInStart = Math.max(inTime, safeEndTime - Math.min(0.35, duration * 0.25));
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [crashInStart, 100.0],
+              [safeEndTime, zoomTarget]
+            ]);
           } else if (zoomStyle === "crash_out") {
-            var crashOutEnd = Math.min(endTime, inTime + Math.min(0.35, duration * 0.25));
-            setScaleKey(prop, inTime, zoomTarget);
-            setScaleKey(prop, crashOutEnd, 100.0);
-            setScaleKey(prop, endTime, 100.0);
+            var crashOutEnd = Math.min(safeEndTime, inTime + Math.min(0.35, duration * 0.25));
+            setScaleKeys(prop, [
+              [inTime, zoomTarget],
+              [crashOutEnd, 100.0],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "punch_in") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [clampTime(inTime + frameDuration, inTime, safeEndTime), zoomTarget],
+              [beatSettle, softTarget],
+              [safeEndTime, softTarget]
+            ]);
+          } else if (zoomStyle === "punch_out") {
+            setScaleKeys(prop, [
+              [inTime, zoomTarget],
+              [clampTime(inTime + frameDuration, inTime, safeEndTime), 100.0],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "pulse") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [pulseA, zoomTarget],
+              [pulseB, 100.0],
+              [pulseC, softTarget],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "snap_back") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [clampTime(inTime + frameDuration, inTime, safeEndTime), zoomTarget],
+              [snapReturn, 100.0],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "triple_hit") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [tripleA, zoomTarget],
+              [tripleB, 100.0],
+              [tripleC, softTarget],
+              [tripleD, 100.0],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "breath") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [midTime, breathTarget],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "reveal") {
+            var revealStart = timeAt(inTime, safeEndTime - inTime, 0.62);
+            setScaleKeys(prop, [
+              [inTime, zoomTarget],
+              [revealStart, zoomTarget],
+              [safeEndTime, 100.0]
+            ]);
+          } else if (zoomStyle === "settle_in") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [timeAt(inTime, safeEndTime - inTime, 0.22), overshootTarget],
+              [timeAt(inTime, safeEndTime - inTime, 0.55), softTarget],
+              [safeEndTime, zoomTarget]
+            ]);
+          } else if (zoomStyle === "swell") {
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [timeAt(inTime, safeEndTime - inTime, 0.45), 100.0],
+              [safeEndTime, zoomTarget]
+            ]);
           } else if (zoomStyle === "drift") {
-            var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3;
-            setScaleKey(prop, inTime, 100.0);
-            setScaleKey(prop, endTime, driftTarget);
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [safeEndTime, driftTarget]
+            ]);
           } else {
-            setScaleKey(prop, inTime, 100.0);
-            setScaleKey(prop, endTime, zoomTarget);
+            setScaleKeys(prop, [
+              [inTime, 100.0],
+              [safeEndTime, zoomTarget]
+            ]);
           }
 
           appliedCount++;
@@ -1271,49 +1370,6 @@ if (!JSON.parse) {
     }
   };
 
-  AutoCutStudio.applyColorGrade = function (payloadJson) {
-    try {
-      var payload = payloadJson ? parseJson(payloadJson) : {};
-      var values = normalizedColorPayload(payload);
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-
-      var refs = getSelectedVideoClipRefs(seq);
-      if (refs.length === 0) {
-        throw new Error("Select at least one video clip in the active sequence.");
-      }
-
-      var applied = 0;
-      var skipped = 0;
-      var errors = [];
-
-      for (var i = 0; i < refs.length; i++) {
-        var ref = refs[i];
-        try {
-          var component = ensureLumetriComponent(ref);
-          var missing = applyLumetriValues(component, values);
-          if (missing.length) {
-            errors.push(ref.name + ": missing " + missing.join(", "));
-          }
-          applied++;
-        } catch (error) {
-          skipped++;
-          errors.push(ref.name + ": " + (error.message || String(error)));
-        }
-      }
-
-      if (applied === 0) {
-        throw new Error(errors.length ? errors.join(" | ") : "Could not apply Lumetri Color to selected clips.");
-      }
-
-      return ok({ applied: applied, skipped: skipped, errors: errors });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
   function defaultAutoCutColorValues() {
     return {
       temperature: 0,
@@ -1363,22 +1419,15 @@ if (!JSON.parse) {
   }
 
   function applyNativeAutoColor(ref, captureFrameSeconds, captureToken) {
-    var hadExistingComponent = Boolean(findAutoCutColorComponent(ref.clip));
     var component = ensureAutoCutColorComponent(ref);
-    var usedLumetriFallback = false;
-    
-    // If native AutoCut Color Engine is not accessible, fall back to Lumetri Color
+
     if (!component) {
-      component = ensureLumetriComponent(ref);
-      usedLumetriFallback = true;
+      throw new Error("AutoCutStudio Color Engine is not installed or not exposed to Premiere.");
     }
 
-    // Ensure component is enabled when applying new auto color
-    if (component) {
-      try {
-        component.enabled = true;
-      } catch (_) {}
-    }
+    try {
+      component.enabled = true;
+    } catch (_) {}
 
     var values = defaultAutoCutColorValues();
     var captureLocalSeconds = clipLocalSecondsAtPlayhead(ref, captureFrameSeconds);
@@ -1386,53 +1435,23 @@ if (!JSON.parse) {
     var warnings = [];
 
     try {
-      if (usedLumetriFallback) {
-        missing = applyLumetriValues(component, values);
-        warnings.push("AutoCut native engine not accessible in this Premiere version; applied via Lumetri Color instead.");
-      } else {
-        missing = applyAutoCutColorValues(component, values);
-      }
+      missing = applyAutoCutColorValues(component, values);
     } catch (error) {
-      // If native component properties fail, fall back to Lumetri
-      if (!usedLumetriFallback) {
-        try {
-          component = ensureLumetriComponent(ref);
-          if (component) {
-            try { component.enabled = true; } catch (_) {}
-            missing = applyLumetriValues(component, values);
-            usedLumetriFallback = true;
-            warnings.push("Native engine properties not exposed; fell back to Lumetri Color.");
-          }
-        } catch (lumetriErr) {
-          missing = ["script_properties_unavailable"];
-          warnings.push("Neither native engine nor Lumetri controls were accessible: " + (lumetriErr.message || String(lumetriErr)));
-        }
-      } else {
-        missing = ["lumetri_properties_unavailable"];
-        warnings.push("Lumetri properties were not exposed: " + (error.message || String(error)));
-      }
+      throw new Error("Native engine properties were not exposed: " + (error.message || String(error)));
     }
 
-    if (!usedLumetriFallback) {
-      if (!setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)) {
-        warnings.push(hadExistingComponent
-          ? "Native capture token was not exposed to scripting; existing effect may keep its previous captured frame."
-          : "Native capture controls were not exposed to scripting; the effect will fall back to live frame analysis.");
-      }
+    if (!setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)) {
+      throw new Error("Native capture controls were not exposed; cannot lock Auto Color to the playhead frame.");
     }
 
     var colorInfo = getClipColorScience(ref.clip);
-    var engineLabel = usedLumetriFallback
-      ? "Lumetri Color (Fallback from Native Engine)"
-      : "AutoCutStudio Native Color Engine (Pixel Frame Analyzed)";
 
     return {
       name: ref.name,
       trackIndex: ref.trackIndex,
       clipIndex: ref.clipIndex,
-      engine: engineLabel,
-      usedNativeAuto: !usedLumetriFallback,
-      usedLumetriFallback: usedLumetriFallback,
+      engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
+      usedNativeAuto: true,
       missing: missing,
       warnings: warnings,
       values: values,
@@ -1459,7 +1478,7 @@ if (!JSON.parse) {
 
       var playheadSeconds = sequencePlayheadSeconds(seq);
       assertPlayheadInsideClip(refs[0], playheadSeconds);
-      var captureToken = Math.max(1, Math.round((new Date()).getTime() % 1000000));
+      var captureToken = newCaptureToken();
       var applied = 0;
       var skipped = 0;
       var errors = [];

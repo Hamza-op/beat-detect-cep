@@ -8,7 +8,8 @@ The native color engine now supports 8-bpc, 16-bpc, and 32-bpc float render path
 - ARGB128 registration through the Adobe pixel-format suite.
 - Float-world detection through the Adobe pixel-data suite.
 - HDR-preserving float correction math that keeps channel values above `1.0` instead of clipping highlights to SDR.
-- Single-frame capture caching for the panel Auto Color workflow.
+- Playhead-frame native analysis for the panel Auto Color workflow.
+- Shared 8-bpc, 16-bpc, and 32-bpc correction kernel so bit-depth paths do not drift.
 
 ## Not Implemented Yet
 
@@ -21,4 +22,4 @@ The effect still uses Adobe iterate suites with scalar per-pixel callbacks. A re
 
 ### Temporal Smoothing
 
-The current panel workflow intentionally captures one playhead frame and applies that fixed correction across the selected clip. Temporal smoothing would be a different editing model: multiple analysis points, interpolated values, and probably generated keyframes. That should be added as an optional mode, not mixed into the current Auto button behavior.
+The current panel workflow intentionally captures one playhead frame and applies that fixed correction across the selected clip. Temporal smoothing or scene-adaptive grading would be a different editing model: multiple analysis points, interpolated values, and probably generated keyframes. It should not be mixed into the Auto button workflow unless a separate mode is added.

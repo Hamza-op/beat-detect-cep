@@ -2,7 +2,7 @@
 
 Version: `1.0.0`
 
-AutoCut Studio is a Windows-first Adobe Premiere Pro tool for music-aware edit markers, automated timeline helpers, and native color-correction work. It is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, drops, and strong musical section changes.
+AutoCut Studio is a Windows-first Adobe Premiere Pro tool for beat-grid edit markers, automated timeline helpers, and native color-correction work. The beat analyzer is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, claps, drops, and strong rhythmic sections.
 
 The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The editor machine only needs Premiere Pro and `AutoCutStudioSetup.exe`; Python, Cargo, Rust, FFmpeg, and manual library installs are not user requirements.
 
@@ -10,14 +10,14 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 
 - Premiere Pro CEP panel: `Window -> Extensions -> AutoCut Studio`
 - One-click analysis of the selected timeline clip's source media
-- Resolve-style `Beats` mode for a consistent music beat grid
+- Resolve-style beat detection for a consistent clip beat grid
 - Marker target:
   - `Sequence Markers`
   - `Clip Markers`
 - Automatic beat marker selection without manual density tuning
 - Adaptive spacing so weak nearby events are suppressed but strong nearby dhol/tabla hits can survive
 - Final marker selection keeps only the strongest event per whole second
-- Score/mode-based marker colors while marker name/comment fields remain blank
+- Beat-score marker color while marker name/comment fields remain blank
 - Exact marker count mode with Balanced, Strongest, and Spread selection strategies
 - Native AutoCutStudio color correction that samples the current playhead frame and applies one fixed 8/16/32-bpc grade across the selected clip
 - One-by-one Warp Stabilizer queue for selected video clips
@@ -150,10 +150,10 @@ AutoCutStudio-CEP-Windows.zip
 After building:
 
 ```powershell
-.\bin\beat_analyzer.exe --mode beats "C:\path\to\song-or-video.mp4"
+.\bin\beat_analyzer.exe "C:\path\to\song-or-video.mp4"
 ```
 
-Modes:
+The analyzer has one detection workflow: beat detection.
 
 ```text
 beats
@@ -182,27 +182,24 @@ $media = "C:\Users\User\Downloads\Video\O Rangrez Full Video - Bhaag Milkha Bhaa
 $outDir = ".\analysis-reports"
 $threshold = 0.50
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-foreach ($mode in "beats") {
-  $json = & .\bin\beat_analyzer.exe --mode $mode $media
-  $events = $json | ConvertFrom-Json
-  $selected = $events |
-    Where-Object { [double]$_.score -ge $threshold } |
-    Group-Object { [math]::Floor([double]$_.time) } |
-    ForEach-Object { $_.Group | Sort-Object score -Descending | Select-Object -First 1 } |
-    Sort-Object time
-  $lines = @(
-    "AutoCut Studio Analysis Report",
-    "Mode: $mode",
-    "Media: $media",
-    "Threshold: $threshold",
-    "Raw event count: $($events.Count)",
-    "Selected event count: $($selected.Count)",
-    "",
-    "time_seconds`tscore"
-  )
-  $lines += $selected | ForEach-Object { "{0:N3}`t{1:N3}" -f [double]$_.time, [double]$_.score }
-  Set-Content -LiteralPath "$outDir\o-rangrez-$mode-threshold-050.txt" -Value $lines -Encoding UTF8
-}
+$json = & .\bin\beat_analyzer.exe $media
+$events = $json | ConvertFrom-Json
+$selected = $events |
+  Where-Object { [double]$_.score -ge $threshold } |
+  Group-Object { [math]::Floor([double]$_.time) } |
+  ForEach-Object { $_.Group | Sort-Object score -Descending | Select-Object -First 1 } |
+  Sort-Object time
+$lines = @(
+  "AutoCut Studio Beat Analysis Report",
+  "Media: $media",
+  "Threshold: $threshold",
+  "Raw beat count: $($events.Count)",
+  "Selected beat count: $($selected.Count)",
+  "",
+  "time_seconds`tscore"
+)
+$lines += $selected | ForEach-Object { "{0:N3}`t{1:N3}" -f [double]$_.time, [double]$_.score }
+Set-Content -LiteralPath "$outDir\o-rangrez-beats-threshold-050.txt" -Value $lines -Encoding UTF8
 ```
 
 Current generated threshold reports in this repo:

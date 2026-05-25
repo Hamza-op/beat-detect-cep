@@ -114,6 +114,8 @@ html,body {
   color-scheme: dark;
 }
 
+
+
 button, select, input {
   font-family: inherit;
   color: inherit;
@@ -407,7 +409,15 @@ h1 em {
     inset 0 -1px 0 rgba(0,0,0,0.45),
     0 10px 28px -10px rgba(0,0,0,0.7),
     0 2px 6px rgba(0,0,0,0.4);
-  transition: gap var(--t) var(--ease), box-shadow var(--t) var(--ease);
+  transition: gap var(--t) var(--ease), border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
+}
+
+.panel-card:hover {
+  border-color: var(--rim-bright);
+}
+
+.panel-card:focus-within {
+  border-color: var(--rim-bright);
 }
 
 /* Tiny "rack screws" in opposite corners — pure CSS, no HTML change */
@@ -1261,16 +1271,218 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 }
 
 /* ── Creative Tools Enhancements ──────────────────────── */
+.zoom-smart-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(190px, 0.95fr);
+  gap: 8px;
+  align-items: start;
+  padding: 8px;
+  border: 1px solid var(--rim);
+  border-radius: var(--r);
+  background: linear-gradient(180deg, rgba(20,22,27,0.72) 0%, rgba(10,11,14,0.88) 100%);
+}
+
+.zoom-control-stack,
+.zoom-preview-compact {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.visually-hidden-select {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.movement-bank {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: rgba(8, 9, 11, 0.48);
+}
+
+.movement-bank-label {
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.9px;
+}
+
+.movement-bank-cinematic .movement-bank-label {
+  color: var(--amber);
+}
+
+.movement-bank-wedding-beats .movement-bank-label {
+  color: var(--teal);
+}
+
+.movement-bank-wedding .movement-bank-label {
+  color: var(--coral-hot);
+}
+
+.movement-button-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.wedding-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.movement-btn {
+  min-width: 0;
+  height: 29px;
+  padding: 0 8px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: linear-gradient(180deg, #14161b 0%, #0d0f13 100%);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 8.6px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0.15px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color var(--t-fast) var(--ease), color var(--t-fast) var(--ease), background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease);
+}
+
+.movement-btn:hover {
+  color: #f4f7fb;
+  border-color: var(--teal-edge);
+  background: linear-gradient(180deg, rgba(94,234,212,0.16), rgba(94,234,212,0.06));
+}
+
+.movement-btn.is-active {
+  color: #fff8eb;
+  border-color: var(--amber);
+  background: linear-gradient(180deg, rgba(255,168,69,0.20), rgba(255,168,69,0.08));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.3);
+}
+
+.movement-bank-wedding-beats .movement-btn.is-active {
+  color: #eafffb;
+  border-color: var(--teal);
+  background: linear-gradient(180deg, rgba(94,234,212,0.18), rgba(94,234,212,0.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.3);
+}
+
+.wedding-preset {
+  height: 30px;
+  color: #f5edf0;
+  border-color: rgba(255,119,119,0.24);
+  background: linear-gradient(180deg, rgba(255,119,119,0.10), rgba(255,168,69,0.04));
+}
+
+.movement-bank-wedding .movement-btn.is-active {
+  color: #fff1f1;
+  border-color: rgba(255,119,119,0.48);
+  background: linear-gradient(180deg, rgba(255,119,119,0.22), rgba(255,168,69,0.08));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.3);
+}
+
+.selected-moment-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 54px;
+  padding: 7px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: linear-gradient(180deg, rgba(255,168,69,0.08), rgba(8,9,11,0.58));
+}
+
+.selected-moment-card strong {
+  color: #fff3df;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+.selected-moment-card span:last-child {
+  color: var(--ink-mute);
+  font-size: 8.5px;
+  line-height: 1.35;
+}
+
+.preview-head,
+.preview-scale-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.preview-mode-label {
+  color: var(--amber);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.compact-density-head {
+  margin-bottom: 0;
+}
+
+.ratio-control-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: rgba(8, 9, 11, 0.62);
+}
+
+.toggle-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  letter-spacing: 0.4px;
+  cursor: pointer;
+}
+
+.toggle-line input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--amber);
+  margin: 0;
+  flex: 0 0 auto;
+}
+
 .zoom-preview-monitor {
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
+  max-height: 86px;
   background: #08090b;
   border: 1px solid var(--rim);
   border-radius: var(--r);
   overflow: hidden;
   box-shadow: inset 0 2px 8px rgba(0,0,0,0.85);
-  margin-top: 4px;
 }
 
 .simulated-viewfinder {
@@ -1294,16 +1506,71 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 
 .viewfinder-overlay {
   position: absolute;
-  inset: 8px;
+  inset: 6px;
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   pointer-events: none;
   z-index: 3;
   font-family: var(--font-mono);
-  font-size: 8px;
+  font-size: 7px;
   color: var(--teal);
   text-shadow: 0 0 4px var(--teal-edge);
+}
+
+.keyframe-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 5px 6px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: rgba(8, 9, 11, 0.62);
+}
+
+.keyframe-track {
+  position: relative;
+  height: 24px;
+  border-bottom: 1px solid rgba(255,255,255,0.12);
+  background:
+    linear-gradient(90deg, rgba(255,255,255,0.04) 1px, transparent 1px) 0 0 / 25% 100%;
+}
+
+.key-node {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  border: 1px solid rgba(255,255,255,0.82);
+  box-shadow: 0 0 8px var(--amber-edge);
+  transform: translate(-50%, 50%);
+}
+
+.key-node::after {
+  content: attr(data-scale);
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  transform: translateX(-50%);
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  white-space: nowrap;
+}
+
+.key-line {
+  position: absolute;
+  height: 1px;
+  background: linear-gradient(90deg, var(--amber-edge), var(--teal-edge));
+  transform-origin: left center;
+  opacity: 0.9;
+}
+
+.preview-scale-row {
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 7px;
 }
 
 .rec-dot {
@@ -1341,6 +1608,33 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 .animate-drift {
   animation: previewDrift 4s ease-in-out infinite alternate;
 }
+.animate-breath {
+  animation: previewBreath 3.2s ease-in-out infinite;
+}
+.animate-reveal {
+  animation: previewReveal 3s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+.animate-punch-in {
+  animation: previewPunchIn 1.6s cubic-bezier(.2, .9, .2, 1) infinite;
+}
+.animate-punch-out {
+  animation: previewPunchOut 1.6s cubic-bezier(.2, .9, .2, 1) infinite;
+}
+.animate-pulse {
+  animation: previewPulse 1.9s cubic-bezier(.2, .9, .2, 1) infinite;
+}
+.animate-settle-in {
+  animation: previewSettleIn 2.8s cubic-bezier(.2, .9, .2, 1) infinite;
+}
+.animate-swell {
+  animation: previewSwell 3s cubic-bezier(.4, 0, .2, 1) infinite;
+}
+.animate-snap-back {
+  animation: previewSnapBack 1.5s cubic-bezier(.2, .9, .2, 1) infinite;
+}
+.animate-triple-hit {
+  animation: previewTripleHit 2s cubic-bezier(.2, .9, .2, 1) infinite;
+}
 
 @keyframes previewSmoothIn {
   0% { transform: scale(1); }
@@ -1362,19 +1656,64 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
   0% { transform: scale(1.05) translate(-2px, -1px); }
   100% { transform: scale(1.15) translate(2px, 1px); }
 }
+@keyframes previewBreath {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+@keyframes previewReveal {
+  0%, 58% { transform: scale(1.22); }
+  100% { transform: scale(1); }
+}
+@keyframes previewPunchIn {
+  0% { transform: scale(1); }
+  12% { transform: scale(1.24); }
+  38%, 100% { transform: scale(1.08); }
+}
+@keyframes previewPunchOut {
+  0% { transform: scale(1.24); }
+  14%, 100% { transform: scale(1); }
+}
+@keyframes previewPulse {
+  0%, 100% { transform: scale(1); }
+  18% { transform: scale(1.18); }
+  38% { transform: scale(1); }
+  62% { transform: scale(1.10); }
+}
+@keyframes previewSettleIn {
+  0% { transform: scale(1); }
+  22% { transform: scale(1.20); }
+  55% { transform: scale(1.08); }
+  100% { transform: scale(1.14); }
+}
+@keyframes previewSwell {
+  0%, 45% { transform: scale(1); }
+  100% { transform: scale(1.14); }
+}
+@keyframes previewSnapBack {
+  0% { transform: scale(1); }
+  12% { transform: scale(1.22); }
+  30%, 100% { transform: scale(1); }
+}
+@keyframes previewTripleHit {
+  0%, 100% { transform: scale(1); }
+  15% { transform: scale(1.16); }
+  31% { transform: scale(1); }
+  47% { transform: scale(1.10); }
+  63% { transform: scale(1); }
+}
 
 .ratio-presets {
   display: flex;
   gap: 5px;
-  margin-top: 6px;
+  margin-top: 4px;
   width: 100%;
 }
 
 .btn-preset {
   flex: 1;
-  height: 22px;
+  height: 20px;
   font-family: var(--font-mono);
-  font-size: 8.5px;
+  font-size: 8px;
   font-weight: 500;
   text-transform: uppercase;
   color: var(--ink-mute);
@@ -1392,4 +1731,22 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 }
 .btn-preset:active {
   transform: translateY(1px);
+}
+
+@media (max-width: 360px) {
+  .zoom-smart-panel {
+    grid-template-columns: 1fr;
+  }
+
+  .zoom-preview-monitor {
+    max-height: 78px;
+  }
+
+  .movement-button-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .wedding-preset-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }

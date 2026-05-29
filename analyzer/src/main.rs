@@ -44,6 +44,16 @@ struct FrameEnergy {
     log_bands: [f32; LOG_BANDS],
 }
 
+struct DropRiseCandidateContext<'a> {
+    samples: &'a [f32],
+    sample_rate: u32,
+    frames: &'a [FrameEnergy],
+    drop_rise_scores: &'a [f32],
+    stable_scores: &'a [f32],
+    min_score: f32,
+    lag: usize,
+}
+
 fn main() {
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("internal analyzer error: {panic_info}");
@@ -701,7 +711,12 @@ fn drop_rise_transition_scores(frames: &[FrameEnergy]) -> Vec<f32> {
     let global_reference = robust_percentile(&activities, 0.70).max(1.0e-6);
     let mut scores = vec![0.0_f32; frames.len()];
 
-    for i in (prior_window + quiet_window)..frames.len() {
+    for (i, score_slot) in scores
+        .iter_mut()
+        .enumerate()
+        .take(frames.len())
+        .skip(prior_window + quiet_window)
+    {
         let prior_start = i - prior_window - quiet_window;
         let prior_end = i - quiet_window;
         let quiet_start = i - quiet_window;
@@ -717,12 +732,13 @@ fn drop_rise_transition_scores(frames: &[FrameEnergy]) -> Vec<f32> {
         let current_presence = (current / global_reference).clamp(0.0, 1.8);
         let onset = drop_rise_onset_strength(frames, i, quiet_start, quiet_end);
 
-        if drop_depth >= 0.18 && rise_strength >= 0.26 && onset >= 0.16 && current_presence >= 0.36 {
+        if drop_depth >= 0.18 && rise_strength >= 0.26 && onset >= 0.16 && current_presence >= 0.36
+        {
             let score = drop_depth * 0.40
                 + rise_strength.min(1.8) * 0.24
                 + recovery.min(1.4) * 0.18
                 + onset.min(1.6) * 0.22;
-            scores[i] = score.max(0.0);
+            *score_slot = score.max(0.0);
         }
     }
 
@@ -982,13 +998,15 @@ fn detect_beat_grid_events(
     }
 
     add_drop_rise_candidates(
-        samples,
-        sample_rate,
-        frames,
-        &drop_rise_scores,
-        &stable_scores,
-        min_score,
-        lag,
+        DropRiseCandidateContext {
+            samples,
+            sample_rate,
+            frames,
+            drop_rise_scores: &drop_rise_scores,
+            stable_scores: &stable_scores,
+            min_score,
+            lag,
+        },
         &mut beats,
     );
 
@@ -1124,16 +1142,10 @@ fn best_local_grid_onset(scores: &[f32], center: usize, radius: usize) -> Option
     (best_score > 0.0).then_some((best_index, best_score))
 }
 
-fn add_drop_rise_candidates(
-    samples: &[f32],
-    sample_rate: u32,
-    frames: &[FrameEnergy],
-    drop_rise_scores: &[f32],
-    stable_scores: &[f32],
-    min_score: f32,
-    lag: usize,
-    beats: &mut Vec<(f64, f32)>,
-) {
+fn add_drop_rise_candidates(ctx: DropRiseCandidateContext<'_>, beats: &mut Vec<(f64, f32)>) {
+    let frames = ctx.frames;
+    let drop_rise_scores = ctx.drop_rise_scores;
+    let stable_scores = ctx.stable_scores;
     if frames.is_empty() || drop_rise_scores.is_empty() || stable_scores.is_empty() {
         return;
     }
@@ -1146,10 +1158,10 @@ fn add_drop_rise_candidates(
             if *score < threshold || index >= frames.len() || index >= stable_scores.len() {
                 return None;
             }
-            if !has_direct_onset_evidence(frames, index, lag.clamp(4, 32)) {
+            if !has_direct_onset_evidence(frames, index, ctx.lag.clamp(4, 32)) {
                 return None;
             }
-            let stable = stable_scores[index].max(min_score * 0.90);
+            let stable = stable_scores[index].max(ctx.min_score * 0.90);
             Some((index, (*score + stable).max(stable)))
         })
         .collect::<Vec<_>>();
@@ -1157,7 +1169,7 @@ fn add_drop_rise_candidates(
     candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
     let max_candidates = (frames.len() / 180).clamp(1, 4);
     for (index, score) in candidates.into_iter().take(max_candidates) {
-        let snapped = snap_event_time(samples, sample_rate, frames[index].time);
+        let snapped = snap_event_time(ctx.samples, ctx.sample_rate, frames[index].time);
         beats.push((snapped, score));
     }
 }

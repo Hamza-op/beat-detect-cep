@@ -684,6 +684,142 @@ fn fuse_detector_scores(spectral: &[f32], envelope: &[f32], superflux: &[f32]) -
     fused
 }
 
+fn drop_rise_transition_scores(frames: &[FrameEnergy]) -> Vec<f32> {
+    if frames.len() < 24 {
+        return vec![0.0; frames.len()];
+    }
+
+    let frame_step = median_frame_step_seconds(frames);
+    if frame_step <= 0.0 {
+        return vec![0.0; frames.len()];
+    }
+
+    let prior_window = ((4.20 / frame_step).round() as usize).clamp(24, 180);
+    let quiet_window = ((0.85 / frame_step).round() as usize).clamp(4, 36);
+    let current_window = ((0.20 / frame_step).round() as usize).clamp(2, 10);
+    let activities = frames.iter().map(frame_activity).collect::<Vec<_>>();
+    let global_reference = robust_percentile(&activities, 0.70).max(1.0e-6);
+    let mut scores = vec![0.0_f32; frames.len()];
+
+    for i in (prior_window + quiet_window)..frames.len() {
+        let prior_start = i - prior_window - quiet_window;
+        let prior_end = i - quiet_window;
+        let quiet_start = i - quiet_window;
+        let quiet_end = i;
+        let current_end = (i + current_window).min(frames.len());
+
+        let prior = percentile_activity(&activities, prior_start, prior_end, 0.96).max(1.0e-6);
+        let quiet = median_activity(&activities, quiet_start, quiet_end).max(1.0e-6);
+        let current = max_activity(&activities, i, current_end).max(1.0e-6);
+        let drop_depth = ((prior - quiet) / prior).clamp(0.0, 1.0);
+        let rise_strength = ((current - quiet) / quiet.max(global_reference * 0.08)).max(0.0);
+        let recovery = (current / prior.max(global_reference * 0.20)).clamp(0.0, 1.8);
+        let current_presence = (current / global_reference).clamp(0.0, 1.8);
+        let onset = drop_rise_onset_strength(frames, i, quiet_start, quiet_end);
+
+        if drop_depth >= 0.18 && rise_strength >= 0.26 && onset >= 0.16 && current_presence >= 0.36 {
+            let score = drop_depth * 0.40
+                + rise_strength.min(1.8) * 0.24
+                + recovery.min(1.4) * 0.18
+                + onset.min(1.6) * 0.22;
+            scores[i] = score.max(0.0);
+        }
+    }
+
+    scores
+}
+
+fn drop_rise_onset_strength(
+    frames: &[FrameEnergy],
+    index: usize,
+    quiet_start: usize,
+    quiet_end: usize,
+) -> f32 {
+    if frames.is_empty() || index >= frames.len() {
+        return 0.0;
+    }
+
+    let quiet = frame_medians(frames, quiet_start, quiet_end);
+    let frame = frames[index];
+    let bass = positive_rise(frame.bass, quiet.bass);
+    let body = positive_rise(frame.body, quiet.body);
+    let attack = positive_rise(frame.attack, quiet.attack);
+    let wide = positive_rise(frame.wide, quiet.wide);
+    let rms = positive_rise(frame.rms, quiet.rms);
+    let peak = positive_rise(frame.peak, quiet.peak);
+
+    bass * 0.24 + body * 0.18 + attack * 0.22 + wide * 0.12 + rms * 0.16 + peak * 0.08
+}
+
+fn frame_activity(frame: &FrameEnergy) -> f32 {
+    frame.wide * 0.34
+        + frame.bass * 0.22
+        + frame.body * 0.16
+        + frame.rms * 0.14
+        + frame.presence * 0.10
+        + frame.attack * 0.04
+}
+
+fn median_activity(values: &[f32], start: usize, end: usize) -> f32 {
+    let end = end.min(values.len());
+    if values.is_empty() || start >= end {
+        return 0.0;
+    }
+
+    let mut window = values[start..end]
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if window.is_empty() {
+        return 0.0;
+    }
+
+    window.sort_by(|a, b| a.total_cmp(b));
+    window[window.len() / 2]
+}
+
+fn percentile_activity(values: &[f32], start: usize, end: usize, percentile: f32) -> f32 {
+    let end = end.min(values.len());
+    if values.is_empty() || start >= end {
+        return 0.0;
+    }
+
+    let mut window = values[start..end]
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    if window.is_empty() {
+        return 0.0;
+    }
+
+    window.sort_by(|a, b| a.total_cmp(b));
+    percentile_sorted(&window, percentile)
+}
+
+fn max_activity(values: &[f32], start: usize, end: usize) -> f32 {
+    let end = end.min(values.len());
+    if values.is_empty() || start >= end {
+        return 0.0;
+    }
+
+    values[start..end]
+        .iter()
+        .copied()
+        .filter(|value| value.is_finite())
+        .fold(0.0_f32, f32::max)
+}
+
+fn combine_transition_scores(base: &[f32], transition: &[f32]) -> Vec<f32> {
+    let len = base.len().min(transition.len());
+    let mut combined = Vec::with_capacity(len);
+    for i in 0..len {
+        combined.push(base[i] + transition[i] * 0.34);
+    }
+    combined
+}
+
 fn locally_stabilize_scores(frames: &[FrameEnergy], scores: &[f32]) -> Vec<f32> {
     if frames.len() < 8 || scores.len() < 8 {
         return scores.to_vec();
@@ -804,7 +940,11 @@ fn detect_beat_grid_events(
     let spectral_scores = spectral_novelty_scores(frames);
     let envelope_scores = envelope_onset_scores(frames);
     let superflux_scores = superflux_onset_scores(frames);
-    let raw_scores = fuse_detector_scores(&spectral_scores, &envelope_scores, &superflux_scores);
+    let drop_rise_scores = drop_rise_transition_scores(frames);
+    let raw_scores = combine_transition_scores(
+        &fuse_detector_scores(&spectral_scores, &envelope_scores, &superflux_scores),
+        &drop_rise_scores,
+    );
     let reinforced_scores = reinforce_rhythmic_scores(frames, &raw_scores);
     let stable_scores = locally_stabilize_scores(frames, &reinforced_scores);
     let frame_step = median_frame_step_seconds(frames);
@@ -840,6 +980,17 @@ fn detect_beat_grid_events(
         }
         index += lag;
     }
+
+    add_drop_rise_candidates(
+        samples,
+        sample_rate,
+        frames,
+        &drop_rise_scores,
+        &stable_scores,
+        min_score,
+        lag,
+        &mut beats,
+    );
 
     let mut deduped = suppress_duplicates(beats, period_seconds * 0.55);
     calibrate_beat_grid_scores(&mut deduped);
@@ -971,6 +1122,44 @@ fn best_local_grid_onset(scores: &[f32], center: usize, radius: usize) -> Option
     }
 
     (best_score > 0.0).then_some((best_index, best_score))
+}
+
+fn add_drop_rise_candidates(
+    samples: &[f32],
+    sample_rate: u32,
+    frames: &[FrameEnergy],
+    drop_rise_scores: &[f32],
+    stable_scores: &[f32],
+    min_score: f32,
+    lag: usize,
+    beats: &mut Vec<(f64, f32)>,
+) {
+    if frames.is_empty() || drop_rise_scores.is_empty() || stable_scores.is_empty() {
+        return;
+    }
+
+    let threshold = robust_percentile(drop_rise_scores, 0.94).max(0.28);
+    let mut candidates = drop_rise_scores
+        .iter()
+        .enumerate()
+        .filter_map(|(index, score)| {
+            if *score < threshold || index >= frames.len() || index >= stable_scores.len() {
+                return None;
+            }
+            if !has_direct_onset_evidence(frames, index, lag.clamp(4, 32)) {
+                return None;
+            }
+            let stable = stable_scores[index].max(min_score * 0.90);
+            Some((index, (*score + stable).max(stable)))
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
+    let max_candidates = (frames.len() / 180).clamp(1, 4);
+    for (index, score) in candidates.into_iter().take(max_candidates) {
+        let snapped = snap_event_time(samples, sample_rate, frames[index].time);
+        beats.push((snapped, score));
+    }
 }
 
 fn reinforce_rhythmic_scores(frames: &[FrameEnergy], scores: &[f32]) -> Vec<f32> {
@@ -1533,6 +1722,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn promotes_dhol_rise_after_energy_drop() {
+        let sample_rate = 48_000;
+        let mut samples = synthetic_ambient_scaled(sample_rate, 8.0, 0.22);
+        add_energy_pad(&mut samples, sample_rate, 0.7, 2.8, 0.52);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[0.8, 1.3, 1.8, 2.3], 1.35);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &[5.45, 5.95, 6.45], 1.45);
+
+        let frames = band_energies(&samples, sample_rate);
+        let drop_rise = drop_rise_transition_scores(&frames);
+        let rise_frame = frames
+            .iter()
+            .position(|frame| frame.time >= 5.35)
+            .expect("rise frame should exist");
+        let rise_score = drop_rise[rise_frame..(rise_frame + 70).min(drop_rise.len())]
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max);
+        let max_score = drop_rise.iter().copied().fold(0.0_f32, f32::max);
+        let max_index = drop_rise
+            .iter()
+            .position(|score| (*score - max_score).abs() < f32::EPSILON)
+            .unwrap_or(0);
+        assert!(
+            rise_score >= 0.28,
+            "expected drop/rise detector to promote the re-entry, score {rise_score}, max {max_score} at {}",
+            frames[max_index].time
+        );
+
+        let events = detect_events(&samples, sample_rate);
+        assert!(
+            events
+                .iter()
+                .any(|event| (event.time >= 5.40) && (event.time <= 6.08)),
+            "expected marker in the dhol rise zone after quiet breakdown; events: {events:?}"
+        );
+    }
+
     fn synthetic_ambient(sample_rate: u32, duration_seconds: f64) -> Vec<f32> {
         synthetic_ambient_scaled(sample_rate, duration_seconds, 1.0)
     }
@@ -1577,6 +1804,24 @@ mod tests {
                 };
                 samples[index] += (low * 0.85 + body * 0.40 + attack_noise * 0.30) * gain;
             }
+        }
+    }
+
+    fn add_energy_pad(
+        samples: &mut [f32],
+        sample_rate: u32,
+        start_seconds: f64,
+        end_seconds: f64,
+        gain: f32,
+    ) {
+        let start = (start_seconds * sample_rate as f64).round() as usize;
+        let end = (end_seconds * sample_rate as f64).round() as usize;
+        for index in start..end.min(samples.len()) {
+            let t = index as f32 / sample_rate as f32;
+            let pad = (std::f32::consts::TAU * 95.0 * t).sin() * 0.35
+                + (std::f32::consts::TAU * 240.0 * t).sin() * 0.22
+                + (std::f32::consts::TAU * 1400.0 * t).sin() * 0.08;
+            samples[index] += pad * gain;
         }
     }
 

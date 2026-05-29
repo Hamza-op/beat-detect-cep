@@ -148,24 +148,30 @@ def analyze_image(image_path):
     is_low_light = (mean_y < 50.0)
     is_log = (std_dev < 32.0 and shadow_luma > 25 and highlight_luma < 225)
 
-    # 1. Waveform exposure: median placement, not average brightness.
-    target_gray = 92.0 if is_low_light else 118.0
+    # 1. Wedding-safe exposure: lift underexposed frames gently while protecting
+    # white clothing, bright decor, and stage LEDs.
+    target_gray = 86.0 if is_low_light else 108.0
     diff_gray = target_gray - luma_median
-    exposure_scale = 0.9 if diff_gray < 0.0 else 3.0
+    exposure_scale = 0.65 if diff_gray < 0.0 else 1.45
     exposure = (diff_gray / 255.0) * exposure_scale
-    exposure = max(-0.25, min(1.15, exposure))
+    exposure_ceiling = 0.62 if is_low_light else 0.38
+    if highlight_luma > 242 or luma_p90 > 210:
+        exposure_ceiling = min(exposure_ceiling, 0.18)
+    if highlight_luma > 250:
+        exposure_ceiling = min(exposure_ceiling, 0.05)
+    exposure = max(-0.20, min(exposure_ceiling, exposure))
 
     # 2. Calibrated Contrast
     if is_log:
-        contrast = 24.0
+        contrast = 18.0
     else:
         waveform_spread = luma_p90 - luma_p10
         dev_ratio = 135.0 - waveform_spread
         if waveform_spread > 145 or std_dev > 68.0 or dev_ratio < 0:
             contrast = 0.0
         else:
-            contrast = dev_ratio * 0.12
-        contrast = max(0.0, min(18.0, contrast))
+            contrast = dev_ratio * 0.08
+        contrast = max(0.0, min(12.0, contrast))
 
     # 3. Highlights & Shadows
     shadow_crushed_pixels = sum(histogram[0:15])
@@ -178,10 +184,10 @@ def analyze_image(image_path):
     # clothing/decor does not get mistaken for blown exposure.
     if highlight_clip_pct > 0.08 or highlight_luma >= 253:
         highlights = -3.0 * math.sqrt(highlight_clip_pct)
-        whites = 2.5
+        whites = 0.0
     else:
         highlights = 0.0
-        whites = 3.0 if highlight_luma < 235 else 2.0
+        whites = 1.5 if highlight_luma < 220 else 0.5
     highlights = max(-4.0, min(5.0, highlights))
     whites = max(-5.0, min(5.0, whites))
 

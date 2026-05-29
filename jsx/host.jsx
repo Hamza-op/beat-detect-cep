@@ -320,6 +320,12 @@ if (!JSON.parse) {
     return displayName === "scale" || matchName.indexOf("scale") >= 0;
   }
 
+  function isPositionProperty(prop) {
+    var matchName = normalizedName(prop && prop.matchName);
+    var displayName = normalizedName(prop && prop.displayName);
+    return displayName === "position" || matchName.indexOf("position") >= 0;
+  }
+
   function findScalePropertyOnComponent(component) {
     if (!component || !component.properties) {
       return null;
@@ -327,6 +333,19 @@ if (!JSON.parse) {
     for (var p = 0; p < component.properties.numItems; p++) {
       var prop = component.properties[p];
       if (isScaleProperty(prop)) {
+        return prop;
+      }
+    }
+    return null;
+  }
+
+  function findPositionPropertyOnComponent(component) {
+    if (!component || !component.properties) {
+      return null;
+    }
+    for (var p = 0; p < component.properties.numItems; p++) {
+      var prop = component.properties[p];
+      if (isPositionProperty(prop)) {
         return prop;
       }
     }
@@ -354,6 +373,31 @@ if (!JSON.parse) {
       var fallbackScale = findScalePropertyOnComponent(clip.components[c2]);
       if (fallbackScale) {
         return fallbackScale;
+      }
+    }
+
+    return null;
+  }
+
+  function findMotionPositionProperty(clip) {
+    if (!clip || !clip.components) {
+      return null;
+    }
+
+    for (var c = 0; c < clip.components.numItems; c++) {
+      var component = clip.components[c];
+      if (isMotionComponent(component)) {
+        var motionPosition = findPositionPropertyOnComponent(component);
+        if (motionPosition) {
+          return motionPosition;
+        }
+      }
+    }
+
+    for (var c2 = 0; c2 < clip.components.numItems; c2++) {
+      var fallbackPosition = findPositionPropertyOnComponent(clip.components[c2]);
+      if (fallbackPosition) {
+        return fallbackPosition;
       }
     }
 
@@ -432,6 +476,60 @@ if (!JSON.parse) {
     return Math.max(101.0, Math.min(150.0, Number(value) || 110.0));
   }
 
+  function setValueKey(prop, seconds, value, label) {
+    var time = timeFromSeconds(seconds);
+    var addError = null;
+    try {
+      prop.addKey(time);
+    } catch (error) {
+      addError = error;
+    }
+
+    try {
+      prop.setValueAtKey(time, value, 1);
+    } catch (valueError) {
+      if (addError) {
+        throw new Error("Could not add " + label + " keyframe: " + (addError.message || addError) + "; " + (valueError.message || valueError));
+      }
+      throw valueError;
+    }
+
+    if (prop.setInterpolationTypeAtKey) {
+      try {
+        prop.setInterpolationTypeAtKey(time, 5, 1);
+      } catch (_) {}
+    }
+  }
+
+  function boundedScale(value, fallback, min, max) {
+    var scale = Number(value);
+    if (!isFinite(scale)) {
+      scale = fallback;
+    }
+    return Math.max(min, Math.min(max, scale));
+  }
+
+  function getSequenceSize(seq) {
+    var size = { width: 1920.0, height: 1080.0 };
+    try {
+      var settings = seq && seq.getSettings ? seq.getSettings() : null;
+      if (settings) {
+        size.width = Number(settings.videoFrameWidth) || Number(settings.frameSizeHorizontal) || size.width;
+        size.height = Number(settings.videoFrameHeight) || Number(settings.frameSizeVertical) || size.height;
+      }
+    } catch (_) {}
+    return size;
+  }
+
+  function pointFromPercent(xPercent, yPercent, seqSize) {
+    var x = boundedScale(xPercent, 50.0, 0.0, 100.0);
+    var y = boundedScale(yPercent, 50.0, 0.0, 100.0);
+    return [
+      seqSize.width * (x / 100.0),
+      seqSize.height * (y / 100.0)
+    ];
+  }
+
   function baseZoomForStyle(style) {
     var bases = {
       smooth_in: 108.0,
@@ -439,6 +537,7 @@ if (!JSON.parse) {
       drift: 105.0,
       breath: 106.0,
       reveal: 112.0,
+      dolly_zoom: 118.0,
       settle_in: 114.0,
       swell: 110.0,
       crash_in: 126.0,
@@ -483,7 +582,8 @@ if (!JSON.parse) {
 
   function resetZoomOnClip(clip) {
     var prop = findMotionScaleProperty(clip);
-    if (!prop) {
+    var positionProp = findMotionPositionProperty(clip);
+    if (!prop && !positionProp) {
       return false;
     }
 
@@ -495,12 +595,17 @@ if (!JSON.parse) {
       throw new Error("clip duration is too short");
     }
 
-    removeKeysInRange(prop, inTime, outTime);
-    try {
-      prop.setTimeVarying(false);
-    } catch (_) {}
-    if (prop.setValue) {
-      prop.setValue(100.0, 1);
+    if (prop) {
+      removeKeysInRange(prop, inTime, outTime);
+      try {
+        prop.setTimeVarying(false);
+      } catch (_) {}
+      if (prop.setValue) {
+        prop.setValue(100.0, 1);
+      }
+    }
+    if (positionProp) {
+      removeKeysInRange(positionProp, inTime, outTime);
     }
     return true;
   }
@@ -1038,6 +1143,24 @@ if (!JSON.parse) {
     }
   };
 
+  AutoCutStudio.getDollyFrameInfo = function () {
+    try {
+      var seq = app.project.activeSequence;
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+      var size = getSequenceSize(seq);
+      return ok({
+        width: size.width,
+        height: size.height,
+        orientation: size.height > size.width ? "portrait" : "landscape",
+        sequenceName: seq.name || ""
+      });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
   AutoCutStudio.applyMarkers = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
@@ -1162,6 +1285,7 @@ if (!JSON.parse) {
       for (var i = 0; i < clips.length; i++) {
         var clip = clips[i];
         var prop = findMotionScaleProperty(clip);
+        var positionProp = findMotionPositionProperty(clip);
         var name = clipName(clip, i);
         if (!prop) {
           skipped++;
@@ -1286,6 +1410,33 @@ if (!JSON.parse) {
               [revealStart, zoomTarget],
               [safeEndTime, 100.0]
             ]);
+          } else if (zoomStyle === "dolly_zoom") {
+            var dolly = payload.dolly || {};
+            var subjectFrame = boundedScale(dolly.subjectFrame, 72.0, 45.0, 120.0);
+            var backgroundFrame = boundedScale(dolly.backgroundFrame, zoomTarget, 80.0, 145.0);
+            var dollySensitivity = boundedScale(dolly.sensitivity, 65.0, 0.0, 100.0) / 100.0;
+            var dollyBlend = 0.35 + dollySensitivity * 0.65;
+            var dollySubjectScale = 100.0 + (subjectFrame - 100.0) * dollyBlend;
+            var dollyBackgroundScale = 100.0 + (backgroundFrame - 100.0) * dollyBlend;
+            setScaleKeys(prop, [
+              [inTime, dollyBackgroundScale],
+              [midTime, dollySubjectScale],
+              [safeEndTime, dollyBackgroundScale]
+            ]);
+            if (positionProp && (!positionProp.areKeyframesSupported || positionProp.areKeyframesSupported())) {
+              var seqSize = getSequenceSize(seq);
+              var subjectPoint = pointFromPercent(dolly.subjectX, dolly.subjectY, seqSize);
+              var backgroundPoint = pointFromPercent(dolly.backgroundX, dolly.backgroundY, seqSize);
+              try {
+                positionProp.setTimeVarying(true);
+              } catch (_) {}
+              removeKeysInRange(positionProp, inTime, rawOutTime);
+              setValueKey(positionProp, inTime, backgroundPoint, "Position");
+              setValueKey(positionProp, midTime, subjectPoint, "Position");
+              setValueKey(positionProp, safeEndTime, backgroundPoint, "Position");
+            } else {
+              errors.push(name + ": Motion > Position not found; applied scale-only dolly zoom");
+            }
           } else if (zoomStyle === "settle_in") {
             setScaleKeys(prop, [
               [inTime, 100.0],

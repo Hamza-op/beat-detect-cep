@@ -167,16 +167,24 @@ bool ColorEngine::AnalyzeFrame8(
     result.is_low_light = (mean_y < 50.0f);
     result.is_log = (std_dev < 32.0f && shadow_luma > 25 && highlight_luma < 225);
 
-    // Waveform exposure: normalize dark/mid placement without dimming high-key shots.
-    float target_median = result.is_low_light ? 92.0f : 118.0f;
+    // Wedding-safe exposure: lift underexposed frames gently, but do not chase
+    // bright decor, white clothing, or LED highlights into clipping.
+    float target_median = result.is_low_light ? 86.0f : 108.0f;
     float median_diff = target_median - static_cast<float>(luma_median);
-    float exposure_scale = median_diff < 0.0f ? 0.9f : 3.0f;
+    float exposure_scale = median_diff < 0.0f ? 0.65f : 1.45f;
     result.exposure = (median_diff / 255.0f) * exposure_scale;
-    result.exposure = std::max(-0.25f, std::min(1.15f, result.exposure));
+    float exposure_ceiling = result.is_low_light ? 0.62f : 0.38f;
+    if (highlight_luma > 242 || luma_p90 > 210) {
+        exposure_ceiling = std::min(exposure_ceiling, 0.18f);
+    }
+    if (highlight_luma > 250) {
+        exposure_ceiling = std::min(exposure_ceiling, 0.05f);
+    }
+    result.exposure = std::max(-0.20f, std::min(exposure_ceiling, result.exposure));
 
     // Calibrated Contrast (Only boost flat footage, NEVER automatically reduce contrast!)
     if (result.is_log) {
-        result.contrast = 24.0f;
+        result.contrast = 18.0f;
     } else {
         int waveform_spread = luma_p90 - luma_p10;
         if (waveform_spread > 145 || std_dev > 68.0f) {
@@ -184,8 +192,8 @@ bool ColorEngine::AnalyzeFrame8(
             result.contrast = 0.0f;
         } else {
             float dev_ratio = 135.0f - static_cast<float>(waveform_spread);
-            result.contrast = dev_ratio * 0.12f;
-            result.contrast = std::max(0.0f, std::min(18.0f, result.contrast)); // Only boost contrast
+            result.contrast = dev_ratio * 0.08f;
+            result.contrast = std::max(0.0f, std::min(12.0f, result.contrast)); // Only boost contrast
         }
     }
 
@@ -202,10 +210,10 @@ bool ColorEngine::AnalyzeFrame8(
     // automatically a blown highlight, so preserve glow unless clipping is material.
     if (highlight_clip_pct > 0.08f || highlight_luma >= 253) {
         result.highlights = -3.0f * std::sqrt(highlight_clip_pct);
-        result.whites = 2.5f;
+        result.whites = 0.0f;
     } else {
         result.highlights = 0.0f;
-        result.whites = highlight_luma < 235 ? 3.0f : 2.0f;
+        result.whites = highlight_luma < 220 ? 1.5f : 0.5f;
     }
     result.highlights = std::max(-4.0f, std::min(5.0f, result.highlights));
     result.whites = std::max(-5.0f, std::min(5.0f, result.whites));

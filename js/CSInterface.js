@@ -66,6 +66,11 @@
         return;
       }
 
+      if (script.indexOf("AutoCutStudio.getDollyFrameInfo") === 0) {
+        callback(JSON.stringify({ ok: true, width: 1920, height: 1080, orientation: "landscape", sequenceName: "Browser Preview Sequence" }));
+        return;
+      }
+
       if (script.indexOf("AutoCutStudio.applyGimbalZoom") === 0) {
         callback(JSON.stringify({ ok: true, applied: 3 }));
         return;

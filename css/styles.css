@@ -342,7 +342,7 @@ h1 em {
 /* Main workspace tabs */
 .main-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 3px;
   padding: 3px;
   background: #07080a;
@@ -478,6 +478,10 @@ h1 em {
 .header-indicator.tint-color {
   background: var(--sky);
   box-shadow: 0 0 8px rgba(125,211,252,0.34), inset 0 0 0 1px rgba(0,0,0,0.3);
+}
+.header-indicator.tint-dolly {
+  background: var(--coral-hot);
+  box-shadow: 0 0 8px rgba(255,119,119,0.34), inset 0 0 0 1px rgba(0,0,0,0.3);
 }
 
 .card-header h2 {
@@ -696,6 +700,9 @@ select:focus, .input-text:focus {
 }
 .color-auto-readout {
   padding: 12px 8px;
+  border-color: rgba(125,211,252,0.26);
+  background:
+    linear-gradient(180deg, rgba(8,13,16,0.98), rgba(4,6,8,0.98));
 }
 .color-auto-readout .lcd-value {
   color: var(--sky);
@@ -705,6 +712,23 @@ select:focus, .input-text:focus {
 }
 .color-auto-readout .lcd-label {
   color: rgba(125,211,252,0.55);
+}
+
+.color-engine-card {
+  border-color: rgba(125,211,252,0.22);
+  background:
+    linear-gradient(180deg, rgba(11,15,19,0.96), rgba(7,9,12,0.96));
+}
+
+.color-engine-card::before {
+  background:
+    radial-gradient(70% 120% at 0% 50%, rgba(125,211,252,0.12), transparent 70%);
+}
+
+.color-action {
+  border-color: rgba(125,211,252,0.42);
+  background:
+    linear-gradient(180deg, rgba(125,211,252,0.18), rgba(94,234,212,0.07));
 }
 
 /* ── Buttons — tactile push controls ──────────────────── */
@@ -1290,6 +1314,216 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
   gap: 7px;
 }
 
+.dolly-zoom-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 8px;
+  align-items: stretch;
+  padding: 8px;
+  border: 1px solid rgba(94,234,212,0.22);
+  border-radius: var(--r);
+  background: linear-gradient(180deg, rgba(12,18,21,0.82) 0%, rgba(8,9,11,0.9) 100%);
+}
+
+.dolly-body {
+  gap: 8px;
+}
+
+.dolly-display,
+.dolly-controls {
+  min-width: 0;
+}
+
+.dolly-screen {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  min-height: 102px;
+  overflow: hidden;
+  border: 1px solid var(--rim);
+  border-radius: var(--r);
+  background:
+    radial-gradient(circle at 50% 52%, rgba(255,168,69,0.18) 0 10%, transparent 11%),
+    linear-gradient(90deg, rgba(94,234,212,0.18), transparent 18% 82%, rgba(255,119,119,0.12)),
+    #0a0c0f;
+  box-shadow: inset 0 2px 9px rgba(0,0,0,0.84);
+}
+
+.dolly-screen.is-auto-portrait {
+  width: min(100%, 132px);
+  min-height: 190px;
+  margin: 0 auto;
+}
+
+.dolly-screen.is-frame-unknown {
+  border-color: rgba(255,168,69,0.45);
+}
+
+.dolly-guide-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.dolly-safe-frame {
+  position: absolute;
+  inset: 8%;
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 3px;
+}
+
+.dolly-third,
+.dolly-center,
+.dolly-motion-line,
+.dolly-target {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+
+.dolly-third {
+  background: rgba(255,255,255,0.09);
+}
+
+.dolly-third-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.dolly-third-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+.dolly-third-v1 { left: 33.333%; }
+.dolly-third-v2 { left: 66.666%; }
+.dolly-third-h1 { top: 33.333%; }
+.dolly-third-h2 { top: 66.666%; }
+
+.dolly-center {
+  background: rgba(255,168,69,0.22);
+}
+
+.dolly-center-x {
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.dolly-center-y {
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 1px;
+}
+
+.dolly-motion-line {
+  height: 1px;
+  transform-origin: left center;
+  background: linear-gradient(90deg, rgba(94,234,212,0.9), rgba(255,168,69,0.9));
+  box-shadow: 0 0 6px rgba(94,234,212,0.3);
+}
+
+.dolly-target {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(255,255,255,0.75);
+}
+
+.dolly-target-background {
+  background: var(--teal);
+  box-shadow: 0 0 7px rgba(94,234,212,0.45);
+}
+
+.dolly-target-subject {
+  background: var(--amber);
+  box-shadow: 0 0 7px rgba(255,168,69,0.45);
+}
+
+.dolly-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 7px;
+  border: 1px solid var(--rim-mid);
+  border-radius: var(--r);
+  background: rgba(8, 9, 11, 0.58);
+}
+
+.dolly-frame {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  pointer-events: none;
+  box-shadow: 0 0 10px rgba(94,234,212,0.22);
+  z-index: 2;
+}
+
+.dolly-frame span {
+  position: absolute;
+  left: 5px;
+  top: 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: rgba(0,0,0,0.62);
+  color: currentColor;
+  font-family: var(--font-mono);
+  font-size: 7px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dolly-frame-background {
+  color: var(--teal);
+}
+
+.dolly-frame-subject {
+  color: var(--amber);
+  border-style: dashed;
+  box-shadow: 0 0 10px rgba(255,168,69,0.24);
+}
+
+.compact-slider-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-mute);
+  font-family: var(--font-mono);
+  font-size: 8px;
+}
+
+.compact-slider-row strong {
+  color: var(--ink);
+  font-size: 8px;
+}
+
+.dolly-position-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 6px;
+  padding: 5px;
+  border: 1px solid rgba(255,255,255,0.06);
+  border-radius: var(--r);
+  background: rgba(0,0,0,0.18);
+}
+
+.dolly-apply-button {
+  width: 100%;
+  margin-top: 2px;
+  border-color: rgba(94,234,212,0.4);
+  background: linear-gradient(180deg, rgba(94,234,212,0.18), rgba(255,168,69,0.08));
+}
+
 .visually-hidden-select {
   position: absolute;
   width: 1px;
@@ -1734,11 +1968,13 @@ input[type="range"]::-webkit-slider-thumb:active { cursor: grabbing; }
 }
 
 @media (max-width: 360px) {
-  .zoom-smart-panel {
+  .zoom-smart-panel,
+  .dolly-zoom-panel {
     grid-template-columns: 1fr;
   }
 
-  .zoom-preview-monitor {
+  .zoom-preview-monitor,
+  .dolly-screen {
     max-height: 78px;
   }
 

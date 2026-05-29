@@ -17,6 +17,7 @@
     applyButton:      document.getElementById("applyButton"),
     removeButton:     document.getElementById("removeButton"),
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
+    confirmDollyZoomButton: document.getElementById("confirmDollyZoomButton"),
     clearZoomButton:  document.getElementById("clearZoomButton"),
     warpStabilizerButton: document.getElementById("warpStabilizerButton"),
     autoColorButton: document.getElementById("autoColorButton"),
@@ -35,6 +36,28 @@
     targetStrategy:   document.getElementById("targetStrategy"),
     targetCountHint:  document.getElementById("targetCountHint"),
     clearLogsButton:  document.getElementById("clearLogsButton"),
+    dollySubjectSlider: document.getElementById("dollySubjectSlider"),
+    dollyBackgroundSlider: document.getElementById("dollyBackgroundSlider"),
+    dollySensitivitySlider: document.getElementById("dollySensitivitySlider"),
+    dollySubjectXSlider: document.getElementById("dollySubjectXSlider"),
+    dollySubjectYSlider: document.getElementById("dollySubjectYSlider"),
+    dollyBackgroundXSlider: document.getElementById("dollyBackgroundXSlider"),
+    dollyBackgroundYSlider: document.getElementById("dollyBackgroundYSlider"),
+    dollySubjectLabel: document.getElementById("dollySubjectLabel"),
+    dollyBackgroundLabel: document.getElementById("dollyBackgroundLabel"),
+    dollySensitivityLabel: document.getElementById("dollySensitivityLabel"),
+    dollySubjectXLabel: document.getElementById("dollySubjectXLabel"),
+    dollySubjectYLabel: document.getElementById("dollySubjectYLabel"),
+    dollyBackgroundXLabel: document.getElementById("dollyBackgroundXLabel"),
+    dollyBackgroundYLabel: document.getElementById("dollyBackgroundYLabel"),
+    dollyStrengthLabel: document.getElementById("dollyStrengthLabel"),
+    dollyFrameLabel: document.getElementById("dollyFrameLabel"),
+    dollySubjectFrame: document.getElementById("dollySubjectFrame"),
+    dollyBackgroundFrame: document.getElementById("dollyBackgroundFrame"),
+    dollyScreen: document.getElementById("dollyScreen"),
+    dollyMotionLine: document.getElementById("dollyMotionLine"),
+    dollySubjectTarget: document.getElementById("dollySubjectTarget"),
+    dollyBackgroundTarget: document.getElementById("dollyBackgroundTarget"),
     tabDensity:       document.getElementById("tabDensity"),
     tabLimit:         document.getElementById("tabLimit"),
     densityTabContent:document.getElementById("densityTabContent"),
@@ -44,10 +67,12 @@
     mainTabMarkersButton: document.getElementById("mainTabMarkersButton"),
     mainTabColorButton: document.getElementById("mainTabColorButton"),
     mainTabToolsButton: document.getElementById("mainTabToolsButton"),
+    mainTabDollyButton: document.getElementById("mainTabDollyButton"),
     mainTabDiagnosticsButton: document.getElementById("mainTabDiagnosticsButton"),
     mainTabMarkers: document.getElementById("mainTabMarkers"),
     mainTabColor: document.getElementById("mainTabColor"),
     mainTabTools: document.getElementById("mainTabTools"),
+    mainTabDolly: document.getElementById("mainTabDolly"),
     mainTabDiagnostics: document.getElementById("mainTabDiagnostics")
   };
 
@@ -68,6 +93,7 @@
     dom.removeButton.disabled    = isBusy;
     if (dom.randomizeButton) dom.randomizeButton.disabled = isBusy || state.allEvents.length === 0;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
+    if (dom.confirmDollyZoomButton) dom.confirmDollyZoomButton.disabled = isBusy;
     if (dom.clearZoomButton) dom.clearZoomButton.disabled = isBusy;
     if (dom.warpStabilizerButton) dom.warpStabilizerButton.disabled = isBusy;
     if (dom.autoColorButton) dom.autoColorButton.disabled = isBusy;
@@ -402,11 +428,11 @@ function keepStrongestPerSecond(events) {
 
   // ── Target Count selection logic ──────────────────────────────
   //
-  // Selects up to N events from state.allEvents.
+  // Selects N events from state.allEvents whenever N real detected beats exist.
   //
   // Beat mode is section-based: divide the detected beat span into N sections,
-  // choose one real beat from each non-empty section, and never synthesize a
-  // marker just to satisfy the target count.
+  // choose one real beat from each non-empty section, then top up from real
+  // unused beats if any section had no candidate. No synthetic markers.
   //
   // Beat strategies:
   //   balanced  = strong beat near the section center.
@@ -522,7 +548,52 @@ function keepStrongestPerSecond(events) {
       }
     }
 
+    if (strategy !== "spread") {
+      fillSelectionToTarget(sorted, selected, usedIndices, target, strategy);
+    }
     return selected.sort(function(a, b) { return a.time - b.time; });
+  }
+
+  function fillSelectionToTarget(sorted, selected, usedIndices, target, strategy) {
+    if (!sorted || !selected || !usedIndices || selected.length >= target) return;
+
+    while (selected.length < target) {
+      var bestIdx = -1;
+      var bestRank = -Infinity;
+
+      for (var i = 0; i < sorted.length; i++) {
+        if (usedIndices[i]) continue;
+        var event = sorted[i];
+        var score = Number(event.score) || 0;
+        var spacing = nearestSelectedDistanceSeconds(event, selected);
+        var rank = score;
+
+        if (strategy === "spread") {
+          rank = spacing;
+        } else if (strategy === "balanced") {
+          rank = score * 0.65 + Math.min(spacing / 6, 1) * 0.35;
+        }
+
+        if (bestIdx < 0 || rank > bestRank) {
+          bestIdx = i;
+          bestRank = rank;
+        }
+      }
+
+      if (bestIdx < 0) break;
+      selected.push(sorted[bestIdx]);
+      usedIndices[bestIdx] = true;
+    }
+  }
+
+  function nearestSelectedDistanceSeconds(event, selected) {
+    if (!selected || selected.length === 0) return Number.MAX_VALUE;
+    var best = Number.MAX_VALUE;
+    var time = Number(event.time) || 0;
+    for (var i = 0; i < selected.length; i++) {
+      best = Math.min(best, Math.abs(time - (Number(selected[i].time) || 0)));
+    }
+    return best;
   }
 
   // Returns the user-entered target count (integer) or null if blank/invalid.
@@ -530,8 +601,8 @@ function keepStrongestPerSecond(events) {
     if (!dom.targetCountInput) return null;
     var raw = dom.targetCountInput.value.trim();
     if (raw === "") return null;
-    var n = parseInt(raw, 10);
-    return (isFinite(n) && n >= 1) ? Math.floor(n) : null;
+    var n = Number(raw);
+    return (isFinite(n) && n >= 1) ? Math.round(n) : null;
   }
 
   // Calibrate min/max bounds of the target-count input after analysis.
@@ -561,12 +632,13 @@ function keepStrongestPerSecond(events) {
     dom.targetCountInput.max = String(max);
     // Update hint with range
     if (dom.targetCountHint) {
-      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " beat markers. Balanced favors strong centered beats; Strongest uses the highest score per section; Spread favors timing symmetry.";
+      dom.targetCountHint.textContent = "Range: " + min + "\u2013" + max + " beat markers. Even Spread skips empty sections; Balanced and Section Best fill from real beats when possible.";
     }
   }
 
   // Shuffle target-count selection. In beat mode this follows the same section
-  // logic as Strategy: one real beat from each non-empty section, no top-up.
+  // logic as Strategy, then tops up from remaining real beats to honor the
+  // manually entered limit whenever enough detected beats exist.
   function randomizeSelection() {
     var n = getTargetCount();
     if (!isFinite(n) || n <= 0 || state.allEvents.length === 0) return;
@@ -622,6 +694,19 @@ function keepStrongestPerSecond(events) {
 
         selected.push(sorted[pickIndex]);
         usedIndices[pickIndex] = true;
+      }
+    }
+
+    if (getTargetStrategy() !== "spread") {
+      while (selected.length < n) {
+        var remaining = [];
+        for (var r = 0; r < sorted.length; r++) {
+          if (!usedIndices[r]) remaining.push(r);
+        }
+        if (remaining.length === 0) break;
+        var extraPick = remaining[Math.floor(Math.random() * remaining.length)];
+        selected.push(sorted[extraPick]);
+        usedIndices[extraPick] = true;
       }
     }
 
@@ -849,6 +934,88 @@ function keepStrongestPerSecond(events) {
         var skipped = Number(result.skipped) || 0;
         var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
         setStatus("Applied gimbal zoom keyframes to " + result.applied + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
+      })
+      .catch(function (error) {
+        appendLog(error && error.stack ? error.stack : String(error));
+        setStatus(error.message, true);
+      })
+      .then(function () {
+        setBusy(false);
+      });
+  }
+
+  function readSliderNumber(element, fallback) {
+    var value = element ? Number(element.value) : fallback;
+    return isFinite(value) ? value : fallback;
+  }
+
+  function getDollyPayload() {
+    var subjectFrame = readSliderNumber(dom.dollySubjectSlider, 72);
+    var backgroundFrame = readSliderNumber(dom.dollyBackgroundSlider, 112);
+    var sensitivity = readSliderNumber(dom.dollySensitivitySlider, 65);
+    var subjectX = readSliderNumber(dom.dollySubjectXSlider, 50);
+    var subjectY = readSliderNumber(dom.dollySubjectYSlider, 50);
+    var backgroundX = readSliderNumber(dom.dollyBackgroundXSlider, 50);
+    var backgroundY = readSliderNumber(dom.dollyBackgroundYSlider, 50);
+    return {
+      zoom: backgroundFrame,
+      style: "dolly_zoom",
+      autoRatio: false,
+      dolly: {
+        subjectFrame: subjectFrame,
+        backgroundFrame: backgroundFrame,
+        sensitivity: sensitivity,
+        subjectX: subjectX,
+        subjectY: subjectY,
+        backgroundX: backgroundX,
+        backgroundY: backgroundY
+      }
+    };
+  }
+
+  function applyDollyFrameInfo(info, isFallback) {
+    var width = Number(info && info.width) || 1920;
+    var height = Number(info && info.height) || 1080;
+    if (dom.dollyScreen) {
+      dom.dollyScreen.style.aspectRatio = width + " / " + height;
+      dom.dollyScreen.classList.toggle("is-auto-portrait", height > width);
+      dom.dollyScreen.classList.toggle("is-frame-unknown", Boolean(isFallback));
+    }
+    if (dom.dollyFrameLabel) {
+      dom.dollyFrameLabel.textContent = isFallback ? "Frame unknown" : Math.round(width) + "x" + Math.round(height);
+    }
+  }
+
+  function detectDollyFrame() {
+    if (isBrowserPreview()) {
+      applyDollyFrameInfo({ width: 1920, height: 1080 });
+      return Promise.resolve();
+    }
+    return cepEval("AutoCutStudio.getDollyFrameInfo()")
+      .then(function(result) {
+        applyDollyFrameInfo(result);
+      })
+      .catch(function(error) {
+        appendLog("DOLLY FRAME DETECT FAILED: " + (error && error.message ? error.message : String(error)));
+        applyDollyFrameInfo({ width: 1920, height: 1080 }, true);
+        setStatus("Could not detect sequence frame for Dolly preview. Showing a neutral guide; applied motion still uses Premiere sequence data when available.", true);
+      });
+  }
+
+  function applyDollyZoom() {
+    if (state.isBusy) {
+      return;
+    }
+
+    setBusy(true);
+    var payload = getDollyPayload();
+    setStatus("Applying manual dolly zoom: subject " + payload.dolly.subjectFrame + "% at " + payload.dolly.subjectX + "," + payload.dolly.subjectY + "; background " + payload.dolly.backgroundFrame + "% at " + payload.dolly.backgroundX + "," + payload.dolly.backgroundY + "; sensitivity " + payload.dolly.sensitivity + "%...");
+
+    cepEval("AutoCutStudio.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
+      .then(function (result) {
+        var skipped = Number(result.skipped) || 0;
+        var details = result.errors && result.errors.length ? " Details: " + result.errors.join(" | ") : "";
+        setStatus("Applied manual dolly zoom to " + result.applied + " clips" + (skipped ? "; skipped " + skipped : "") + "." + details, false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
@@ -1134,6 +1301,7 @@ function keepStrongestPerSecond(events) {
       { name: "markers", button: dom.mainTabMarkersButton, panel: dom.mainTabMarkers },
       { name: "color", button: dom.mainTabColorButton, panel: dom.mainTabColor },
       { name: "tools", button: dom.mainTabToolsButton, panel: dom.mainTabTools },
+      { name: "dolly", button: dom.mainTabDollyButton, panel: dom.mainTabDolly },
       { name: "diagnostics", button: dom.mainTabDiagnosticsButton, panel: dom.mainTabDiagnostics }
     ];
 
@@ -1161,6 +1329,7 @@ function keepStrongestPerSecond(events) {
   dom.applyButton.addEventListener("click", applyMarkers);
   dom.removeButton.addEventListener("click", removeMarkers);
   if (dom.gimbalZoomButton) dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
+  if (dom.confirmDollyZoomButton) dom.confirmDollyZoomButton.addEventListener("click", applyDollyZoom);
   if (dom.clearZoomButton) dom.clearZoomButton.addEventListener("click", clearGimbalZoom);
   if (dom.warpStabilizerButton) dom.warpStabilizerButton.addEventListener("click", applyWarpStabilizerQueue);
   if (dom.autoColorButton) dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
@@ -1373,6 +1542,78 @@ function keepStrongestPerSecond(events) {
     if (previewStartLabel) previewStartLabel.textContent = Math.round(points[0][1]) + "% start";
     if (previewEndLabel) previewEndLabel.textContent = Math.round(points[points.length - 1][1]) + "% end";
   }
+
+  function updateDollyPanel() {
+    var subjectFrame = readSliderNumber(dom.dollySubjectSlider, 72);
+    var backgroundFrame = readSliderNumber(dom.dollyBackgroundSlider, 112);
+    var sensitivity = readSliderNumber(dom.dollySensitivitySlider, 65);
+    var subjectX = readSliderNumber(dom.dollySubjectXSlider, 50);
+    var subjectY = readSliderNumber(dom.dollySubjectYSlider, 50);
+    var backgroundX = readSliderNumber(dom.dollyBackgroundXSlider, 50);
+    var backgroundY = readSliderNumber(dom.dollyBackgroundYSlider, 50);
+    var subjectBox = Math.max(26, Math.min(82, subjectFrame * 0.62));
+    var subjectWidth = subjectBox * 0.58;
+    var subjectHeight = Math.min(92, subjectBox * 0.92);
+    var backgroundBox = Math.max(subjectBox + 8, Math.min(96, backgroundFrame * 0.72));
+
+    if (dom.dollySubjectLabel) dom.dollySubjectLabel.textContent = subjectFrame + "%";
+    if (dom.dollyBackgroundLabel) dom.dollyBackgroundLabel.textContent = backgroundFrame + "%";
+    if (dom.dollySensitivityLabel) dom.dollySensitivityLabel.textContent = sensitivity + "%";
+    if (dom.dollySubjectXLabel) dom.dollySubjectXLabel.textContent = subjectX + "%";
+    if (dom.dollySubjectYLabel) dom.dollySubjectYLabel.textContent = subjectY + "%";
+    if (dom.dollyBackgroundXLabel) dom.dollyBackgroundXLabel.textContent = backgroundX + "%";
+    if (dom.dollyBackgroundYLabel) dom.dollyBackgroundYLabel.textContent = backgroundY + "%";
+    if (dom.dollyStrengthLabel) dom.dollyStrengthLabel.textContent = sensitivity + "% Sens";
+    if (dom.dollySubjectFrame) {
+      dom.dollySubjectFrame.style.width = subjectWidth + "%";
+      dom.dollySubjectFrame.style.height = subjectHeight + "%";
+      dom.dollySubjectFrame.style.left = subjectX + "%";
+      dom.dollySubjectFrame.style.top = subjectY + "%";
+    }
+    if (dom.dollyBackgroundFrame) {
+      dom.dollyBackgroundFrame.style.width = backgroundBox + "%";
+      dom.dollyBackgroundFrame.style.height = backgroundBox * 0.56 + "%";
+      dom.dollyBackgroundFrame.style.left = backgroundX + "%";
+      dom.dollyBackgroundFrame.style.top = backgroundY + "%";
+    }
+    if (dom.dollySubjectTarget) {
+      dom.dollySubjectTarget.style.left = subjectX + "%";
+      dom.dollySubjectTarget.style.top = subjectY + "%";
+    }
+    if (dom.dollyBackgroundTarget) {
+      dom.dollyBackgroundTarget.style.left = backgroundX + "%";
+      dom.dollyBackgroundTarget.style.top = backgroundY + "%";
+    }
+    if (dom.dollyMotionLine) {
+      var dx = subjectX - backgroundX;
+      var dy = subjectY - backgroundY;
+      var length = Math.sqrt(dx * dx + dy * dy);
+      dom.dollyMotionLine.style.left = backgroundX + "%";
+      dom.dollyMotionLine.style.top = backgroundY + "%";
+      dom.dollyMotionLine.style.width = length + "%";
+      dom.dollyMotionLine.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+    }
+  }
+
+  var dollySliders = [
+    dom.dollySubjectSlider,
+    dom.dollyBackgroundSlider,
+    dom.dollySensitivitySlider,
+    dom.dollySubjectXSlider,
+    dom.dollySubjectYSlider,
+    dom.dollyBackgroundXSlider,
+    dom.dollyBackgroundYSlider
+  ];
+  for (var ds = 0; ds < dollySliders.length; ds++) {
+    if (dollySliders[ds]) {
+      dollySliders[ds].addEventListener("input", function() {
+        updateDollyPanel();
+      });
+    }
+  }
+  detectDollyFrame();
+  updateDollyPanel();
+
   if (zoomModeSelect && previewSubject) {
     zoomModeSelect.addEventListener("change", function() {
       selectZoomMode(zoomModeSelect.value);
@@ -1427,6 +1668,12 @@ function keepStrongestPerSecond(events) {
   if (dom.mainTabToolsButton) {
     dom.mainTabToolsButton.addEventListener("click", function() {
       activateMainTab("tools");
+    });
+  }
+  if (dom.mainTabDollyButton) {
+    dom.mainTabDollyButton.addEventListener("click", function() {
+      activateMainTab("dolly");
+      detectDollyFrame();
     });
   }
   if (dom.mainTabDiagnosticsButton) {

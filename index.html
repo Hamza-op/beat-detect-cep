@@ -47,6 +47,9 @@
         <button type="button" id="mainTabToolsButton" class="main-tab-btn" aria-controls="mainTabTools" aria-selected="false">
           <span>Tools</span>
         </button>
+        <button type="button" id="mainTabDollyButton" class="main-tab-btn" aria-controls="mainTabDolly" aria-selected="false">
+          <span>Dolly</span>
+        </button>
         <button type="button" id="mainTabDiagnosticsButton" class="main-tab-btn" aria-controls="mainTabDiagnostics" aria-selected="false">
           <span>Diag</span>
         </button>
@@ -155,6 +158,8 @@
                     type="number"
                     min="1"
                     max="999"
+                    step="1"
+                    inputmode="numeric"
                     value=""
                     placeholder="Auto"
                   >
@@ -171,7 +176,7 @@
                   </div>
                 </div>
               </div>
-              <p class="hint-text" id="targetCountHint">Exact limit divides the song into sections and skips sections with no detected beat.</p>
+              <p class="hint-text" id="targetCountHint">Even Spread keeps timing natural and skips empty sections. Balanced and Section Best can fill from real beats.</p>
             </div>
 
             <!-- Event Counters (Styled like an LCD Tech Screen) -->
@@ -241,12 +246,12 @@
                 </div>
                 <span class="engine-badge color-badge">NATIVE</span>
               </div>
-              <p class="engine-desc">Captures the playhead frame, computes one native C++ correction, and applies that grade across the selected clip.</p>
+              <p class="engine-desc">Select one video clip, park the playhead on the frame to grade from, then apply one native correction across that clip.</p>
             </div>
 
             <div class="lcd-screen color-auto-readout grid-span-full">
               <div class="lcd-value">AUTO</div>
-              <div class="lcd-label">playhead frame analysis</div>
+              <div class="lcd-label">one selected clip · playhead frame</div>
             </div>
 
             <button id="autoColorButton" class="btn-tool color-action grid-span-full" type="button">
@@ -416,6 +421,114 @@
             <span class="short-label">Clear Zoom</span>
           </button>
 
+          </div>
+        </section>
+      </div>
+
+      <div id="mainTabDolly" class="main-tab-panel" role="tabpanel" aria-labelledby="mainTabDollyButton" hidden>
+        <section class="panel-card dolly-card animate-fade-in" style="animation-delay: 0.24s;" aria-label="Manual Dolly Zoom">
+          <div class="card-header">
+            <div class="header-indicator tint-dolly"></div>
+            <h2>Manual Dolly Zoom</h2>
+            <svg class="chevron-icon" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+
+          <div class="card-body dolly-body">
+            <div class="dolly-zoom-panel" aria-label="Manual dolly zoom setup">
+              <div class="dolly-display">
+                <div id="dollyScreen" class="dolly-screen">
+                  <div class="viewfinder-grid"></div>
+                  <div class="dolly-guide-layer" aria-hidden="true">
+                    <span class="dolly-safe-frame"></span>
+                    <span class="dolly-third dolly-third-v dolly-third-v1"></span>
+                    <span class="dolly-third dolly-third-v dolly-third-v2"></span>
+                    <span class="dolly-third dolly-third-h dolly-third-h1"></span>
+                    <span class="dolly-third dolly-third-h dolly-third-h2"></span>
+                    <span class="dolly-center dolly-center-x"></span>
+                    <span class="dolly-center dolly-center-y"></span>
+                    <span id="dollyMotionLine" class="dolly-motion-line"></span>
+                    <span id="dollyBackgroundTarget" class="dolly-target dolly-target-background"></span>
+                    <span id="dollySubjectTarget" class="dolly-target dolly-target-subject"></span>
+                  </div>
+                  <div id="dollyBackgroundFrame" class="dolly-frame dolly-frame-background">
+                    <span>Background</span>
+                  </div>
+                  <div id="dollySubjectFrame" class="dolly-frame dolly-frame-subject">
+                    <span>Subject</span>
+                  </div>
+                </div>
+              </div>
+              <div class="dolly-controls">
+                <div class="preview-head">
+                  <span class="field-label">Frame Match</span>
+                  <strong id="dollyFrameLabel" class="preview-mode-label">Auto Frame</strong>
+                </div>
+                <label class="compact-slider-row" for="dollySubjectSlider">
+                  <span>Subject Frame</span>
+                  <strong id="dollySubjectLabel">72%</strong>
+                </label>
+                <div class="slider-wrapper">
+                  <input id="dollySubjectSlider" type="range" min="45" max="120" value="72" step="1">
+                </div>
+                <div class="dolly-position-grid">
+                  <label class="compact-slider-row" for="dollySubjectXSlider">
+                    <span>Subject X</span>
+                    <strong id="dollySubjectXLabel">50%</strong>
+                  </label>
+                  <label class="compact-slider-row" for="dollySubjectYSlider">
+                    <span>Subject Y</span>
+                    <strong id="dollySubjectYLabel">50%</strong>
+                  </label>
+                  <div class="slider-wrapper">
+                    <input id="dollySubjectXSlider" type="range" min="0" max="100" value="50" step="1">
+                  </div>
+                  <div class="slider-wrapper">
+                    <input id="dollySubjectYSlider" type="range" min="0" max="100" value="50" step="1">
+                  </div>
+                </div>
+                <label class="compact-slider-row" for="dollyBackgroundSlider">
+                  <span>Background Frame</span>
+                  <strong id="dollyBackgroundLabel">112%</strong>
+                </label>
+                <div class="slider-wrapper">
+                  <input id="dollyBackgroundSlider" type="range" min="80" max="145" value="112" step="1">
+                </div>
+                <div class="dolly-position-grid">
+                  <label class="compact-slider-row" for="dollyBackgroundXSlider">
+                    <span>Background X</span>
+                    <strong id="dollyBackgroundXLabel">50%</strong>
+                  </label>
+                  <label class="compact-slider-row" for="dollyBackgroundYSlider">
+                    <span>Background Y</span>
+                    <strong id="dollyBackgroundYLabel">50%</strong>
+                  </label>
+                  <div class="slider-wrapper">
+                    <input id="dollyBackgroundXSlider" type="range" min="0" max="100" value="50" step="1">
+                  </div>
+                  <div class="slider-wrapper">
+                    <input id="dollyBackgroundYSlider" type="range" min="0" max="100" value="50" step="1">
+                  </div>
+                </div>
+                <label class="compact-slider-row" for="dollySensitivitySlider">
+                  <span>Sensitivity</span>
+                  <strong id="dollySensitivityLabel">65%</strong>
+                </label>
+                <div class="slider-wrapper">
+                  <input id="dollySensitivitySlider" type="range" min="0" max="100" value="65" step="1">
+                </div>
+                <button id="confirmDollyZoomButton" class="btn-tool dolly-apply-button" type="button">
+                  <svg class="btn-icon-svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M4 12h16"/>
+                    <path d="M14 6l6 6-6 6"/>
+                    <path d="M10 18l-6-6 6-6"/>
+                  </svg>
+                  <span class="full-label">Confirm & Apply Dolly Zoom</span>
+                  <span class="short-label">Apply</span>
+                </button>
+              </div>
+            </div>
           </div>
         </section>
       </div>

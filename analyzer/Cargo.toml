@@ -11,6 +11,7 @@ symphonia = { version = "0.5", features = [
   "all-codecs",
   "all-formats"
 ] }
+rayon = "1.10"
 
 # ── Release: maximum throughput ───────────────────────────────
 [profile.release]

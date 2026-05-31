@@ -343,6 +343,13 @@ fn detect_events(samples: &[f32], sample_rate: u32) -> Vec<Event> {
     detect_beat_grid_events(samples, sample_rate, &frames)
 }
 
+struct FramePreData {
+    time: f64,
+    sum_squares: f32,
+    peak: f32,
+    mags: Vec<f32>,
+}
+
 fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
     if sample_rate == 0 {
         return Vec::new();
@@ -365,98 +372,125 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
 
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(window_size);
-    let mut buffer = vec![Complex::new(0.0, 0.0); window_size];
-    let mut prev_mags = vec![0.0_f32; window_size / 2];
-    let mut out = Vec::new();
 
+    let mut starts = Vec::new();
     let mut start = 0;
     while start + window_size <= samples.len() {
-        for i in 0..window_size {
-            buffer[i].re = samples[start + i] * hann[i];
-            buffer[i].im = 0.0;
-        }
-
-        let mut sum_squares = 0.0;
-        let mut peak = 0.0_f32;
-        for sample in &samples[start..start + window_size] {
-            let abs = sample.abs();
-            sum_squares += sample * sample;
-            peak = peak.max(abs);
-        }
-
-        fft.process(&mut buffer);
-
-        let mut bass = 0.0;
-        let mut body = 0.0;
-        let mut attack = 0.0;
-        let mut presence = 0.0;
-        let mut wide = 0.0;
-        let mut log_band_power = [0.0_f32; LOG_BANDS];
-        let mut log_band_bins = [0_usize; LOG_BANDS];
-        let mut bass_bins = 0;
-        let mut body_bins = 0;
-        let mut attack_bins = 0;
-        let mut presence_bins = 0;
-        let mut wide_bins = 0;
-        let mut flux = 0.0;
-
-        for (bin, value) in buffer.iter().take(window_size / 2).enumerate().skip(1) {
-            let mag = value.norm();
-            let diff = mag - prev_mags[bin];
-            if diff > 0.0 {
-                // High-frequency content (HFC) weighting for flux: multiply by a mild frequency factor
-                let freq_weight = 1.0 + (bin as f32 / (window_size / 2) as f32);
-                flux += diff * freq_weight;
-            }
-            prev_mags[bin] = mag;
-
-            let freq = bin as f32 * sr / window_size as f32;
-            let power = mag * mag;
-            if (45.0..=180.0).contains(&freq) {
-                bass += power;
-                bass_bins += 1;
-            }
-            if (180.0..=950.0).contains(&freq) {
-                body += power;
-                body_bins += 1;
-            }
-            if (1_200.0..=8_000.0).contains(&freq) {
-                attack += power;
-                attack_bins += 1;
-            }
-            if (250.0..=4_000.0).contains(&freq) {
-                presence += power;
-                presence_bins += 1;
-            }
-            if (40.0..=10_000.0).contains(&freq) {
-                wide += power;
-                wide_bins += 1;
-            }
-            if let Some(band) = log_band_index(freq) {
-                log_band_power[band] += power;
-                log_band_bins[band] += 1;
-            }
-        }
-
-        let mut log_bands = [0.0_f32; LOG_BANDS];
-        for band in 0..LOG_BANDS {
-            log_bands[band] = band_energy(log_band_power[band], log_band_bins[band]);
-        }
-
-        out.push(FrameEnergy {
-            time: (start + window_size / 2) as f64 / sample_rate as f64,
-            bass: band_energy(bass, bass_bins),
-            body: band_energy(body, body_bins),
-            attack: band_energy(attack, attack_bins),
-            presence: band_energy(presence, presence_bins),
-            wide: band_energy(wide, wide_bins),
-            flux: energy_scale(flux / (window_size / 2) as f32),
-            rms: energy_scale(sum_squares / window_size as f32),
-            peak: energy_scale(peak),
-            log_bands,
-        });
-
+        starts.push(start);
         start += hop;
+    }
+
+    use rayon::prelude::*;
+
+    let mut prev_mags = vec![0.0_f32; window_size / 2];
+    let mut out = Vec::with_capacity(starts.len());
+    let chunk_size = (rayon::current_num_threads() * 4).max(16);
+
+    for chunk in starts.chunks(chunk_size) {
+        let pre_data: Vec<FramePreData> = chunk
+            .par_iter()
+            .map(|&start| {
+                let mut buffer = vec![Complex::new(0.0, 0.0); window_size];
+                for i in 0..window_size {
+                    buffer[i].re = samples[start + i] * hann[i];
+                    buffer[i].im = 0.0;
+                }
+
+                let mut sum_squares = 0.0;
+                let mut peak = 0.0_f32;
+                for sample in &samples[start..start + window_size] {
+                    let abs = sample.abs();
+                    sum_squares += sample * sample;
+                    peak = peak.max(abs);
+                }
+
+                fft.process(&mut buffer);
+
+                let mut mags = vec![0.0_f32; window_size / 2];
+                for (bin, value) in buffer.iter().take(window_size / 2).enumerate().skip(1) {
+                    mags[bin] = value.norm();
+                }
+
+                FramePreData {
+                    time: (start + window_size / 2) as f64 / sample_rate as f64,
+                    sum_squares,
+                    peak,
+                    mags,
+                }
+            })
+            .collect();
+
+        for data in pre_data {
+            let mut bass = 0.0;
+            let mut body = 0.0;
+            let mut attack = 0.0;
+            let mut presence = 0.0;
+            let mut wide = 0.0;
+            let mut log_band_power = [0.0_f32; LOG_BANDS];
+            let mut log_band_bins = [0_usize; LOG_BANDS];
+            let mut bass_bins = 0;
+            let mut body_bins = 0;
+            let mut attack_bins = 0;
+            let mut presence_bins = 0;
+            let mut wide_bins = 0;
+            let mut flux = 0.0;
+
+            for bin in 1..(window_size / 2) {
+                let mag = data.mags[bin];
+                let diff = mag - prev_mags[bin];
+                if diff > 0.0 {
+                    // High-frequency content (HFC) weighting for flux: multiply by a mild frequency factor
+                    let freq_weight = 1.0 + (bin as f32 / (window_size / 2) as f32);
+                    flux += diff * freq_weight;
+                }
+                prev_mags[bin] = mag;
+
+                let freq = bin as f32 * sr / window_size as f32;
+                let power = mag * mag;
+                if (45.0..=180.0).contains(&freq) {
+                    bass += power;
+                    bass_bins += 1;
+                }
+                if (180.0..=950.0).contains(&freq) {
+                    body += power;
+                    body_bins += 1;
+                }
+                if (1_200.0..=8_000.0).contains(&freq) {
+                    attack += power;
+                    attack_bins += 1;
+                }
+                if (250.0..=4_000.0).contains(&freq) {
+                    presence += power;
+                    presence_bins += 1;
+                }
+                if (40.0..=10_000.0).contains(&freq) {
+                    wide += power;
+                    wide_bins += 1;
+                }
+                if let Some(band) = log_band_index(freq) {
+                    log_band_power[band] += power;
+                    log_band_bins[band] += 1;
+                }
+            }
+
+            let mut log_bands = [0.0_f32; LOG_BANDS];
+            for band in 0..LOG_BANDS {
+                log_bands[band] = band_energy(log_band_power[band], log_band_bins[band]);
+            }
+
+            out.push(FrameEnergy {
+                time: data.time,
+                bass: band_energy(bass, bass_bins),
+                body: band_energy(body, body_bins),
+                attack: band_energy(attack, attack_bins),
+                presence: band_energy(presence, presence_bins),
+                wide: band_energy(wide, wide_bins),
+                flux: energy_scale(flux / (window_size / 2) as f32),
+                rms: energy_scale(data.sum_squares / window_size as f32),
+                peak: energy_scale(data.peak),
+                log_bands,
+            });
+        }
     }
 
     out

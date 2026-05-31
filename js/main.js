@@ -110,10 +110,25 @@
     appendLog((isError ? "ERROR: " : "STATUS: ") + message);
   }
 
+  var logQueue = [];
+  var logProcessing = false;
+
   function appendLog(message) {
+    logQueue.push(new Date().toISOString() + " " + message + "\n");
+    processLogQueue();
+  }
+
+  function processLogQueue() {
+    if (logProcessing || logQueue.length === 0) {
+      return;
+    }
+    logProcessing = true;
+
     try {
       var req = getNodeRequire();
       if (!req) {
+        logQueue = [];
+        logProcessing = false;
         return;
       }
       var fs = req("fs");
@@ -121,26 +136,50 @@
       var os = req("os");
       var appData = typeof process !== "undefined" && process.env ? process.env.APPDATA : "";
       var dir = path.join(appData || os.tmpdir(), "AutoCutStudio");
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      var logPath = path.join(dir, "panel.log");
 
-      // Rotate log if it exceeds 2MB to prevent unbounded disk usage
-      if (fs.existsSync(logPath)) {
-        try {
-          var stats = fs.statSync(logPath);
-          if (stats.size > 2 * 1024 * 1024) {
-            var content = fs.readFileSync(logPath, "utf8");
-            var truncated = content.substring(content.length - 100 * 1024); // Keep last 100KB
-            fs.writeFileSync(logPath, "[LOG FILE TRUNCATED DUE TO SIZE LIMITS]\n" + truncated, "utf8");
+      fs.mkdir(dir, { recursive: true }, function (err) {
+        if (err) {
+          logQueue = [];
+          logProcessing = false;
+          return;
+        }
+
+        var logPath = path.join(dir, "panel.log");
+
+        fs.stat(logPath, function (statErr, stats) {
+          if (!statErr && stats && stats.size > 2 * 1024 * 1024) {
+            fs.readFile(logPath, "utf8", function (readErr, content) {
+              if (readErr) {
+                writeNext();
+                return;
+              }
+              var truncated = content.substring(content.length - 100 * 1024);
+              fs.writeFile(logPath, "[LOG FILE TRUNCATED DUE TO SIZE LIMITS]\n" + truncated, "utf8", function (writeErr) {
+                writeNext();
+              });
+            });
+          } else {
+            writeNext();
           }
-        } catch (_) {}
-      }
+        });
 
-      fs.appendFileSync(logPath, new Date().toISOString() + " " + message + "\n");
+        function writeNext() {
+          if (logQueue.length === 0) {
+            logProcessing = false;
+            return;
+          }
+          var batch = logQueue.join("");
+          logQueue = [];
+
+          fs.appendFile(logPath, batch, function (appendErr) {
+            logProcessing = false;
+            processLogQueue();
+          });
+        }
+      });
     } catch (_) {
-      // Logging must never break panel behavior.
+      logQueue = [];
+      logProcessing = false;
     }
   }
 
@@ -867,23 +906,90 @@ function keepStrongestPerSecond(events) {
     setBusy(true);
     setStatus("Applying " + state.filteredEvents.length + " markers in Premiere...", false, true);
 
-    var payload = {
+    var basePayload = {
       target: dom.markerTarget.value,
       mediaPath: state.clip ? state.clip.mediaPath : "",
       startSeconds: state.clip ? state.clip.startSeconds : null,
       endSeconds: state.clip ? state.clip.endSeconds : null,
       inPointSeconds: state.clip ? state.clip.inPointSeconds : null,
-      outPointSeconds: state.clip ? state.clip.outPointSeconds : null,
-      events: eventsForPremiere(state.filteredEvents)
+      outPointSeconds: state.clip ? state.clip.outPointSeconds : null
     };
 
-    cepEval("AutoCutStudio.applyMarkers(" + JSON.stringify(JSON.stringify(payload)) + ")")
-      .then(function (result) {
-        setStatus("Replaced AutoCut Studio markers in range. Applied " + result.applied + "; skipped " + result.skipped + " outside the selected clip range.", false, false, true);
+    var allEvents = eventsForPremiere(state.filteredEvents);
+    var chunkSize = 50;
+    var totalApplied = 0;
+    var totalSkipped = 0;
+    var markersCleared = false;
+
+    var removePayload = {
+      target: basePayload.target,
+      mediaPath: basePayload.mediaPath,
+      startSeconds: basePayload.startSeconds,
+      endSeconds: basePayload.endSeconds,
+      inPointSeconds: basePayload.inPointSeconds,
+      outPointSeconds: basePayload.outPointSeconds
+    };
+
+    cepEval("AutoCutStudio.removeMarkers(" + JSON.stringify(JSON.stringify(removePayload)) + ")")
+      .then(function () {
+        markersCleared = true;
+        return new Promise(function (resolve, reject) {
+          function processChunk(index) {
+            if (index >= allEvents.length) {
+              resolve();
+              return;
+            }
+
+            var chunkEvents = allEvents.slice(index, index + chunkSize);
+            var chunkPayload = {
+              target: basePayload.target,
+              mediaPath: basePayload.mediaPath,
+              startSeconds: basePayload.startSeconds,
+              endSeconds: basePayload.endSeconds,
+              inPointSeconds: basePayload.inPointSeconds,
+              outPointSeconds: basePayload.outPointSeconds,
+              events: chunkEvents
+            };
+
+            setStatus("Applying markers: " + index + " to " + Math.min(index + chunkSize, allEvents.length) + " of " + allEvents.length + "...", false, true);
+
+            cepEval("AutoCutStudio.applyMarkersChunk(" + JSON.stringify(JSON.stringify(chunkPayload)) + ")")
+              .then(function (result) {
+                totalApplied += (result.applied || 0);
+                totalSkipped += (result.skipped || 0);
+                setTimeout(function () {
+                  processChunk(index + chunkSize);
+                }, 15);
+              })
+              .catch(reject);
+          }
+
+          processChunk(0);
+        });
+      })
+      .then(function () {
+        setStatus("Replaced AutoCut Studio markers in range. Applied " + totalApplied + "; skipped " + totalSkipped + " outside the selected clip range.", false, false, true);
       })
       .catch(function (error) {
         appendLog(error && error.stack ? error.stack : String(error));
-        setStatus(error.message, true);
+        var message = error && error.message ? error.message : String(error);
+        if (markersCleared) {
+          var cleanupFailed = false;
+          setStatus("Marker apply failed after " + totalApplied + " markers. Removing partial result...", true, true);
+          return cepEval("AutoCutStudio.removeMarkers(" + JSON.stringify(JSON.stringify(removePayload)) + ")")
+            .catch(function (cleanupError) {
+              cleanupFailed = true;
+              appendLog(cleanupError && cleanupError.stack ? cleanupError.stack : String(cleanupError));
+            })
+            .then(function () {
+              if (cleanupFailed) {
+                setStatus(message + " Partial marker cleanup also failed; remove markers manually before retrying.", true);
+              } else {
+                setStatus(message + " Partial markers were removed; run Apply Markers again.", true);
+              }
+            });
+        }
+        setStatus(message, true);
       })
       .then(function () {
         setBusy(false);

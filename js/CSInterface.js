@@ -46,8 +46,8 @@
         return;
       }
 
-      if (script.indexOf("AutoCutStudio.applyMarkers") === 0) {
-        var match = script.match(/AutoCutStudio\.applyMarkers\((.*)\)/);
+      if (script.indexOf("AutoCutStudio.applyMarkersChunk") === 0 || script.indexOf("AutoCutStudio.applyMarkers") === 0) {
+        var match = script.match(/AutoCutStudio\.(?:applyMarkersChunk|applyMarkers)\((.*)\)/);
         var applied = 0;
         if (match && match[1]) {
           try {

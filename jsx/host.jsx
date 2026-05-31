@@ -1220,6 +1220,52 @@ if (!JSON.parse) {
     }
   };
 
+  AutoCutStudio.applyMarkersChunk = function (payloadJson) {
+    try {
+      var payload = parseJson(payloadJson);
+      var target = payload.target === "clip" ? "clip" : "sequence";
+      var events = payload.events || [];
+      var seq = app.project.activeSequence;
+      var clip = getExactlyOneSelectedClip();
+      var info = getClipInfo(clip);
+      var applied = 0;
+      var skipped = 0;
+
+      if (!seq) {
+        throw new Error("No active sequence is open.");
+      }
+      verifyClipInfo(payload, info);
+
+      for (var i = 0; i < events.length; i++) {
+        var eventTime = Number(events[i].time);
+        var score = Number(events[i].score);
+        if (!isClipSourceTimeInRange(eventTime, info)) {
+          skipped++;
+          continue;
+        }
+
+        var color = markerColorForEvent(events[i], target);
+
+        if (target === "clip") {
+          setMarkerFields(createClipMarker(clip, snapToFrame(eventTime, seq)), color);
+        } else {
+          var sequenceTime = clipSourceTimeToSequenceTime(eventTime, info);
+          sequenceTime = snapToFrame(sequenceTime, seq);
+          if (!isSequenceTimeInClipRange(sequenceTime, info)) {
+            skipped++;
+            continue;
+          }
+          setMarkerFields(seq.markers.createMarker(sequenceTime), color);
+        }
+        applied++;
+      }
+
+      return ok({ applied: applied, skipped: skipped });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
   AutoCutStudio.removeMarkers = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
@@ -1234,6 +1280,7 @@ if (!JSON.parse) {
       if (!seq) {
         throw new Error("No active sequence is open.");
       }
+      verifyClipInfo(payload, info);
 
       if (target === "clip") {
         collection = clipMarkerCollection(clip);

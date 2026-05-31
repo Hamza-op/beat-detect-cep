@@ -40,8 +40,18 @@ static float ApplyDeadZone(float value, float dead_zone)
     return value > 0.0f ? value - dead_zone : value + dead_zone;
 }
 
-bool ColorEngine::AnalyzeFrame8(
-    const unsigned char* pixel_buffer,
+template <typename T, bool Is16Bit>
+static inline unsigned char GetChannel8(T val) {
+    if (Is16Bit) {
+        return Standard16To8(static_cast<unsigned short>(val));
+    } else {
+        return static_cast<unsigned char>(val);
+    }
+}
+
+template <typename T, bool Is16Bit>
+static bool AnalyzeFrameTemplate(
+    const T* pixel_buffer,
     int width,
     int height,
     int row_bytes,
@@ -50,7 +60,8 @@ bool ColorEngine::AnalyzeFrame8(
     if (!pixel_buffer || width <= 0 || height <= 0) {
         return false;
     }
-    if (width > std::numeric_limits<int>::max() / height || row_bytes / 4 < width) {
+    int bytes_per_pixel = Is16Bit ? 8 : 4;
+    if (width > std::numeric_limits<int>::max() / height || row_bytes / bytes_per_pixel < width) {
         return false;
     }
 
@@ -70,12 +81,14 @@ bool ColorEngine::AnalyzeFrame8(
     int total_pixels = width * height;
 
     for (int y = 0; y < height; ++y) {
-        const unsigned char* row = pixel_buffer + (y * row_bytes);
+        const T* row = reinterpret_cast<const T*>(
+            reinterpret_cast<const unsigned char*>(pixel_buffer) + (y * row_bytes)
+        );
         for (int x = 0; x < width; ++x) {
-            // RGBA layout (4 bytes per pixel)
-            unsigned char r = row[x * 4 + 0];
-            unsigned char g = row[x * 4 + 1];
-            unsigned char b = row[x * 4 + 2];
+            // RGBA layout (4 bytes/shorts per pixel)
+            unsigned char r = GetChannel8<T, Is16Bit>(row[x * 4 + 0]);
+            unsigned char g = GetChannel8<T, Is16Bit>(row[x * 4 + 1]);
+            unsigned char b = GetChannel8<T, Is16Bit>(row[x * 4 + 2]);
             
             r_sum += r;
             g_sum += g;
@@ -167,8 +180,7 @@ bool ColorEngine::AnalyzeFrame8(
     result.is_low_light = (mean_y < 50.0f);
     result.is_log = (std_dev < 32.0f && shadow_luma > 25 && highlight_luma < 225);
 
-    // Wedding-safe exposure: lift underexposed frames gently, but do not chase
-    // bright decor, white clothing, or LED highlights into clipping.
+    // Wedding-safe exposure
     float target_median = result.is_low_light ? 86.0f : 108.0f;
     float median_diff = target_median - static_cast<float>(luma_median);
     float exposure_scale = median_diff < 0.0f ? 0.65f : 1.45f;
@@ -182,18 +194,17 @@ bool ColorEngine::AnalyzeFrame8(
     }
     result.exposure = std::max(-0.20f, std::min(exposure_ceiling, result.exposure));
 
-    // Calibrated Contrast (Only boost flat footage, NEVER automatically reduce contrast!)
+    // Calibrated Contrast
     if (result.is_log) {
         result.contrast = 18.0f;
     } else {
         int waveform_spread = luma_p90 - luma_p10;
         if (waveform_spread > 145 || std_dev > 68.0f) {
-            // Excellent natural contrast already, keep neutral
             result.contrast = 0.0f;
         } else {
             float dev_ratio = 135.0f - static_cast<float>(waveform_spread);
             result.contrast = dev_ratio * 0.08f;
-            result.contrast = std::max(0.0f, std::min(12.0f, result.contrast)); // Only boost contrast
+            result.contrast = std::max(0.0f, std::min(12.0f, result.contrast));
         }
     }
 
@@ -206,8 +217,6 @@ bool ColorEngine::AnalyzeFrame8(
     float shadow_crush_pct = static_cast<float>(shadow_crushed_pixels) / total_pixels;
     float highlight_clip_pct = static_cast<float>(highlight_clipped_pixels) / total_pixels;
 
-    // Treat only near-clipped pixels as clipping. Bright white clothing/decor is not
-    // automatically a blown highlight, so preserve glow unless clipping is material.
     if (highlight_clip_pct > 0.08f || highlight_luma >= 253) {
         result.highlights = -3.0f * std::sqrt(highlight_clip_pct);
         result.whites = 0.0f;
@@ -229,8 +238,7 @@ bool ColorEngine::AnalyzeFrame8(
     result.shadows = std::max(-5.0f, std::min(18.0f, result.shadows));
     result.blacks = std::max(-5.0f, std::min(5.0f, result.blacks));
 
-    // Calibrated color correction. Prefer low-saturation white/gray samples
-    // over whole midtones so skin/decor colors do not dilute the correction.
+    // Calibrated color correction
     result.temperature = 0.0f;
     result.tint = 0.0f;
 
@@ -268,7 +276,7 @@ bool ColorEngine::AnalyzeFrame8(
         result.tint = std::max(-tint_limit, std::min(tint_limit, result.tint));
     }
 
-    // Calibrated Skin Tone priority (gentle adjustment)
+    // Calibrated Skin Tone priority
     if (skin_count > 200) {
         float avg_skin_r = static_cast<float>(skin_r_sum) / skin_count;
         float avg_skin_g = static_cast<float>(skin_g_sum) / skin_count;
@@ -283,7 +291,7 @@ bool ColorEngine::AnalyzeFrame8(
         }
     }
 
-    // Final safety boundaries for White Balance sliders
+    // Final safety boundaries
     result.temperature = std::max(-10.0f, std::min(13.0f, result.temperature));
     result.tint = std::max(-8.0f, std::min(8.0f, result.tint));
 
@@ -293,11 +301,11 @@ bool ColorEngine::AnalyzeFrame8(
     } else if (result.is_low_light) {
         result.saturation = 103.0f;
     } else {
-        result.saturation = 106.0f; // Organic Rec.709 saturation boost
+        result.saturation = 106.0f;
     }
 
     // Calibrated Advanced Secondary Grading defaults
-    result.vibrance = result.is_log ? 14.0f : 10.0f; // Skin-safe low saturation pop
+    result.vibrance = result.is_log ? 14.0f : 10.0f;
     result.shadows_temp = 0.0f;
     result.shadows_tint = 0.0f;
     result.highlights_temp = 0.0f;
@@ -313,6 +321,16 @@ bool ColorEngine::AnalyzeFrame8(
     return true;
 }
 
+bool ColorEngine::AnalyzeFrame8(
+    const unsigned char* pixel_buffer,
+    int width,
+    int height,
+    int row_bytes,
+    FrameAnalysisResult& result
+) {
+    return AnalyzeFrameTemplate<unsigned char, false>(pixel_buffer, width, height, row_bytes, result);
+}
+
 bool ColorEngine::AnalyzeFrame16(
     const unsigned short* pixel_buffer,
     int width,
@@ -320,27 +338,5 @@ bool ColorEngine::AnalyzeFrame16(
     int row_bytes,
     FrameAnalysisResult& result
 ) {
-    if (!pixel_buffer || width <= 0 || height <= 0) {
-        return false;
-    }
-    if (width > std::numeric_limits<int>::max() / height || row_bytes / 8 < width) {
-        return false;
-    }
-
-    // Convert 16-bpc buffer coordinates to 8-bpc representation for analysis
-    std::vector<unsigned char> temp_buffer(width * height * 4);
-    for (int y = 0; y < height; ++y) {
-        const unsigned short* row = reinterpret_cast<const unsigned short*>(
-            reinterpret_cast<const unsigned char*>(pixel_buffer) + (y * row_bytes)
-        );
-        for (int x = 0; x < width; ++x) {
-            // Rescale standard 16-bit [0, 65535] RGBA to 8-bit [0, 255].
-            temp_buffer[(y * width + x) * 4 + 0] = Standard16To8(row[x * 4 + 0]);
-            temp_buffer[(y * width + x) * 4 + 1] = Standard16To8(row[x * 4 + 1]);
-            temp_buffer[(y * width + x) * 4 + 2] = Standard16To8(row[x * 4 + 2]);
-            temp_buffer[(y * width + x) * 4 + 3] = Standard16To8(row[x * 4 + 3]);
-        }
-    }
-
-    return AnalyzeFrame8(temp_buffer.data(), width, height, width * 4, result);
+    return AnalyzeFrameTemplate<unsigned short, true>(pixel_buffer, width, height, row_bytes, result);
 }

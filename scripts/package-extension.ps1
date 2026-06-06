@@ -22,12 +22,23 @@ function Find-MSBuild {
   if ($env:ProgramFiles) {
     $vswhereCandidates += Join-Path $env:ProgramFiles "Microsoft Visual Studio\Installer\vswhere.exe"
   }
+  $vswhereCandidates += "D:\Program Files\Microsoft Visual Studio\Installer\vswhere.exe"
   $vswhereCandidates = $vswhereCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
 
   foreach ($vswhere in $vswhereCandidates) {
     $found = @(& $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe") | Select-Object -First 1
     if ($found -and (Test-Path -LiteralPath $found)) {
       return $found
+    }
+  }
+
+  $msbuildCandidates = @(
+    "D:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\amd64\MSBuild.exe",
+    "D:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Current\Bin\MSBuild.exe"
+  )
+  foreach ($candidate in $msbuildCandidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      return $candidate
     }
   }
 
@@ -41,18 +52,30 @@ function Get-AvailablePlatformToolsets {
     return @()
   }
 
+  $vcRoots = @()
+  if ($env:VCTargetsPath) {
+    $vcRoots += $env:VCTargetsPath.TrimEnd("\")
+  }
+
   $msbuildBin = Split-Path -Parent $MSBuildPath
   $msbuildRoot = Split-Path -Parent (Split-Path -Parent $msbuildBin)
-  $vcRoot = Join-Path $msbuildRoot "Microsoft\VC"
-  if (-not (Test-Path -LiteralPath $vcRoot)) {
+  $vcRoots += Join-Path $msbuildRoot "Microsoft\VC"
+  $vcRoots += "D:\Program Files\Microsoft Visual Studio\18\Community\MSBuild\Microsoft\VC\v180"
+
+  $vcRoots = $vcRoots | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -Unique
+  if (-not $vcRoots -or $vcRoots.Count -eq 0) {
     return @()
   }
 
-  $toolsets = Get-ChildItem -LiteralPath $vcRoot -Recurse -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Parent -and $_.Parent.Name -eq "PlatformToolsets" -and $_.Name -match '^v\d+$' } |
-    Select-Object -ExpandProperty Name -Unique
+  $toolsets = foreach ($vcRoot in $vcRoots) {
+    Get-ChildItem -LiteralPath $vcRoot -Recurse -Directory -ErrorAction SilentlyContinue |
+      Where-Object { $_.Parent -and $_.Parent.Name -eq "PlatformToolsets" -and $_.Name -match '^v\d+$' } |
+      Select-Object -ExpandProperty Name
+  }
 
-  $preferred = @("v143", "v145", "v142", "v141")
+  $toolsets = $toolsets | Select-Object -Unique
+
+  $preferred = @("v145", "v143", "v142", "v141")
   $ordered = @()
   foreach ($toolset in $preferred) {
     if ($toolsets -contains $toolset) {

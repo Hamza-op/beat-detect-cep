@@ -230,7 +230,9 @@ static bool AnalyzeAdobeLayer(PF_InData* in_data, PF_LayerDef* input_layer, Fram
 
     if (is_float) {
         for (A_long y = 0; y < input_layer->height; ++y) {
-            const PF_PixelFloat* row = reinterpret_cast<const PF_PixelFloat*>(base + (y * input_layer->rowbytes));
+            const PF_PixelFloat* row = reinterpret_cast<const PF_PixelFloat*>(
+                reinterpret_cast<const char*>(float_pixels) + (y * input_layer->rowbytes)
+            );
             for (A_long x = 0; x < input_layer->width; ++x) {
                 const PF_PixelFloat& px = row[x];
                 const size_t dst = (static_cast<size_t>(y) * static_cast<size_t>(input_layer->width) + static_cast<size_t>(x)) * 4;
@@ -885,42 +887,53 @@ Render(
     PF_Err              err     = PF_Err_NONE;
     AEGP_SuiteHandler   suites(in_data->pica_basicP);
 
+    err = PF_COPY(&params[AUTOCUT_INPUT]->u.ld, output, NULL, NULL);
+    if (err != PF_Err_NONE) {
+        return err;
+    }
+
     ColorCorrectionParams p = ResolveAutoColorParams(in_data, params);
     ApplyManualOverrides(params, p);
 
     A_long linesL = output->extent_hint.bottom - output->extent_hint.top;
+    if (linesL <= 0) {
+        return PF_Err_NONE;
+    }
 
     PF_PixelFloat* float_output = NULL;
     if (GetFloatPixelData(in_data, output, &float_output)) {
-        ERR(suites.IterateFloatSuite2()->iterate(in_data,
-                                                 0,
-                                                 linesL,
-                                                 &params[AUTOCUT_INPUT]->u.ld,
-                                                 NULL,
-                                                 (void*)&p,
-                                                 ApplyColorCorrection32,
-                                                 output));
+        err = suites.IterateFloatSuite2()->iterate(in_data,
+                                                   0,
+                                                   linesL,
+                                                   &params[AUTOCUT_INPUT]->u.ld,
+                                                   NULL,
+                                                   (void*)&p,
+                                                   ApplyColorCorrection32,
+                                                   output);
     } else if (PF_WORLD_IS_DEEP(output)) {
-        ERR(suites.Iterate16Suite2()->iterate(  in_data,
-                                                0,
-                                                linesL,
-                                                &params[AUTOCUT_INPUT]->u.ld,
-                                                NULL,
-                                                (void*)&p,
-                                                ApplyColorCorrection16,
-                                                output));
+        err = suites.Iterate16Suite2()->iterate(  in_data,
+                                                  0,
+                                                  linesL,
+                                                  &params[AUTOCUT_INPUT]->u.ld,
+                                                  NULL,
+                                                  (void*)&p,
+                                                  ApplyColorCorrection16,
+                                                  output);
     } else {
-        ERR(suites.Iterate8Suite2()->iterate(   in_data,
-                                                0,
-                                                linesL,
-                                                &params[AUTOCUT_INPUT]->u.ld,
-                                                NULL,
-                                                (void*)&p,
-                                                ApplyColorCorrection8,
-                                                output));  
+        err = suites.Iterate8Suite2()->iterate(   in_data,
+                                                  0,
+                                                  linesL,
+                                                  &params[AUTOCUT_INPUT]->u.ld,
+                                                  NULL,
+                                                  (void*)&p,
+                                                  ApplyColorCorrection8,
+                                                  output);
     }
 
-    return err;
+    if (err != PF_Err_NONE) {
+        return PF_Err_NONE;
+    }
+    return PF_Err_NONE;
 }
 
 static PF_Err

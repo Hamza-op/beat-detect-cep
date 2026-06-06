@@ -395,7 +395,12 @@ if (!JSON.parse) {
     }
 
     for (var c2 = 0; c2 < clip.components.numItems; c2++) {
-      var fallbackPosition = findPositionPropertyOnComponent(clip.components[c2]);
+      var fallbackComponent = clip.components[c2];
+      var fallbackPosition = findPositionPropertyOnComponent(fallbackComponent);
+      var fallbackScale = findScalePropertyOnComponent(fallbackComponent);
+      if (fallbackPosition && !fallbackScale) {
+        continue;
+      }
       if (fallbackPosition) {
         return fallbackPosition;
       }
@@ -521,12 +526,12 @@ if (!JSON.parse) {
     return size;
   }
 
-  function pointFromPercent(xPercent, yPercent, seqSize) {
+  function pointFromPercent(xPercent, yPercent) {
     var x = boundedScale(xPercent, 50.0, 0.0, 100.0);
     var y = boundedScale(yPercent, 50.0, 0.0, 100.0);
     return [
-      seqSize.width * (x / 100.0),
-      seqSize.height * (y / 100.0)
+      x / 100.0,
+      y / 100.0
     ];
   }
 
@@ -606,6 +611,12 @@ if (!JSON.parse) {
     }
     if (positionProp) {
       removeKeysInRange(positionProp, inTime, outTime);
+      try {
+        positionProp.setTimeVarying(false);
+      } catch (_) {}
+      if (positionProp.setValue) {
+        positionProp.setValue([0.5, 0.5], 1);
+      }
     }
     return true;
   }
@@ -1471,9 +1482,8 @@ if (!JSON.parse) {
               [safeEndTime, dollyBackgroundScale]
             ]);
             if (positionProp && (!positionProp.areKeyframesSupported || positionProp.areKeyframesSupported())) {
-              var seqSize = getSequenceSize(seq);
-              var subjectPoint = pointFromPercent(dolly.subjectX, dolly.subjectY, seqSize);
-              var backgroundPoint = pointFromPercent(dolly.backgroundX, dolly.backgroundY, seqSize);
+              var subjectPoint = pointFromPercent(dolly.subjectX, dolly.subjectY);
+              var backgroundPoint = pointFromPercent(dolly.backgroundX, dolly.backgroundY);
               try {
                 positionProp.setTimeVarying(true);
               } catch (_) {}

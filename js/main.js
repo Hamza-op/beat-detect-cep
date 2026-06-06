@@ -1115,7 +1115,7 @@ function keepStrongestPerSecond(events) {
 
     setBusy(true);
     var payload = getDollyPayload();
-    setStatus("Applying manual dolly zoom: subject " + payload.dolly.subjectFrame + "% at " + payload.dolly.subjectX + "," + payload.dolly.subjectY + "; background " + payload.dolly.backgroundFrame + "% at " + payload.dolly.backgroundX + "," + payload.dolly.backgroundY + "; sensitivity " + payload.dolly.sensitivity + "%...");
+    setStatus("Applying manual dolly zoom: subject " + payload.dolly.subjectFrame + "% at " + payload.dolly.subjectX + "%, " + payload.dolly.subjectY + "%; background " + payload.dolly.backgroundFrame + "% at " + payload.dolly.backgroundX + "%, " + payload.dolly.backgroundY + "%; sensitivity " + payload.dolly.sensitivity + "%...");
 
     cepEval("AutoCutStudio.applyGimbalZoom(" + JSON.stringify(JSON.stringify(payload)) + ")")
       .then(function (result) {

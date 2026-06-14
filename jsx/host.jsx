@@ -226,7 +226,9 @@ if (!JSON.parse) {
     var selection = seq && seq.getSelection ? seq.getSelection() : null;
     if (selection && selection.length) {
       for (var s = 0; s < selection.length; s++) {
-        if (selection[s] && selection[s].components) {
+        if (selection[s] && selection[s].components &&
+            selection[s].mediaType &&
+            String(selection[s].mediaType).toLowerCase() === "video") {
           selected.push(selection[s]);
         }
       }
@@ -675,7 +677,26 @@ if (!JSON.parse) {
       throw new Error("Could not access selected video track through QE DOM.");
     }
 
-    var qeClip = qeTrack.getItemAt(ref.clipIndex);
+    // Time-based lookup to avoid index mismatch caused by gaps/transitions in QE DOM
+    var qeClip = null;
+    var targetStart = clipSequenceStartSeconds(ref.clip);
+    var targetEnd = clipSequenceEndSeconds(ref.clip);
+    if (qeTrack.numItems !== undefined) {
+      for (var k = 0; k < qeTrack.numItems; k++) {
+        var item = qeTrack.getItemAt(k);
+        if (item) {
+          var itemStart = timeToSeconds(item.start);
+          var itemEnd = timeToSeconds(item.end);
+          if (Math.abs(itemStart - targetStart) < 0.05 && Math.abs(itemEnd - targetEnd) < 0.05) {
+            qeClip = item;
+            break;
+          }
+        }
+      }
+    }
+    if (!qeClip) {
+      qeClip = qeTrack.getItemAt(ref.clipIndex); // fallback to index
+    }
     if (!qeClip || !qeClip.addVideoEffect) {
       throw new Error("Could not access selected clip through QE DOM.");
     }
@@ -1741,7 +1762,27 @@ if (!JSON.parse) {
       if (!qeSeq) return false;
       var qeTrack = qeSeq.getVideoTrackAt(ref.trackIndex);
       if (!qeTrack) return false;
-      var qeClip = qeTrack.getItemAt(ref.clipIndex);
+
+      // Time-based lookup to avoid index mismatch caused by gaps/transitions in QE DOM
+      var qeClip = null;
+      var targetStart = clipSequenceStartSeconds(ref.clip);
+      var targetEnd = clipSequenceEndSeconds(ref.clip);
+      if (qeTrack.numItems !== undefined) {
+        for (var k = 0; k < qeTrack.numItems; k++) {
+          var item = qeTrack.getItemAt(k);
+          if (item) {
+            var itemStart = timeToSeconds(item.start);
+            var itemEnd = timeToSeconds(item.end);
+            if (Math.abs(itemStart - targetStart) < 0.05 && Math.abs(itemEnd - targetEnd) < 0.05) {
+              qeClip = item;
+              break;
+            }
+          }
+        }
+      }
+      if (!qeClip) {
+        qeClip = qeTrack.getItemAt(ref.clipIndex); // fallback to index
+      }
       if (!qeClip) return false;
 
       // Try to remove effects by iterating QE clip's effects

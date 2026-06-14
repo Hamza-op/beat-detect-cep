@@ -58,6 +58,12 @@
     dollyMotionLine: document.getElementById("dollyMotionLine"),
     dollySubjectTarget: document.getElementById("dollySubjectTarget"),
     dollyBackgroundTarget: document.getElementById("dollyBackgroundTarget"),
+    dollyHudSubject: document.getElementById("dollyHudSubject"),
+    dollyHudBg: document.getElementById("dollyHudBg"),
+    dollyHudSens: document.getElementById("dollyHudSens"),
+    dollyPerson: document.getElementById("dollyPerson"),
+    dollyBgLayer: document.getElementById("dollyBgLayer"),
+    dollyBgScene: document.getElementById("dollyBgLayer") ? document.getElementById("dollyBgLayer").querySelector(".dolly-bg-scene") : null,
     tabDensity:       document.getElementById("tabDensity"),
     tabLimit:         document.getElementById("tabLimit"),
     densityTabContent:document.getElementById("densityTabContent"),
@@ -1698,6 +1704,30 @@ function keepStrongestPerSecond(events) {
       dom.dollyMotionLine.style.top = backgroundY + "%";
       dom.dollyMotionLine.style.width = length + "%";
       dom.dollyMotionLine.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
+    }
+    // ── New cinematic monitor updates ──
+    if (dom.dollyHudSubject) {
+      dom.dollyHudSubject.textContent = "SUBJ " + subjectFrame + "%";
+    }
+    if (dom.dollyHudBg) {
+      dom.dollyHudBg.textContent = "BG " + backgroundFrame + "%";
+    }
+    if (dom.dollyHudSens) {
+      dom.dollyHudSens.textContent = "SENS " + sensitivity + "%";
+    }
+    if (dom.dollyPerson) {
+      // Move subject within monitor based on X/Y sliders (offset from center)
+      var pxOffset = (subjectX - 50) * 0.6;
+      var pyOffset = (subjectY - 50) * 0.4;
+      dom.dollyPerson.style.transform = "translate(" + pxOffset + "px, " + pyOffset + "px) scale(" + (subjectFrame / 72).toFixed(2) + ")";
+    }
+    if (dom.dollyBgScene) {
+      // Scale background scene inversely — bigger bg frame = more zoomed out BG
+      var bgScale = (100 / backgroundFrame).toFixed(3);
+      dom.dollyBgScene.style.transform = "scale(" + bgScale + ")";
+      var bgXOffset = (backgroundX - 50) * 0.3;
+      var bgYOffset = (backgroundY - 50) * 0.2;
+      dom.dollyBgScene.style.transformOrigin = (50 + bgXOffset) + "% " + (50 + bgYOffset) + "%";
     }
   }
 

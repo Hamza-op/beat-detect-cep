@@ -1,0 +1,1 @@
+//! Beat-grid selection adapter.

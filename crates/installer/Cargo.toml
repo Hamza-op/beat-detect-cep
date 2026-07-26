@@ -1,0 +1,20 @@
+[package]
+name = "autocut_studio_setup"
+version = "1.1.0"
+edition = "2021"
+
+[features]
+default = []
+embedded-payload = []
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+
+[target.'cfg(windows)'.dependencies]
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+winreg = "0.52"
+
+[lints]
+workspace = true

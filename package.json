@@ -1,0 +1,30 @@
+{
+  "name": "autocut-studio",
+  "private": true,
+  "version": "1.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "format:check": "prettier --check \"apps/cep-panel/src/**/*.{ts,css,html}\" \"apps/cep-panel/tests/**/*.{ts,html}\" \"tools/**/*.mjs\"",
+    "lint": "eslint \"apps/cep-panel/src/**/*.ts\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "playwright test",
+    "build": "node tools/build/generate-metadata.mjs && node tools/build/panel.mjs",
+    "preview": "node tools/build/preview.mjs",
+    "package": "node tools/package/assemble.mjs",
+    "verify": "node tools/verify/payload.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.45.3",
+    "@types/node": "20.14.12",
+    "@typescript-eslint/eslint-plugin": "7.16.1",
+    "@typescript-eslint/parser": "7.16.1",
+    "esbuild": "0.23.0",
+    "eslint": "8.57.0",
+    "prettier": "3.3.3",
+    "typescript": "5.5.4",
+    "vitest": "2.0.5"
+  }
+}

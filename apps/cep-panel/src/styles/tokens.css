@@ -1,0 +1,10 @@
+:root {
+  --acs-bg: #101216;
+  --acs-surface: #171a20;
+  --acs-border: rgba(255, 255, 255, 0.1);
+  --acs-text: #f4f6f8;
+  --acs-muted: #9aa3af;
+  --acs-accent: #ffb84c;
+  --acs-success: #58d68d;
+  --acs-danger: #ff6b6b;
+}

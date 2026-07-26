@@ -1,0 +1,21 @@
+@media (max-width: 260px) {
+  .panel-shell {
+    padding-inline: 4px;
+  }
+
+  .control-grid,
+  .color-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (min-width: 420px) {
+  .panel-shell {
+    max-width: 720px;
+    margin-inline: auto;
+  }
+
+  .panel-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

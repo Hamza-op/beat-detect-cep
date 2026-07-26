@@ -1,6 +1,9 @@
-analyzer/target/
-installer/target/
+target/
+crates/*/target/
 dist/
+node_modules/
+test-results/
+playwright-report/
 AutoCutStudioSetup.exe
 AutoCutStudio-CEP-Windows.zip
 BeatDetectSetup.exe
@@ -19,12 +22,12 @@ native/MediaCore/**/*.exp
 
 # MSVC and Visual Studio intermediate directories and files
 .vs/
-native/premiere_plugin/Win/x64/
-native/premiere_plugin/Win/Debug/
-native/premiere_plugin/Win/Release/
-native/premiere_plugin/Win/*.rc
-native/premiere_plugin/Win/*.user
-native/premiere_plugin/Win/*.aps
+native/premiere-plugin/Win/x64/
+native/premiere-plugin/Win/Debug/
+native/premiere-plugin/Win/Release/
+native/premiere-plugin/Win/*.rc
+native/premiere-plugin/Win/*.user
+native/premiere-plugin/Win/*.aps
 
 # Agent and temporary files
 .antigravitycli/

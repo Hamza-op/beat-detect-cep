@@ -1,0 +1,13 @@
+/* Feature-state styles kept separate from reusable controls. */
+#cancelWarpQueueButton:not([hidden]) {
+  display: inline-flex;
+}
+
+.even-spread-note {
+  color: var(--ink-mute);
+  font-size: 10px;
+}
+
+.motion-preview[data-preset] {
+  contain: paint;
+}

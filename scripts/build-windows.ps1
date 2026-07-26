@@ -1,9 +1,9 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$analyzerDir = Join-Path $root "analyzer"
+$analyzerDir = Join-Path $root "crates\analyzer"
 $binDir = Join-Path $root "bin"
-$exePath = Join-Path $analyzerDir "target\release\beat_analyzer.exe"
+$exePath = Join-Path $root "target\release\beat_analyzer.exe"
 $destPath = Join-Path $binDir "beat_analyzer.exe"
 
 Push-Location $analyzerDir

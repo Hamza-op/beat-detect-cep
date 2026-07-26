@@ -1,20 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
     ExtensionBundleId="com.autocutstudio"
-    ExtensionBundleVersion="1.0.0"
+    ExtensionBundleVersion="1.1.0"
     ExtensionBundleName="AutoCut Studio">
   <ExtensionList>
-    <Extension Id="com.autocutstudio.panel" Version="1.0.0"/>
+    <Extension Id="com.autocutstudio.panel" Version="1.1.0"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>
-      <Host Name="PPRO" Version="[14.0,99.9]"/>
+      <Host Name="PPRO" Version="PPRO [24.0,26.99]"/>
     </HostList>
     <LocaleList>
       <Locale Code="All"/>
     </LocaleList>
     <RequiredRuntimeList>
-      <RequiredRuntime Name="CSXS" Version="9.0"/>
+      <RequiredRuntime Name="CSXS" Version="11.0"/>
     </RequiredRuntimeList>
   </ExecutionEnvironment>
   <DispatchInfoList>

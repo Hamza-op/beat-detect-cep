@@ -1,0 +1,26 @@
+[workspace]
+members = ["crates/analyzer", "crates/installer"]
+resolver = "2"
+
+[workspace.package]
+version = "1.1.0"
+edition = "2021"
+license = "UNLICENSED"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+[profile.dev]
+opt-level = 1

@@ -1,0 +1,1 @@
+//! Frame feature extraction adapter.

@@ -1,0 +1,15 @@
+/* Docking geometry: minimum, default, and wide panel widths. */
+.panel-shell {
+  width: 100%;
+  min-width: 240px;
+  max-width: none;
+}
+
+.card-body {
+  min-width: 0;
+}
+
+.control-grid,
+.color-grid {
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+}

@@ -1,0 +1,30 @@
+{
+  "productName": "AutoCut Studio",
+  "productId": "com.autocutstudio",
+  "extensionId": "com.autocutstudio.panel",
+  "version": "1.1.0",
+  "platform": "windows",
+  "compatibility": {
+    "cepHost": "PPRO [24.0,26.99]",
+    "minimumCsxsRuntime": "11.0",
+    "chromium": "88",
+    "node": "15"
+  },
+  "artifacts": {
+    "installer": "AutoCutStudioSetup.exe",
+    "extensionZip": "AutoCutStudio-CEP-Windows.zip",
+    "payloadDirectory": "dist/com.autocutstudio.panel"
+  },
+  "markerColors": {
+    "weak": 1,
+    "moderate": 3,
+    "strong": 6,
+    "peak": 11
+  },
+  "nativeEffects": {
+    "colorDisplayName": "AutoCutStudio Color Engine",
+    "colorMatchName": "com.autocutstudio.color.engine",
+    "transformDisplayName": "AutoCutStudio Transform",
+    "transformMatchName": "com.autocutstudio.transform"
+  }
+}

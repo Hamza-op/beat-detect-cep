@@ -1,23 +1,14 @@
 $ErrorActionPreference = "Stop"
-
 $root = Split-Path -Parent $PSScriptRoot
-$installerDir = Join-Path $root "installer"
-$setupExe = Join-Path $installerDir "target\release\autocut_studio_setup.exe"
-$finalExe = Join-Path $root "AutoCutStudioSetup.exe"
-
 & (Join-Path $PSScriptRoot "package-extension.ps1")
-
-Push-Location $installerDir
+if ($LASTEXITCODE -ne 0) { throw "Package assembly failed" }
+$setupExe = Join-Path $root "target\release\autocut_studio_setup.exe"
+$finalExe = Join-Path $root "AutoCutStudioSetup.exe"
+$env:AUTOCUT_PACKAGE_DIR = Join-Path $root "dist\com.autocutstudio.panel"
+Push-Location $root
 try {
-  cargo build --release
-  if ($LASTEXITCODE -ne 0) {
-    throw "cargo build --release failed for setup"
-  }
-}
-finally {
-  Pop-Location
-}
-
-Copy-Item -LiteralPath $setupExe -Destination $finalExe -Force
-Write-Host "Single-file setup created:"
-Write-Host "  $finalExe"
+  cargo build -p autocut_studio_setup --release --features embedded-payload
+  if ($LASTEXITCODE -ne 0) { throw "Installer build failed" }
+} finally { Pop-Location }
+Copy-Item $setupExe $finalExe -Force
+Write-Host "Unsigned setup created: $finalExe"

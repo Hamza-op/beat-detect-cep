@@ -1,6 +1,6 @@
-# AutoCut Studio
+﻿# AutoCut Studio
 
-Version: `1.0.0`
+Version: `1.1.0`
 
 AutoCut Studio is a Windows-first Adobe Premiere Pro tool for beat-grid edit markers, automated timeline helpers, and native color-correction work. The beat analyzer is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, claps, drops, and strong rhythmic sections.
 
@@ -29,15 +29,14 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 ## Repository Layout
 
 ```text
-CSXS/                  CEP manifest
-css/                   Panel styles
-js/                    CEP panel JavaScript
-jsx/                   Premiere ExtendScript bridge
-analyzer/              Rust audio analyzer
-installer/             Rust single-file Windows setup builder
-scripts/               Build/package scripts
-bin/.gitkeep           Runtime binary folder placeholder
-index.html             CEP panel entry point
+config/product.json    Product and artifact source of truth
+apps/cep-panel/        TypeScript panel, ES3 host sources, styles, tests
+crates/analyzer/       Rust analyzer library and thin CLI
+crates/installer/      Transactional Windows installer library and CLI
+native/color-core/     Production color algorithm and native tests
+native/premiere-plugin/ Premiere `.aex` effect
+vendor/adobe-sdk/      Adobe SDK headers and utilities
+tools/                 Build, package, verify, and preview scripts
 ```
 
 Generated files are ignored by Git:
@@ -47,8 +46,8 @@ bin/beat_analyzer.exe
 dist/
 AutoCutStudioSetup.exe
 AutoCutStudio-CEP-Windows.zip
-analyzer/target/
-installer/target/
+target/
+crates/*/target/
 ```
 
 ## User Install
@@ -63,7 +62,7 @@ The installer:
 %APPDATA%\Adobe\CEP\extensions\com.autocutstudio.panel
 ```
 
-- enables unsigned CEP loading for common Adobe `CSXS.7` through `CSXS.15` registry keys
+- enables unsigned CEP loading only for Adobe `CSXS.11` through `CSXS.13` registry keys
 - writes install logs to:
 
 ```text
@@ -119,22 +118,25 @@ AutoCutStudioSetup.exe
 
 The package script builds the Rust analyzer and the native `AutoCutColorEngine.aex` before embedding runtime files. If MSBuild is unavailable, it refuses to package a missing or stale native plugin instead of silently shipping an old color engine.
 
-Production releases must sign the native plugin, analyzer, and installer. See [docs/RELEASE_SIGNING.md](docs/RELEASE_SIGNING.md).
+Release artifacts are explicitly labeled unsigned unless signing is configured. See [docs/release/README.md](docs/release/README.md) for the out-of-scope signing integration.
 
 ## GitHub Release Build
 
-This repository includes a Windows release workflow:
+This repository includes a Windows CI and release workflow:
 
 ```text
-.github/workflows/release-windows.yml
+.github/workflows/ci.yml
 ```
 
-It runs on:
+CI runs on:
 
 - every push to the repository
-- manual `workflow_dispatch`
+- pull requests
+- every push
+- explicit `v*` tags
 
-Releases are generated automatically for every push with the tag `build-<run_number>`.
+GitHub releases are published only for explicit `v*` tags. Other pushes run
+validation jobs without publishing artifacts.
 
 The workflow builds and publishes:
 

@@ -1,0 +1,15 @@
+/* Browser and CEP baseline shared by every feature. */
+html {
+  min-width: 240px;
+  min-height: 300px;
+}
+
+button,
+input,
+select {
+  touch-action: manipulation;
+}
+
+[hidden] {
+  display: none !important;
+}

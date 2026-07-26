@@ -74,6 +74,27 @@ jobs:
           path: |
             AutoCutStudioSetup.exe
             AutoCutStudio-CEP-Windows.zip
+      - name: Point the rolling release tag at this build
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          git tag --force latest-build $env:GITHUB_SHA
+          git push origin refs/tags/latest-build --force
+      - name: Publish rolling development release
+        if: github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: AutoCut Studio Latest Build
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated unsigned Windows build from commit `${{ github.sha }}`.
+
+            This rolling prerelease is replaced after every successful branch push.
+          files: |
+            AutoCutStudioSetup.exe
+            AutoCutStudio-CEP-Windows.zip
       - uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/v')
         with:

@@ -1875,7 +1875,14 @@ input[type="range"]::-webkit-slider-thumb:active {
     0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
-/* Background depth layer */
+.dolly-flat-scene {
+  position: absolute;
+  inset: 0;
+  transform-origin: center center;
+  will-change: transform;
+}
+
+/* The background and subject are children of one flat scene. */
 .dolly-bg-layer {
   position: absolute;
   inset: 0;
@@ -2164,10 +2171,10 @@ input[type="range"]::-webkit-slider-thumb:active {
   letter-spacing: 0.4px;
 }
 
-/* Subject + Background side-by-side param cards */
+/* Explicit start, midpoint, and end keyframe cards */
 .dolly-param-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 7px;
 }
 
@@ -2180,11 +2187,15 @@ input[type="range"]::-webkit-slider-thumb:active {
   border: 1px solid var(--rim);
   background: linear-gradient(180deg, #0d0f18, #09090e);
 }
-.dolly-param-subject {
+.dolly-param-start {
   border-color: rgba(255, 170, 60, 0.22);
   background: linear-gradient(180deg, #120f09, #0a0807);
 }
-.dolly-param-bg {
+.dolly-param-mid {
+  border-color: rgba(240, 104, 120, 0.22);
+  background: linear-gradient(180deg, #120a0e, #0a0709);
+}
+.dolly-param-end {
   border-color: rgba(78, 217, 192, 0.2);
   background: linear-gradient(180deg, #090f12, #070a0d);
 }
@@ -2211,6 +2222,11 @@ input[type="range"]::-webkit-slider-thumb:active {
   box-shadow: 0 0 6px rgba(78, 217, 192, 0.5);
   animation: pulseSlow 2s ease-in-out infinite;
 }
+.dot-coral {
+  background: var(--coral);
+  box-shadow: 0 0 6px rgba(240, 104, 120, 0.5);
+  animation: pulseSlow 2s ease-in-out infinite;
+}
 .dolly-param-title {
   font-family: var(--font-mono);
   font-size: 8px;
@@ -2226,11 +2242,15 @@ input[type="range"]::-webkit-slider-thumb:active {
   font-weight: 700;
   color: var(--ink-hi);
 }
-.dolly-param-subject .dolly-param-value {
+.dolly-param-start .dolly-param-value {
   color: var(--amber);
   text-shadow: 0 0 8px var(--amber-glow);
 }
-.dolly-param-bg .dolly-param-value {
+.dolly-param-mid .dolly-param-value {
+  color: var(--coral-hot);
+  text-shadow: 0 0 8px rgba(240, 104, 120, 0.4);
+}
+.dolly-param-end .dolly-param-value {
   color: var(--teal);
   text-shadow: 0 0 8px rgba(78, 217, 192, 0.4);
 }
@@ -2278,6 +2298,16 @@ input[type="range"]::-webkit-slider-thumb:active {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
+}
+.dolly-easing-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(110px, 1fr);
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.dolly-easing-row select {
+  width: 100%;
 }
 
 /* Big apply button */

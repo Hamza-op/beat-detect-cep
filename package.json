@@ -14,7 +14,8 @@
     "build": "node tools/build/generate-metadata.mjs && node tools/build/panel.mjs",
     "preview": "node tools/build/preview.mjs",
     "package": "node tools/package/assemble.mjs",
-    "verify": "node tools/verify/payload.mjs"
+    "verify": "node tools/verify/payload.mjs",
+    "verify:host": "node tools/verify/host-es3.mjs"
   },
   "devDependencies": {
     "@playwright/test": "1.45.3",
@@ -23,6 +24,7 @@
     "@typescript-eslint/parser": "7.16.1",
     "esbuild": "0.23.0",
     "eslint": "8.57.0",
+    "espree": "9.6.1",
     "prettier": "3.3.3",
     "typescript": "5.5.4",
     "vitest": "2.0.5"

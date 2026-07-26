@@ -1,4 +1,5 @@
 import "./CSInterface.js";
+import "./motion/dolly";
 import "./legacy-main.js";
 import { createBridge } from "./bridge";
 import { createInitialState } from "./state";

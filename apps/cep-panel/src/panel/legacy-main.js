@@ -38,29 +38,33 @@
     targetStrategy: document.getElementById("targetStrategy"),
     targetCountHint: document.getElementById("targetCountHint"),
     clearLogsButton: document.getElementById("clearLogsButton"),
-    dollySubjectSlider: document.getElementById("dollySubjectSlider"),
-    dollyBackgroundSlider: document.getElementById("dollyBackgroundSlider"),
-    dollySensitivitySlider: document.getElementById("dollySensitivitySlider"),
-    dollySubjectXSlider: document.getElementById("dollySubjectXSlider"),
-    dollySubjectYSlider: document.getElementById("dollySubjectYSlider"),
-    dollyBackgroundXSlider: document.getElementById("dollyBackgroundXSlider"),
-    dollyBackgroundYSlider: document.getElementById("dollyBackgroundYSlider"),
-    dollySubjectLabel: document.getElementById("dollySubjectLabel"),
-    dollyBackgroundLabel: document.getElementById("dollyBackgroundLabel"),
-    dollySensitivityLabel: document.getElementById("dollySensitivityLabel"),
-    dollySubjectXLabel: document.getElementById("dollySubjectXLabel"),
-    dollySubjectYLabel: document.getElementById("dollySubjectYLabel"),
-    dollyBackgroundXLabel: document.getElementById("dollyBackgroundXLabel"),
-    dollyBackgroundYLabel: document.getElementById("dollyBackgroundYLabel"),
+    dollyStartScaleSlider: document.getElementById("dollyStartScaleSlider"),
+    dollyMidScaleSlider: document.getElementById("dollyMidScaleSlider"),
+    dollyEndScaleSlider: document.getElementById("dollyEndScaleSlider"),
+    dollyIntensitySlider: document.getElementById("dollyIntensitySlider"),
+    dollyStartXSlider: document.getElementById("dollyStartXSlider"),
+    dollyStartYSlider: document.getElementById("dollyStartYSlider"),
+    dollyMidXSlider: document.getElementById("dollyMidXSlider"),
+    dollyMidYSlider: document.getElementById("dollyMidYSlider"),
+    dollyEndXSlider: document.getElementById("dollyEndXSlider"),
+    dollyEndYSlider: document.getElementById("dollyEndYSlider"),
+    dollyEasingSelect: document.getElementById("dollyEasingSelect"),
+    dollyStartScaleLabel: document.getElementById("dollyStartScaleLabel"),
+    dollyMidScaleLabel: document.getElementById("dollyMidScaleLabel"),
+    dollyEndScaleLabel: document.getElementById("dollyEndScaleLabel"),
+    dollyIntensityLabel: document.getElementById("dollyIntensityLabel"),
+    dollyStartXLabel: document.getElementById("dollyStartXLabel"),
+    dollyStartYLabel: document.getElementById("dollyStartYLabel"),
+    dollyMidXLabel: document.getElementById("dollyMidXLabel"),
+    dollyMidYLabel: document.getElementById("dollyMidYLabel"),
+    dollyEndXLabel: document.getElementById("dollyEndXLabel"),
+    dollyEndYLabel: document.getElementById("dollyEndYLabel"),
     dollyFrameLabel: document.getElementById("dollyFrameLabel"),
-    dollyHudSubject: document.getElementById("dollyHudSubject"),
-    dollyHudBg: document.getElementById("dollyHudBg"),
-    dollyHudSens: document.getElementById("dollyHudSens"),
-    dollyPerson: document.getElementById("dollyPerson"),
-    dollyBgLayer: document.getElementById("dollyBgLayer"),
-    dollyBgScene: document.getElementById("dollyBgLayer")
-      ? document.getElementById("dollyBgLayer").querySelector(".dolly-bg-scene")
-      : null,
+    dollyHudStart: document.getElementById("dollyHudStart"),
+    dollyHudMid: document.getElementById("dollyHudMid"),
+    dollyHudEnd: document.getElementById("dollyHudEnd"),
+    dollyHudIntensity: document.getElementById("dollyHudIntensity"),
+    dollyFlatScene: document.getElementById("dollyFlatScene"),
     tabDensity: document.getElementById("tabDensity"),
     tabLimit: document.getElementById("tabLimit"),
     densityTabContent: document.getElementById("densityTabContent"),
@@ -1335,26 +1339,53 @@
     return isFinite(value) ? value : fallback;
   }
 
-  function getDollyPayload() {
-    var subjectFrame = readSliderNumber(dom.dollySubjectSlider, 72);
-    var backgroundFrame = readSliderNumber(dom.dollyBackgroundSlider, 112);
-    var sensitivity = readSliderNumber(dom.dollySensitivitySlider, 65);
-    var subjectX = readSliderNumber(dom.dollySubjectXSlider, 50);
-    var subjectY = readSliderNumber(dom.dollySubjectYSlider, 50);
-    var backgroundX = readSliderNumber(dom.dollyBackgroundXSlider, 50);
-    var backgroundY = readSliderNumber(dom.dollyBackgroundYSlider, 50);
+  function computeDollyKeyframes(values) {
+    var core = window.AutoCutDollyCore;
+    if (!core || typeof core.compute !== "function") {
+      throw new Error("Dolly keyframe definitions are unavailable.");
+    }
+    return core.compute(values);
+  }
+
+  function readDollyValues() {
     return {
-      zoom: backgroundFrame,
+      startScale: readSliderNumber(dom.dollyStartScaleSlider, 100),
+      midScale: readSliderNumber(dom.dollyMidScaleSlider, 118),
+      endScale: readSliderNumber(dom.dollyEndScaleSlider, 108),
+      intensity: readSliderNumber(dom.dollyIntensitySlider, 65),
+      startX: readSliderNumber(dom.dollyStartXSlider, 50),
+      startY: readSliderNumber(dom.dollyStartYSlider, 50),
+      midX: readSliderNumber(dom.dollyMidXSlider, 52),
+      midY: readSliderNumber(dom.dollyMidYSlider, 48),
+      endX: readSliderNumber(dom.dollyEndXSlider, 50),
+      endY: readSliderNumber(dom.dollyEndYSlider, 50),
+      easing: dom.dollyEasingSelect
+        ? String(dom.dollyEasingSelect.value || "bezier")
+        : "bezier",
+    };
+  }
+
+  function getDollyPayload() {
+    var values = readDollyValues();
+    var computed = computeDollyKeyframes(values);
+    return {
+      zoom: values.endScale,
       style: "dolly_zoom",
       autoRatio: false,
       dolly: {
-        startScale: subjectFrame,
-        endScale: backgroundFrame,
-        intensity: sensitivity,
-        startX: subjectX,
-        startY: subjectY,
-        endX: backgroundX,
-        endY: backgroundY,
+        startScale: values.startScale,
+        midScale: values.midScale,
+        endScale: values.endScale,
+        intensity: values.intensity,
+        startX: values.startX,
+        startY: values.startY,
+        midX: values.midX,
+        midY: values.midY,
+        endX: values.endX,
+        endY: values.endY,
+        easing: computed.easing,
+        scaleKeys: computed.scaleKeys,
+        positionKeys: computed.positionKeys,
       },
     };
   }
@@ -1401,11 +1432,15 @@
     setStatus(
       "Applying Dolly-Style Motion from " +
         payload.dolly.startScale +
+        "% through " +
+        payload.dolly.midScale +
         "% to " +
         payload.dolly.endScale +
         "% at intensity " +
         payload.dolly.intensity +
-        "%...",
+        "% with " +
+        payload.dolly.easing.replace(/_/g, " ") +
+        " easing...",
     );
 
     cepEval(
@@ -1420,7 +1455,7 @@
             ? " Details: " + result.errors.join(" | ")
             : "";
         setStatus(
-          "Applied manual dolly zoom to " +
+          "Applied Dolly-Style Motion to " +
             result.applied +
             " clips" +
             (skipped ? "; skipped " + skipped : "") +
@@ -2281,78 +2316,109 @@
         Math.round(points[points.length - 1][1]) + "% end";
   }
 
-  function updateDollyPanel() {
-    var subjectFrame = readSliderNumber(dom.dollySubjectSlider, 72);
-    var backgroundFrame = readSliderNumber(dom.dollyBackgroundSlider, 112);
-    var sensitivity = readSliderNumber(dom.dollySensitivitySlider, 65);
-    var subjectX = readSliderNumber(dom.dollySubjectXSlider, 50);
-    var subjectY = readSliderNumber(dom.dollySubjectYSlider, 50);
-    var backgroundX = readSliderNumber(dom.dollyBackgroundXSlider, 50);
-    var backgroundY = readSliderNumber(dom.dollyBackgroundYSlider, 50);
-    var subjectBox = Math.max(26, Math.min(82, subjectFrame * 0.62));
-    var subjectWidth = subjectBox * 0.58;
-    var subjectHeight = Math.min(92, subjectBox * 0.92);
-    var backgroundBox = Math.max(
-      subjectBox + 8,
-      Math.min(96, backgroundFrame * 0.72),
-    );
+  var dollyPreviewAnimation = null;
 
-    if (dom.dollySubjectLabel)
-      dom.dollySubjectLabel.textContent = subjectFrame + "%";
-    if (dom.dollyBackgroundLabel)
-      dom.dollyBackgroundLabel.textContent = backgroundFrame + "%";
-    if (dom.dollySensitivityLabel)
-      dom.dollySensitivityLabel.textContent = sensitivity + "%";
-    if (dom.dollySubjectXLabel)
-      dom.dollySubjectXLabel.textContent = subjectX + "%";
-    if (dom.dollySubjectYLabel)
-      dom.dollySubjectYLabel.textContent = subjectY + "%";
-    if (dom.dollyBackgroundXLabel)
-      dom.dollyBackgroundXLabel.textContent = backgroundX + "%";
-    if (dom.dollyBackgroundYLabel)
-      dom.dollyBackgroundYLabel.textContent = backgroundY + "%";
-    // ── New cinematic monitor updates ──
-    if (dom.dollyHudSubject) {
-      dom.dollyHudSubject.textContent = "START " + subjectFrame + "%";
+  function dollyCssEasing(easing) {
+    if (easing === "linear") return "linear";
+    if (easing === "ease_in") return "ease-in";
+    if (easing === "ease_out") return "ease-out";
+    if (easing === "ease_in_out") return "ease-in-out";
+    return "cubic-bezier(0.4, 0, 0.2, 1)";
+  }
+
+  function dollyPreviewTransform(scaleKey, positionKey) {
+    var x = positionKey.value[0] - 50;
+    var y = positionKey.value[1] - 50;
+    return (
+      "translate(" +
+      x.toFixed(2) +
+      "%, " +
+      y.toFixed(2) +
+      "%) scale(" +
+      (scaleKey.value / 100).toFixed(4) +
+      ")"
+    );
+  }
+
+  function updateDollyPanel() {
+    var values = readDollyValues();
+    var computed = computeDollyKeyframes(values);
+    var labels = [
+      [dom.dollyStartScaleLabel, values.startScale],
+      [dom.dollyMidScaleLabel, values.midScale],
+      [dom.dollyEndScaleLabel, values.endScale],
+      [dom.dollyIntensityLabel, values.intensity],
+      [dom.dollyStartXLabel, values.startX],
+      [dom.dollyStartYLabel, values.startY],
+      [dom.dollyMidXLabel, values.midX],
+      [dom.dollyMidYLabel, values.midY],
+      [dom.dollyEndXLabel, values.endX],
+      [dom.dollyEndYLabel, values.endY],
+    ];
+    for (var labelIndex = 0; labelIndex < labels.length; labelIndex++) {
+      if (labels[labelIndex][0]) {
+        labels[labelIndex][0].textContent = labels[labelIndex][1] + "%";
+      }
     }
-    if (dom.dollyHudBg) {
-      dom.dollyHudBg.textContent = "END " + backgroundFrame + "%";
+
+    if (dom.dollyHudStart) {
+      dom.dollyHudStart.textContent =
+        "START " + Math.round(computed.scaleKeys[0].value) + "%";
     }
-    if (dom.dollyHudSens) {
-      dom.dollyHudSens.textContent = "SENS " + sensitivity + "%";
+    if (dom.dollyHudMid) {
+      dom.dollyHudMid.textContent =
+        "MID " + Math.round(computed.scaleKeys[1].value) + "%";
     }
-    if (dom.dollyPerson) {
-      // Move subject within monitor based on X/Y sliders (offset from center)
-      var pxOffset = (subjectX - 50) * 0.6;
-      var pyOffset = (subjectY - 50) * 0.4;
-      dom.dollyPerson.style.transform =
-        "translate(" +
-        pxOffset +
-        "px, " +
-        pyOffset +
-        "px) scale(" +
-        (subjectFrame / 72).toFixed(2) +
-        ")";
+    if (dom.dollyHudEnd) {
+      dom.dollyHudEnd.textContent =
+        "END " + Math.round(computed.scaleKeys[2].value) + "%";
     }
-    if (dom.dollyBgScene) {
-      // Scale background scene inversely — bigger bg frame = more zoomed out BG
-      var bgScale = (100 / backgroundFrame).toFixed(3);
-      dom.dollyBgScene.style.transform = "scale(" + bgScale + ")";
-      var bgXOffset = (backgroundX - 50) * 0.3;
-      var bgYOffset = (backgroundY - 50) * 0.2;
-      dom.dollyBgScene.style.transformOrigin =
-        50 + bgXOffset + "% " + (50 + bgYOffset) + "%";
+    if (dom.dollyHudIntensity) {
+      dom.dollyHudIntensity.textContent = "INT " + values.intensity + "%";
+    }
+
+    if (dom.dollyFlatScene) {
+      var previewFrames = [];
+      for (var keyIndex = 0; keyIndex < computed.scaleKeys.length; keyIndex++) {
+        previewFrames.push({
+          offset: computed.scaleKeys[keyIndex].ratio,
+          transform: dollyPreviewTransform(
+            computed.scaleKeys[keyIndex],
+            computed.positionKeys[keyIndex],
+          ),
+        });
+      }
+      if (dollyPreviewAnimation && dollyPreviewAnimation.cancel) {
+        dollyPreviewAnimation.cancel();
+      }
+      if (dom.dollyFlatScene.animate) {
+        dollyPreviewAnimation = dom.dollyFlatScene.animate(previewFrames, {
+          duration: 2800,
+          iterations: Infinity,
+          direction: "alternate",
+          easing: dollyCssEasing(computed.easing),
+        });
+      } else {
+        dom.dollyFlatScene.style.transform = previewFrames[1].transform;
+      }
+      dom.dollyFlatScene.setAttribute(
+        "data-dolly-keyframes",
+        JSON.stringify(computed),
+      );
     }
   }
 
   var dollySliders = [
-    dom.dollySubjectSlider,
-    dom.dollyBackgroundSlider,
-    dom.dollySensitivitySlider,
-    dom.dollySubjectXSlider,
-    dom.dollySubjectYSlider,
-    dom.dollyBackgroundXSlider,
-    dom.dollyBackgroundYSlider,
+    dom.dollyStartScaleSlider,
+    dom.dollyMidScaleSlider,
+    dom.dollyEndScaleSlider,
+    dom.dollyIntensitySlider,
+    dom.dollyStartXSlider,
+    dom.dollyStartYSlider,
+    dom.dollyMidXSlider,
+    dom.dollyMidYSlider,
+    dom.dollyEndXSlider,
+    dom.dollyEndYSlider,
   ];
   for (var ds = 0; ds < dollySliders.length; ds++) {
     if (dollySliders[ds]) {
@@ -2360,6 +2426,9 @@
         updateDollyPanel();
       });
     }
+  }
+  if (dom.dollyEasingSelect) {
+    dom.dollyEasingSelect.addEventListener("change", updateDollyPanel);
   }
   detectDollyFrame();
   updateDollyPanel();

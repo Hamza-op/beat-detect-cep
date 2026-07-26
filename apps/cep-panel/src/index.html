@@ -891,22 +891,23 @@
               class="dolly-monitor"
               aria-label="DOLLY-STYLE MOTION live preview"
             >
-              <!-- Depth layers -->
-              <div class="dolly-bg-layer" id="dollyBgLayer">
-                <div class="dolly-bg-scene">
-                  <div class="dolly-depth-line dl1"></div>
-                  <div class="dolly-depth-line dl2"></div>
-                  <div class="dolly-depth-line dl3"></div>
-                  <div class="dolly-depth-line dl4"></div>
-                  <div class="dolly-horizon"></div>
+              <!-- A single flat scene: background and subject always move together. -->
+              <div class="dolly-flat-scene" id="dollyFlatScene">
+                <div class="dolly-bg-layer">
+                  <div class="dolly-bg-scene">
+                    <div class="dolly-depth-line dl1"></div>
+                    <div class="dolly-depth-line dl2"></div>
+                    <div class="dolly-depth-line dl3"></div>
+                    <div class="dolly-depth-line dl4"></div>
+                    <div class="dolly-horizon"></div>
+                  </div>
                 </div>
-              </div>
-              <!-- Single-clip transform preview -->
-              <div class="dolly-subject-layer" id="dollySubjectLayer">
-                <div class="dolly-person" id="dollyPerson">
-                  <div class="dolly-person-head"></div>
-                  <div class="dolly-person-body"></div>
-                  <div class="dolly-person-ring" id="dollyPersonRing"></div>
+                <div class="dolly-subject-layer">
+                  <div class="dolly-person">
+                    <div class="dolly-person-head"></div>
+                    <div class="dolly-person-body"></div>
+                    <div class="dolly-person-ring"></div>
+                  </div>
                 </div>
               </div>
               <!-- Overlays -->
@@ -916,11 +917,11 @@
               <!-- HUD -->
               <div class="dolly-hud-tl">
                 <span class="dolly-rec-dot"></span>
-                <span id="dollyHudSubject">START 100%</span>
+                <span id="dollyHudStart">START 100%</span>
               </div>
-              <div class="dolly-hud-tr" id="dollyHudBg">END 112%</div>
-              <div class="dolly-hud-bl">DOLLY-STYLE MOTION</div>
-              <div class="dolly-hud-br" id="dollyHudSens">SENS 65%</div>
+              <div class="dolly-hud-tr" id="dollyHudEnd">END 105%</div>
+              <div class="dolly-hud-bl" id="dollyHudMid">MID 112%</div>
+              <div class="dolly-hud-br" id="dollyHudIntensity">INT 65%</div>
               <!-- Animated scan line -->
               <div class="dolly-scan-line"></div>
               <!-- Corner brackets -->
@@ -938,35 +939,34 @@
               >
             </div>
 
-            <!-- ── Control cards: start and end of one clip ── -->
+            <!-- ── Explicit keyframes for one flat clip ── -->
             <div class="dolly-param-grid">
-              <!-- Subject card -->
-              <div class="dolly-param-card dolly-param-subject">
+              <div class="dolly-param-card dolly-param-start">
                 <div class="dolly-param-header">
                   <span class="dolly-param-dot dot-amber"></span>
                   <span class="dolly-param-title">Start scale</span>
-                  <strong id="dollySubjectLabel" class="dolly-param-value"
-                    >72%</strong
+                  <strong id="dollyStartScaleLabel" class="dolly-param-value"
+                    >100%</strong
                   >
                 </div>
                 <div class="slider-wrapper">
                   <input
-                    id="dollySubjectSlider"
+                    id="dollyStartScaleSlider"
                     type="range"
-                    min="45"
-                    max="120"
-                    value="72"
+                    min="100"
+                    max="180"
+                    value="100"
                     step="1"
                   />
                 </div>
                 <div class="dolly-xy-row">
                   <div class="dolly-xy-field">
                     <span class="dolly-xy-label">Start X</span>
-                    <span id="dollySubjectXLabel" class="dolly-xy-value"
+                    <span id="dollyStartXLabel" class="dolly-xy-value"
                       >50%</span
                     >
                     <input
-                      id="dollySubjectXSlider"
+                      id="dollyStartXSlider"
                       type="range"
                       min="0"
                       max="100"
@@ -976,11 +976,11 @@
                   </div>
                   <div class="dolly-xy-field">
                     <span class="dolly-xy-label">Start Y</span>
-                    <span id="dollySubjectYLabel" class="dolly-xy-value"
+                    <span id="dollyStartYLabel" class="dolly-xy-value"
                       >50%</span
                     >
                     <input
-                      id="dollySubjectYSlider"
+                      id="dollyStartYSlider"
                       type="range"
                       min="0"
                       max="100"
@@ -991,33 +991,76 @@
                 </div>
               </div>
 
-              <!-- Background card -->
-              <div class="dolly-param-card dolly-param-bg">
+              <div class="dolly-param-card dolly-param-mid">
                 <div class="dolly-param-header">
-                  <span class="dolly-param-dot dot-teal"></span>
-                  <span class="dolly-param-title">End scale</span>
-                  <strong id="dollyBackgroundLabel" class="dolly-param-value"
-                    >112%</strong
+                  <span class="dolly-param-dot dot-coral"></span>
+                  <span class="dolly-param-title">Midpoint scale</span>
+                  <strong id="dollyMidScaleLabel" class="dolly-param-value"
+                    >118%</strong
                   >
                 </div>
                 <div class="slider-wrapper">
                   <input
-                    id="dollyBackgroundSlider"
+                    id="dollyMidScaleSlider"
                     type="range"
-                    min="80"
-                    max="145"
-                    value="112"
+                    min="100"
+                    max="180"
+                    value="118"
+                    step="1"
+                  />
+                </div>
+                <div class="dolly-xy-row">
+                  <div class="dolly-xy-field">
+                    <span class="dolly-xy-label">Mid X</span>
+                    <span id="dollyMidXLabel" class="dolly-xy-value">52%</span>
+                    <input
+                      id="dollyMidXSlider"
+                      type="range"
+                      min="0"
+                      max="100"
+                      value="52"
+                      step="1"
+                    />
+                  </div>
+                  <div class="dolly-xy-field">
+                    <span class="dolly-xy-label">Mid Y</span>
+                    <span id="dollyMidYLabel" class="dolly-xy-value">48%</span>
+                    <input
+                      id="dollyMidYSlider"
+                      type="range"
+                      min="0"
+                      max="100"
+                      value="48"
+                      step="1"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div class="dolly-param-card dolly-param-end">
+                <div class="dolly-param-header">
+                  <span class="dolly-param-dot dot-teal"></span>
+                  <span class="dolly-param-title">End scale</span>
+                  <strong id="dollyEndScaleLabel" class="dolly-param-value"
+                    >108%</strong
+                  >
+                </div>
+                <div class="slider-wrapper">
+                  <input
+                    id="dollyEndScaleSlider"
+                    type="range"
+                    min="100"
+                    max="180"
+                    value="108"
                     step="1"
                   />
                 </div>
                 <div class="dolly-xy-row">
                   <div class="dolly-xy-field">
                     <span class="dolly-xy-label">End X</span>
-                    <span id="dollyBackgroundXLabel" class="dolly-xy-value"
-                      >50%</span
-                    >
+                    <span id="dollyEndXLabel" class="dolly-xy-value">50%</span>
                     <input
-                      id="dollyBackgroundXSlider"
+                      id="dollyEndXSlider"
                       type="range"
                       min="0"
                       max="100"
@@ -1027,11 +1070,9 @@
                   </div>
                   <div class="dolly-xy-field">
                     <span class="dolly-xy-label">End Y</span>
-                    <span id="dollyBackgroundYLabel" class="dolly-xy-value"
-                      >50%</span
-                    >
+                    <span id="dollyEndYLabel" class="dolly-xy-value">50%</span>
                     <input
-                      id="dollyBackgroundYSlider"
+                      id="dollyEndYSlider"
                       type="range"
                       min="0"
                       max="100"
@@ -1047,13 +1088,13 @@
             <div class="dolly-sensitivity-row">
               <div class="dolly-sens-head">
                 <span class="section-subtitle">Motion intensity</span>
-                <strong id="dollySensitivityLabel" class="value-highlight"
+                <strong id="dollyIntensityLabel" class="value-highlight"
                   >65%</strong
                 >
               </div>
               <div class="slider-wrapper">
                 <input
-                  id="dollySensitivitySlider"
+                  id="dollyIntensitySlider"
                   type="range"
                   min="0"
                   max="100"
@@ -1065,6 +1106,16 @@
                 <span>Subtle</span>
                 <span>Dramatic</span>
               </div>
+              <label class="dolly-easing-row" for="dollyEasingSelect">
+                <span class="section-subtitle">Easing preset</span>
+                <select id="dollyEasingSelect">
+                  <option value="bezier" selected>Smooth Bezier</option>
+                  <option value="linear">Linear</option>
+                  <option value="ease_in">Ease In</option>
+                  <option value="ease_out">Ease Out</option>
+                  <option value="ease_in_out">Ease In / Out</option>
+                </select>
+              </label>
             </div>
 
             <!-- ── Apply button ── -->

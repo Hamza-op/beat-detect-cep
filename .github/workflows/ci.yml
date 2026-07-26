@@ -20,8 +20,11 @@ jobs:
       - run: npm run format:check
       - run: npm run lint
       - run: npm run typecheck
+      - run: npm run verify:host
       - run: npm test
       - run: npm run build
+      - run: npx playwright install chromium
+      - run: npm run test:browser
 
   rust:
     runs-on: windows-latest

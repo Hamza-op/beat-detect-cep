@@ -1,4 +1,7 @@
-* text=auto
+# Keep source and tooling line endings deterministic across Windows runners.
+# GitHub Actions checks out on Windows with core.autocrlf enabled; without an
+# explicit eol, Prettier sees every LF source file as unformatted CRLF.
+* text=auto eol=lf
 
 # Vendored Adobe/Premiere SDK files used by the native color plugin build.
 native/sdk/**/*.h text eol=lf

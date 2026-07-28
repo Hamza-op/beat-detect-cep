@@ -10,6 +10,16 @@ const product = JSON.parse(
   await readFile(path.join(root, "config/product.json"), "utf8"),
 );
 const versionModule = `export const PRODUCT_VERSION = ${JSON.stringify(product.version)};\n`;
+const cepHostSpec = String(product.compatibility.cepHost || "").match(
+  /^([A-Za-z0-9_]+)\s+(.+)$/,
+);
+if (!cepHostSpec) {
+  throw new Error(
+    `compatibility.cepHost must be formatted as "HOST [min,max]"; received ${product.compatibility.cepHost}`,
+  );
+}
+const cepHostName = cepHostSpec[1];
+const cepHostVersion = cepHostSpec[2];
 await writeFile(
   path.join(root, "apps/cep-panel/src/panel/version.ts"),
   versionModule,
@@ -43,8 +53,8 @@ const manifest = (await readFile(manifestPath, "utf8"))
     `$1${product.version}$2`,
   )
   .replace(
-    /(<Host Name="PPRO" Version=")[^"]+(")/,
-    `$1${product.compatibility.cepHost}$2`,
+    /<Host Name="[^"]+" Version="[^"]+"\/>/,
+    `<Host Name="${cepHostName}" Version="${cepHostVersion}"/>`,
   )
   .replace(
     /(<RequiredRuntime Name="CSXS" Version=")[^"]+(")/,

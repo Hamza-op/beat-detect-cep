@@ -15,7 +15,7 @@ use std::path::Path;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 use symphonia::core::audio::{AudioBufferRef, Signal};
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL, CODEC_TYPE_OPUS};
 use symphonia::core::conv::FromSample;
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, SeekMode, SeekTo};
@@ -83,6 +83,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut events = detect_events(&analysis_samples, sample_rate);
+    events = select_major_hit_markers(events);
     if analysis_offset > 0.0 {
         for event in &mut events {
             event.time = round_to_millis(event.time + analysis_offset);
@@ -136,7 +137,16 @@ pub fn decode_mono_audio(
         .codec_params
         .sample_rate
         .ok_or("audio track has no sample rate")?;
-    let mut decoder = get_codecs().make(&track.codec_params, &DecoderOptions::default())?;
+    let mut decoder = match get_codecs().make(&track.codec_params, &DecoderOptions::default()) {
+        Ok(decoder) => decoder,
+        Err(_error) if track.codec_params.codec == CODEC_TYPE_OPUS => {
+            return Err(
+                "Opus/WebA audio is not supported by the bundled analyzer decoder. Convert it to WAV, AAC, MP3, or MP4/M4A and analyze again."
+                    .into(),
+            );
+        }
+        Err(error) => return Err(Box::new(error)),
+    };
 
     let start = start_seconds.unwrap_or(0.0).max(0.0);
     let time_base = track
@@ -354,6 +364,69 @@ pub fn detect_events(samples: &[f32], sample_rate: u32) -> Vec<Event> {
         return Vec::new();
     }
     detect_beat_grid_events(samples, sample_rate, &frames)
+}
+
+fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
+    if events.len() < 3 {
+        return events;
+    }
+
+    events.sort_by(|a, b| a.time.total_cmp(&b.time));
+
+    const CONTEXT_SECONDS: f64 = 6.0;
+    const PEAK_RADIUS_SECONDS: f64 = 1.25;
+    const GLOBAL_MAJOR_PERCENTILE: f32 = 0.70;
+    let global_scores = events.iter().map(|event| event.score).collect::<Vec<_>>();
+    let global_major_floor = robust_percentile(&global_scores, GLOBAL_MAJOR_PERCENTILE);
+    let mut selected = Vec::new();
+
+    for (index, event) in events.iter().enumerate() {
+        // Scores are rank-calibrated over the decoded beat grid. A global
+        // percentile floor removes isolated weak candidates in sparse
+        // passages while remaining relative to each song's dynamics.
+        if event.score < global_major_floor {
+            continue;
+        }
+
+        let context_scores = events
+            .iter()
+            .filter(|candidate| (candidate.time - event.time).abs() <= CONTEXT_SECONDS)
+            .map(|candidate| candidate.score)
+            .collect::<Vec<_>>();
+
+        // Sparse passages already contain only meaningful candidates. In
+        // denser passages, require a beat to sit in the strongest local fifth
+        // and rise clearly above the surrounding beat strength.
+        if context_scores.len() >= 6 {
+            let local_median = robust_percentile(&context_scores, 0.50);
+            let local_strong = robust_percentile(&context_scores, 0.85);
+            let threshold = local_strong.max(local_median + 0.08);
+            if event.score < threshold {
+                continue;
+            }
+        }
+
+        let is_local_peak = events.iter().enumerate().all(|(other_index, candidate)| {
+            if other_index == index || (candidate.time - event.time).abs() > PEAK_RADIUS_SECONDS {
+                return true;
+            }
+            candidate.score < event.score
+                || ((candidate.score - event.score).abs() < f32::EPSILON && other_index > index)
+        });
+        if is_local_peak {
+            selected.push(event.clone());
+        }
+    }
+
+    if selected.is_empty() {
+        if let Some(strongest) = events
+            .into_iter()
+            .max_by(|left, right| left.score.total_cmp(&right.score))
+        {
+            selected.push(strongest);
+        }
+    }
+    selected
 }
 
 struct FramePreData {
@@ -1015,49 +1088,45 @@ fn detect_beat_grid_events(
         return Vec::new();
     }
 
-    let norm = normalize_series(&stable_scores, 0.985);
-    let Some(lag) = estimate_beat_lag(&norm, frame_step) else {
+    // The onset detectors answer "where did the sound change?", while the
+    // tracker below answers "which of those changes form the musical pulse?".
+    // Keep these responsibilities separate: a beat may be implied by the
+    // surrounding pulse even when its own transient is weak.
+    let tracking_scores = beat_tracking_scores(&raw_scores, &stable_scores);
+    let norm = normalize_series(&tracking_scores, 0.985);
+    let tempo_evidence = normalize_series(&stable_scores, 0.985);
+    let Some(global_lag) = estimate_beat_lag(&tempo_evidence, frame_step) else {
         return Vec::new();
     };
-    let Some(phase) = estimate_beat_phase(&norm, lag) else {
-        return Vec::new();
-    };
+    // Autocorrelation commonly produces a strong half-time candidate when a
+    // song has a kick on every other quarter note. Keep the whole-track lag
+    // for activity-region splitting, but let the pulse decoder choose the
+    // faster harmonic when the waveform repeatedly supports it.
+    let pulse_evidence = normalize_series(&raw_scores, 0.985);
+    let pulse_lag = prefer_faster_harmonic_lag(&pulse_evidence, global_lag, frame_step);
 
-    let period_seconds = lag as f64 * frame_step;
-    let search_radius = (lag / 5).clamp(3, 18);
-    let min_score = robust_percentile(&stable_scores, 0.72).max(0.12);
     let mut beats = Vec::new();
-    let mut index = phase;
+    for (start, end) in active_rhythm_regions(frames, &stable_scores, global_lag, frame_step) {
+        let region_scores = &norm[start..end];
+        let lag_curve = estimate_local_beat_lags(region_scores, frame_step, pulse_lag);
+        let beat_frames = dynamic_programming_beat_path(region_scores, &lag_curve);
 
-    while index < frames.len() {
-        if let Some((best_index, best_score)) =
-            best_local_grid_onset(&stable_scores, index, search_radius)
-        {
-            let frame = frames[best_index];
-            if best_score >= min_score
-                && has_direct_onset_evidence(frames, best_index, lag.clamp(4, 32))
-            {
-                let snapped = snap_event_time(samples, sample_rate, frame.time);
-                beats.push((snapped, best_score));
+        for relative_index in beat_frames {
+            let index = start + relative_index;
+            if index >= frames.len() {
+                continue;
             }
+            let frame = frames[index];
+            let snapped = snap_event_time(samples, sample_rate, frame.time);
+            let evidence = tracking_scores.get(index).copied().unwrap_or(0.0);
+            beats.push((snapped, evidence));
         }
-        index += lag;
     }
 
-    add_drop_rise_candidates(
-        DropRiseCandidateContext {
-            samples,
-            sample_rate,
-            frames,
-            drop_rise_scores: &drop_rise_scores,
-            stable_scores: &stable_scores,
-            min_score,
-            lag,
-        },
-        &mut beats,
-    );
-
-    let mut deduped = suppress_duplicates(beats, period_seconds * 0.55);
+    // Adjacent rhythm regions can overlap at their padded edges. De-duplicate
+    // only near-identical outputs, not legitimate fast beats.
+    let min_tracked_period = 60.0 / 210.0;
+    let mut deduped = suppress_duplicates(beats, min_tracked_period * 0.42);
     calibrate_beat_grid_scores(&mut deduped);
     deduped
         .into_iter()
@@ -1066,6 +1135,412 @@ fn detect_beat_grid_events(
             score: round_score(score),
         })
         .collect()
+}
+
+fn beat_tracking_scores(raw_scores: &[f32], stable_scores: &[f32]) -> Vec<f32> {
+    let raw = normalize_series(raw_scores, 0.985);
+    let stable = normalize_series(stable_scores, 0.985);
+    let len = raw.len().min(stable.len());
+    let mut tracking = Vec::with_capacity(len);
+
+    for i in 0..len {
+        let local_peak = stable[i];
+        let onset = raw[i];
+        let score = if local_peak > 0.0 {
+            local_peak * 0.72 + onset * 0.28
+        } else {
+            // Preserve a small amount of sub-threshold evidence. Dynamic
+            // programming can use it to carry the pulse through a soft beat,
+            // but it is too small to create an active section by itself.
+            onset * 0.10
+        };
+        tracking.push(score.max(0.0));
+    }
+
+    tracking
+}
+
+fn active_rhythm_regions(
+    frames: &[FrameEnergy],
+    stable_scores: &[f32],
+    global_lag: usize,
+    frame_step: f64,
+) -> Vec<(usize, usize)> {
+    if frames.is_empty() || stable_scores.is_empty() || global_lag == 0 || frame_step <= 0.0 {
+        return Vec::new();
+    }
+
+    let positive = stable_scores
+        .iter()
+        .enumerate()
+        .filter_map(|(index, score)| {
+            (*score > 0.0 && has_direct_onset_evidence(frames, index, global_lag.clamp(4, 32)))
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if positive.len() < 2 {
+        return Vec::new();
+    }
+
+    // Split only on a genuine breakdown. Normal syncopation and a few missing
+    // attacks remain in the same rhythmic region and are bridged by the beat
+    // tracker. Long quiet spans are not filled with synthetic markers.
+    let max_gap = global_lag
+        .saturating_mul(3)
+        .max((1.1 / frame_step).round() as usize);
+    let edge_padding = global_lag;
+    let mut regions = Vec::new();
+    let mut first = positive[0];
+    let mut previous = positive[0];
+    let mut evidence_count = 1_usize;
+
+    for index in positive.into_iter().skip(1) {
+        if index.saturating_sub(previous) > max_gap {
+            if evidence_count >= 2 {
+                regions.push((
+                    first.saturating_sub(edge_padding),
+                    (previous + edge_padding + 1).min(stable_scores.len()),
+                ));
+            }
+            first = index;
+            evidence_count = 1;
+        } else {
+            evidence_count += 1;
+        }
+        previous = index;
+    }
+
+    if evidence_count >= 2 {
+        regions.push((
+            first.saturating_sub(edge_padding),
+            (previous + edge_padding + 1).min(stable_scores.len()),
+        ));
+    }
+
+    regions
+}
+
+fn prefer_faster_harmonic_lag(values: &[f32], lag: usize, frame_step: f64) -> usize {
+    if lag < 2 || frame_step <= 0.0 {
+        return lag;
+    }
+
+    let faster = lag / 2;
+    if faster < 2 {
+        return lag;
+    }
+
+    let base_correlation = normalized_lag_correlation(values, lag);
+    let faster_correlation = normalized_lag_correlation(values, faster);
+    if base_correlation < 0.08 || faster_correlation < 0.22 {
+        return lag;
+    }
+
+    let faster_bpm = 60.0 / (faster as f64 * frame_step);
+    if !(88.0..=205.0).contains(&faster_bpm) {
+        return lag;
+    }
+
+    // Prefer the quarter-note grid when the faster harmonic has substantial
+    // repeated evidence. A slower grid remains valid when its half-lag has no
+    // meaningful correlation, which protects genuinely slow material.
+    let relative_support = faster_correlation / base_correlation.max(1.0e-6);
+    if relative_support >= 0.70 || faster_correlation >= base_correlation + 0.02 {
+        faster
+    } else {
+        lag
+    }
+}
+
+fn estimate_local_beat_lags(scores: &[f32], frame_step: f64, global_lag: usize) -> Vec<usize> {
+    if scores.is_empty() || frame_step <= 0.0 || global_lag == 0 {
+        return vec![global_lag.max(1); scores.len()];
+    }
+
+    let min_lag = ((60.0 / 210.0) / frame_step).round().max(2.0) as usize;
+    let max_lag = ((60.0 / 55.0) / frame_step)
+        .round()
+        .min((scores.len().saturating_sub(1)) as f64) as usize;
+    if min_lag >= max_lag {
+        return vec![global_lag; scores.len()];
+    }
+
+    let anchor_step = ((2.0 / frame_step).round() as usize).max(1);
+    let half_window = ((5.0 / frame_step).round() as usize).max(global_lag * 3);
+    let mut anchors = Vec::new();
+    let mut anchor = 0_usize;
+    let mut previous_lag = global_lag.clamp(min_lag, max_lag);
+
+    while anchor < scores.len() {
+        let lo = anchor.saturating_sub(half_window);
+        let hi = (anchor + half_window + 1).min(scores.len());
+        let local = &scores[lo..hi];
+        let mut best_lag = previous_lag;
+        let mut best_score = f32::NEG_INFINITY;
+
+        for lag in min_lag..=max_lag.min(local.len().saturating_sub(1)) {
+            let corr = normalized_lag_correlation(local, lag);
+            if corr <= 0.0 {
+                continue;
+            }
+
+            let bpm = 60.0 / (lag as f64 * frame_step);
+            let tempo_prior = (-0.5 * (bpm / 120.0).log2().powi(2) / 0.78_f64.powi(2)).exp() as f32;
+            let continuity =
+                ((lag as f64 / previous_lag.max(1) as f64).log2().abs() as f32).min(2.0);
+            let global_distance =
+                ((lag as f64 / global_lag.max(1) as f64).log2().abs() as f32).min(2.0);
+            let harmonic_support = if lag * 2 < local.len() {
+                normalized_lag_correlation(local, lag * 2) * 0.16
+            } else {
+                0.0
+            };
+            let subdivision_evidence = if lag >= min_lag.saturating_mul(2) {
+                normalized_lag_correlation(local, lag / 2)
+            } else {
+                0.0
+            };
+            let score = corr * (0.78 + tempo_prior * 0.22) + harmonic_support
+                - subdivision_evidence * 0.20
+                - continuity * 0.11
+                - global_distance * 0.035;
+
+            if score > best_score {
+                best_score = score;
+                best_lag = lag;
+            }
+        }
+
+        // A local estimate with little periodic evidence is less reliable than
+        // the whole-track estimate.
+        if best_score < 0.10 {
+            best_lag = previous_lag;
+        }
+        best_lag = prefer_faster_harmonic_lag(local, best_lag, frame_step);
+        // Once the whole-track evidence resolves a fast pulse (roughly
+        // quarter-note territory), do not let a local autocorrelation valley
+        // silently fall back to an unrelated half-time path. Normal tempo
+        // drift remains allowed; only a large excursion is corrected.
+        let preferred_bpm = 60.0 / (global_lag as f64 * frame_step);
+        let slow_limit = (global_lag as f64 * 1.45).round() as usize;
+        if preferred_bpm >= 90.0 && best_lag > slow_limit {
+            best_lag = global_lag;
+        }
+        anchors.push((anchor, best_lag));
+        previous_lag = best_lag;
+        anchor = anchor.saturating_add(anchor_step);
+    }
+
+    if anchors.last().map(|entry| entry.0).unwrap_or(0) != scores.len() - 1 {
+        anchors.push((scores.len() - 1, previous_lag));
+    }
+
+    let mut curve = vec![global_lag; scores.len()];
+    for pair in anchors.windows(2) {
+        let (left_index, left_lag) = pair[0];
+        let (right_index, right_lag) = pair[1];
+        let width = right_index.saturating_sub(left_index).max(1);
+        for (offset, slot) in curve[left_index..=right_index].iter_mut().enumerate() {
+            let t = offset as f64 / width as f64;
+            *slot = ((left_lag as f64 * (1.0 - t) + right_lag as f64 * t).round() as usize)
+                .clamp(min_lag, max_lag);
+        }
+    }
+
+    curve
+}
+
+fn normalized_lag_correlation(values: &[f32], lag: usize) -> f32 {
+    if lag == 0 || values.len() <= lag {
+        return 0.0;
+    }
+
+    let mut cross = 0.0_f32;
+    let mut left_energy = 0.0_f32;
+    let mut right_energy = 0.0_f32;
+    for index in lag..values.len() {
+        let left = values[index].max(0.0);
+        let right = values[index - lag].max(0.0);
+        if left < 0.025 && right < 0.025 {
+            continue;
+        }
+        cross += left * right;
+        left_energy += left * left;
+        right_energy += right * right;
+    }
+
+    cross / (left_energy.sqrt() * right_energy.sqrt()).max(1.0e-6)
+}
+
+fn dynamic_programming_beat_path(scores: &[f32], lag_curve: &[usize]) -> Vec<usize> {
+    if scores.len() < 3 || lag_curve.len() != scores.len() {
+        return Vec::new();
+    }
+
+    let local_scores = smoothed_beat_local_scores(scores, lag_curve);
+    let max_local = local_scores.iter().copied().fold(0.0_f32, f32::max);
+    if max_local <= 0.0 {
+        return Vec::new();
+    }
+
+    let mut cumulative = vec![0.0_f32; scores.len()];
+    let mut backlink = vec![usize::MAX; scores.len()];
+    let first_threshold = max_local * 0.02;
+    let mut first_beat_found = false;
+
+    for index in 0..scores.len() {
+        let target = lag_curve[index].max(2);
+        let min_distance = (target / 2).max(2);
+        let max_distance = target.saturating_mul(2);
+        let mut best_score = f32::NEG_INFINITY;
+        let mut best_predecessor = usize::MAX;
+
+        let first_predecessor = index.saturating_sub(max_distance);
+        let last_predecessor = index.saturating_sub(min_distance);
+        if index >= min_distance {
+            for predecessor in first_predecessor..=last_predecessor {
+                let distance = index.saturating_sub(predecessor);
+                if distance < min_distance || distance > max_distance {
+                    continue;
+                }
+                let timing_error = (distance as f32 / target as f32).ln();
+                // A two-beat jump is a valid recovery when an attack is
+                // genuinely missing, but it should cost enough that a
+                // supported half-time path cannot win by default. The
+                // logarithmic term still allows gradual tempo drift.
+                let skipped_beats = ((distance as f32 / target as f32) - 1.0).max(0.0);
+                let transition_penalty = 18.0 * timing_error * timing_error + 3.0 * skipped_beats;
+                let candidate = cumulative[predecessor] - transition_penalty;
+                if candidate > best_score {
+                    best_score = candidate;
+                    best_predecessor = predecessor;
+                }
+            }
+        }
+
+        cumulative[index] = if best_predecessor == usize::MAX {
+            local_scores[index]
+        } else {
+            local_scores[index] + best_score
+        };
+
+        if !first_beat_found && local_scores[index] < first_threshold {
+            backlink[index] = usize::MAX;
+        } else {
+            backlink[index] = best_predecessor;
+            first_beat_found = true;
+        }
+    }
+
+    let mut local_maxima = Vec::new();
+    for index in 1..scores.len().saturating_sub(1) {
+        if cumulative[index] >= cumulative[index - 1] && cumulative[index] > cumulative[index + 1] {
+            local_maxima.push(index);
+        }
+    }
+    if local_maxima.is_empty() {
+        return Vec::new();
+    }
+
+    let mut maxima_scores = local_maxima
+        .iter()
+        .map(|index| cumulative[*index])
+        .collect::<Vec<_>>();
+    maxima_scores.sort_by(|a, b| a.total_cmp(b));
+    let tail_threshold = percentile_sorted(&maxima_scores, 0.50) * 0.50;
+    let tail = local_maxima
+        .into_iter()
+        .rev()
+        .find(|index| cumulative[*index] >= tail_threshold)
+        .unwrap_or(scores.len() - 1);
+
+    let mut path = Vec::new();
+    let mut cursor = tail;
+    loop {
+        path.push(cursor);
+        let previous = backlink[cursor];
+        if previous == usize::MAX || previous >= cursor {
+            break;
+        }
+        cursor = previous;
+    }
+    path.reverse();
+
+    trim_weak_path_edges(&mut path, &local_scores);
+    path
+}
+
+fn smoothed_beat_local_scores(scores: &[f32], lag_curve: &[usize]) -> Vec<f32> {
+    let mean = scores.iter().copied().sum::<f32>() / scores.len().max(1) as f32;
+    let variance = scores
+        .iter()
+        .map(|score| {
+            let centered = *score - mean;
+            centered * centered
+        })
+        .sum::<f32>()
+        / scores.len().saturating_sub(1).max(1) as f32;
+    let standard_deviation = variance.sqrt().max(1.0e-6);
+    let normalized = scores
+        .iter()
+        .map(|score| (*score / standard_deviation).max(0.0))
+        .collect::<Vec<_>>();
+
+    let mut local = vec![0.0_f32; scores.len()];
+    for index in 0..scores.len() {
+        let lag = lag_curve[index].max(2);
+        let radius = (lag / 3).max(2);
+        let sigma = (lag as f32 / 16.0).max(1.0);
+        let lo = index.saturating_sub(radius);
+        let hi = (index + radius + 1).min(scores.len());
+        let mut weighted = 0.0_f32;
+        let mut weight_sum = 0.0_f32;
+
+        for (offset, value) in normalized[lo..hi].iter().enumerate() {
+            let source = lo + offset;
+            let distance = source as f32 - index as f32;
+            let weight = (-0.5 * (distance / sigma).powi(2)).exp();
+            weighted += *value * weight;
+            weight_sum += weight;
+        }
+        local[index] = weighted / weight_sum.max(1.0e-6);
+    }
+
+    local
+}
+
+fn trim_weak_path_edges(path: &mut Vec<usize>, local_scores: &[f32]) {
+    if path.len() < 3 {
+        return;
+    }
+
+    let mut beat_scores = path
+        .iter()
+        .filter_map(|index| local_scores.get(*index).copied())
+        .collect::<Vec<_>>();
+    beat_scores.sort_by(|a, b| a.total_cmp(b));
+    let threshold = percentile_sorted(&beat_scores, 0.50) * 0.22;
+
+    while path.len() > 2
+        && path
+            .first()
+            .and_then(|index| local_scores.get(*index))
+            .copied()
+            .unwrap_or(0.0)
+            < threshold
+    {
+        path.remove(0);
+    }
+    while path.len() > 2
+        && path
+            .last()
+            .and_then(|index| local_scores.get(*index))
+            .copied()
+            .unwrap_or(0.0)
+            < threshold
+    {
+        path.pop();
+    }
 }
 
 fn calibrate_beat_grid_scores(beats: &mut [(f64, f32)]) {
@@ -1712,6 +2187,179 @@ mod tests {
         assert!(
             late_matches >= 3,
             "expected consistent late-track sensitivity, matched {late_matches}/4; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn follows_a_gradual_tempo_change() {
+        let sample_rate = 48_000;
+        let mut expected = Vec::new();
+        let mut time = 0.80_f64;
+        for beat in 0..22 {
+            expected.push(time);
+            let progress = beat as f64 / 21.0;
+            let period = 0.56 * (1.0 - progress) + 0.41 * progress;
+            time += period;
+        }
+
+        let mut samples = synthetic_ambient(sample_rate, time + 0.8);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &expected, 1.25);
+        let events = detect_events(&samples, sample_rate);
+        let matched = expected
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.080)
+            })
+            .count();
+
+        assert!(
+            matched >= 18,
+            "expected local tempo tracking to follow at least 18/22 ramped beats, matched {matched}; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn tracks_distinct_tempo_sections() {
+        let sample_rate = 48_000;
+        let first = [0.75, 1.25, 1.75, 2.25, 2.75, 3.25, 3.75, 4.25];
+        let second = [
+            8.00, 8.333, 8.666, 8.999, 9.332, 9.665, 9.998, 10.331, 10.664, 10.997,
+        ];
+        let mut samples = synthetic_ambient_scaled(sample_rate, 12.0, 0.30);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &first, 1.45);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &second, 1.30);
+
+        let events = detect_events(&samples, sample_rate);
+        let first_matches = first
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.080)
+            })
+            .count();
+        let second_matches = second
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.080)
+            })
+            .count();
+
+        assert!(
+            first_matches >= 7 && second_matches >= 8,
+            "expected both tempo sections to survive, matched {first_matches}/8 and {second_matches}/10; events: {events:?}"
+        );
+    }
+
+    #[test]
+    fn resolves_a_supported_subdivision_instead_of_half_time() {
+        let sample_rate = 48_000;
+        let expected = (1..=12)
+            .map(|index| index as f64 * 0.50)
+            .collect::<Vec<_>>();
+        let strong = (2..=12)
+            .step_by(2)
+            .map(|index| index as f64 * 0.50)
+            .collect::<Vec<_>>();
+        let mut samples = synthetic_ambient_scaled(sample_rate, 7.0, 0.28);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &strong, 1.55);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &expected, 0.58);
+
+        let events = detect_events(&samples, sample_rate);
+        let matched = expected
+            .iter()
+            .filter(|target| {
+                events
+                    .iter()
+                    .any(|event| (event.time - **target).abs() <= 0.080)
+            })
+            .count();
+
+        assert!(
+            matched >= 9,
+            "expected a supported half-second subdivision to survive, matched {matched}/{}; events: {events:?}",
+            expected.len()
+        );
+    }
+
+    #[test]
+    fn keeps_only_locally_prominent_major_hits() {
+        let events = (0..120)
+            .map(|index| Event {
+                time: index as f64 * 0.50,
+                score: if index % 9 == 0 {
+                    1.0
+                } else if index % 5 == 0 {
+                    0.70
+                } else {
+                    0.25
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let major_hits = select_major_hit_markers(events);
+
+        assert!(
+            !major_hits.is_empty() && major_hits.len() < 40,
+            "expected a small, song-driven set of major hits, got {major_hits:?}"
+        );
+        assert!(
+            major_hits.iter().all(|event| event.score >= 0.70),
+            "weak background beats should not survive major-hit selection: {major_hits:?}"
+        );
+    }
+
+    #[test]
+    fn filters_a_weak_sparse_outlier_from_major_hits() {
+        let events = vec![
+            Event {
+                time: 0.0,
+                score: 0.90,
+            },
+            Event {
+                time: 4.0,
+                score: 0.88,
+            },
+            Event {
+                time: 8.0,
+                score: 0.92,
+            },
+            Event {
+                time: 12.0,
+                score: 0.25,
+            },
+            Event {
+                time: 16.0,
+                score: 0.89,
+            },
+        ];
+
+        let major_hits = select_major_hit_markers(events);
+
+        assert!(
+            major_hits.iter().all(|event| event.time != 12.0),
+            "isolated low-confidence candidate should not become a marker: {major_hits:?}"
+        );
+    }
+
+    #[test]
+    fn bridges_an_implied_beat_inside_an_active_rhythm() {
+        let sample_rate = 48_000;
+        let audible = [0.75, 1.25, 1.75, 2.75, 3.25, 3.75];
+        let implied = 2.25;
+        let mut samples = synthetic_ambient(sample_rate, 4.6);
+        add_dhol_hits_scaled(&mut samples, sample_rate, &audible, 1.30);
+
+        let events = detect_events(&samples, sample_rate);
+        assert!(
+            events
+                .iter()
+                .any(|event| (event.time - implied).abs() <= 0.090),
+            "expected the rhythmic decoder to preserve the implied beat at {implied}; events: {events:?}"
         );
     }
 

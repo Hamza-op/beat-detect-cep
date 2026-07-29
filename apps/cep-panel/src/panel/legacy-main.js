@@ -3,9 +3,10 @@
 
   var cs = new CSInterface();
   var APP_VERSION = "1.1.0";
+  var BEAT_MARKER_COLOR_INDEX = 3;
   var state = {
     allEvents: [],
-    filteredEvents: [],
+    markerEvents: [],
     clip: null,
     isBusy: false,
     warpCancelRequested: false,
@@ -13,7 +14,6 @@
 
   var dom = {
     analyzeButton: document.getElementById("analyzeButton"),
-    randomizeButton: document.getElementById("randomizeButton"),
     diagnosticsButton: document.getElementById("diagnosticsButton"),
     applyButton: document.getElementById("applyButton"),
     removeButton: document.getElementById("removeButton"),
@@ -25,18 +25,13 @@
     autoColorButton: document.getElementById("autoColorButton"),
     resetColorButton: document.getElementById("resetColorButton"),
     status: document.getElementById("status"),
-    densityPanel: document.getElementById("densityPanel"),
-    densitySlider: document.getElementById("densitySlider"),
-    thresholdLabel: document.getElementById("thresholdLabel"),
+    beatResultsPanel: document.getElementById("beatResultsPanel"),
     filteredCount: document.getElementById("filteredCount"),
     totalCount: document.getElementById("totalCount"),
     markerTarget: document.getElementById("markerTarget"),
     zoomSlider: document.getElementById("zoomSlider"),
     zoomLabel: document.getElementById("zoomLabel"),
     autoZoomRatio: document.getElementById("autoZoomRatio"),
-    targetCountInput: document.getElementById("targetCountInput"),
-    targetStrategy: document.getElementById("targetStrategy"),
-    targetCountHint: document.getElementById("targetCountHint"),
     clearLogsButton: document.getElementById("clearLogsButton"),
     dollyStartScaleSlider: document.getElementById("dollyStartScaleSlider"),
     dollyMidScaleSlider: document.getElementById("dollyMidScaleSlider"),
@@ -65,12 +60,6 @@
     dollyHudEnd: document.getElementById("dollyHudEnd"),
     dollyHudIntensity: document.getElementById("dollyHudIntensity"),
     dollyFlatScene: document.getElementById("dollyFlatScene"),
-    tabDensity: document.getElementById("tabDensity"),
-    tabLimit: document.getElementById("tabLimit"),
-    densityTabContent: document.getElementById("densityTabContent"),
-    limitTabContent: document.getElementById("limitTabContent"),
-    offsetSlider: document.getElementById("offsetSlider"),
-    offsetLabel: document.getElementById("offsetLabel"),
     mainTabMarkersButton: document.getElementById("mainTabMarkersButton"),
     mainTabColorButton: document.getElementById("mainTabColorButton"),
     mainTabToolsButton: document.getElementById("mainTabToolsButton"),
@@ -89,19 +78,11 @@
     return "beat-grid";
   }
 
-  function dispatchInputEvent(element) {
-    if (!element) return;
-    var event = new Event("input", { bubbles: true, cancelable: true });
-    element.dispatchEvent(event);
-  }
-
   function setBusy(isBusy) {
     state.isBusy = isBusy;
     dom.analyzeButton.disabled = isBusy;
     dom.diagnosticsButton.disabled = isBusy;
     dom.removeButton.disabled = isBusy;
-    if (dom.randomizeButton)
-      dom.randomizeButton.disabled = isBusy || state.allEvents.length === 0;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
     if (dom.confirmDollyZoomButton)
       dom.confirmDollyZoomButton.disabled = isBusy;
@@ -110,7 +91,7 @@
     if (dom.autoColorButton) dom.autoColorButton.disabled = isBusy;
     if (dom.resetColorButton) dom.resetColorButton.disabled = isBusy;
     if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
-    dom.applyButton.disabled = isBusy || state.filteredEvents.length === 0;
+    dom.applyButton.disabled = isBusy || state.markerEvents.length === 0;
   }
 
   function setStatus(message, isError, isBusy, isSuccess) {
@@ -235,14 +216,88 @@
     return parsed;
   }
 
-  function cepEval(script) {
+  var hostReadyPromise = null;
+
+  function evalScriptOnce(script, timeoutMs) {
     return new Promise(function (resolve, reject) {
+      var settled = false;
+      var timeout = window.setTimeout(function () {
+        if (settled) return;
+        settled = true;
+        reject(new Error("Premiere bridge timed out."));
+      }, timeoutMs);
       cs.evalScript(script, function (result) {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
         try {
           resolve(parseBridgeResult(result));
         } catch (error) {
           reject(error);
         }
+      });
+    });
+  }
+
+  function bridgeDelay(milliseconds) {
+    return new Promise(function (resolve) {
+      window.setTimeout(resolve, milliseconds);
+    });
+  }
+
+  function ensureHostReady() {
+    if (isBrowserPreview()) {
+      return Promise.resolve({ ok: true });
+    }
+    if (hostReadyPromise) {
+      return hostReadyPromise;
+    }
+
+    var retryDelays = [0, 100, 250, 500, 1000];
+    var attempt = 0;
+    function probe() {
+      var delay = retryDelays[attempt];
+      attempt += 1;
+      return bridgeDelay(delay)
+        .then(function () {
+          return evalScriptOnce("AutoCutStudio.hostInfo()", 2500);
+        })
+        .catch(function (error) {
+          if (attempt >= retryDelays.length) {
+            throw new Error(
+              "Premiere host bridge did not become ready. Restart Premiere Pro and reopen AutoCut Studio. " +
+                error.message,
+            );
+          }
+          return probe();
+        });
+    }
+
+    hostReadyPromise = probe().catch(function (error) {
+      hostReadyPromise = null;
+      throw error;
+    });
+    return hostReadyPromise;
+  }
+
+  function isBridgeTransportError(error) {
+    var message = String(error && error.message ? error.message : error);
+    message = message.toLowerCase();
+    return (
+      message.indexOf("bridge timed out") >= 0 ||
+      message.indexOf("bridge failed before") >= 0 ||
+      message.indexOf("empty response") >= 0 ||
+      message.indexOf("invalid bridge data") >= 0
+    );
+  }
+
+  function cepEval(script) {
+    return ensureHostReady().then(function () {
+      return evalScriptOnce(script, 30000).catch(function (error) {
+        if (isBridgeTransportError(error)) {
+          hostReadyPromise = null;
+        }
+        throw error;
       });
     });
   }
@@ -461,475 +516,18 @@
     return beatEvents;
   }
 
-  function getThreshold() {
-    return dom.densitySlider ? Number(dom.densitySlider.value) / 100 : 0;
-  }
-
-  function keepStrongestPerWindow(events, windowSeconds) {
-    if (!events.length || !windowSeconds || windowSeconds <= 0) {
-      return events;
-    }
-
-    var byWindow = {};
-    for (var i = 0; i < events.length; i++) {
-      var event = events[i];
-      var bucket = Math.floor(event.time / windowSeconds);
-      if (!byWindow[bucket] || event.score > byWindow[bucket].score) {
-        byWindow[bucket] = event;
-      }
-    }
-
-    var kept = [];
-    Object.keys(byWindow).forEach(function (bucket) {
-      kept.push(byWindow[bucket]);
-    });
-    return kept.sort(function (a, b) {
-      return a.time - b.time;
-    });
-  }
-
-  function keepStrongestPerSecond(events) {
-    return keepStrongestPerWindow(events, 1.0);
-  }
-
-  function keepStrongestWithMinimumGap(events, minGapSeconds) {
-    if (!events.length || !minGapSeconds || minGapSeconds <= 0) {
-      return events;
-    }
-
-    var strongestFirst = events.slice().sort(function (a, b) {
-      return Number(b.score) - Number(a.score);
-    });
-    var kept = [];
-
-    for (var i = 0; i < strongestFirst.length; i++) {
-      var candidate = strongestFirst[i];
-      var tooClose = false;
-      for (var j = 0; j < kept.length; j++) {
-        if (Math.abs(candidate.time - kept[j].time) < minGapSeconds) {
-          tooClose = true;
-          break;
-        }
-      }
-      if (!tooClose) {
-        kept.push(candidate);
-      }
-    }
-
-    return kept.sort(function (a, b) {
-      return a.time - b.time;
-    });
-  }
-
-  function beatMinimumGapForThreshold(threshold) {
-    if (threshold <= 0.4) return 0;
-    var t = Math.max(0, Math.min(1, (threshold - 0.4) / 0.5));
-    return 1.05 + t * 2.75;
-  }
-
-  // ── Target Count selection logic ──────────────────────────────
-  //
-  // Selects N events from state.allEvents whenever N real detected beats exist.
-  //
-  // Beat mode is section-based: divide the detected beat span into N sections,
-  // choose one real beat from each non-empty section, then top up from real
-  // unused beats if any section had no candidate. No synthetic markers.
-  //
-  // Beat strategies:
-  //   balanced  = strong beat near the section center.
-  //   strongest = highest-scored beat inside each section.
-  //   spread    = beat closest to the section center.
-  //
-  function getTargetStrategy() {
-    return dom.targetStrategy ? dom.targetStrategy.value : "balanced";
-  }
-
-  function getTargetStrategyLabel() {
-    var strategy = getTargetStrategy();
-    if (strategy === "strongest") return "section best";
-    if (strategy === "spread") return "even spread";
-    return "balanced";
-  }
-
-  function collapseBeatCandidatesBySecond(sortedEvents, target) {
-    if (
-      !sortedEvents ||
-      sortedEvents.length === 0 ||
-      target >= sortedEvents.length
-    ) {
-      return sortedEvents || [];
-    }
-
-    var strongestBySecond = {};
-    var secondCount = 0;
-    for (var i = 0; i < sortedEvents.length; i++) {
-      var event = sortedEvents[i];
-      var bucket = String(Math.floor(Number(event.time) || 0));
-      if (!strongestBySecond[bucket]) {
-        strongestBySecond[bucket] = event;
-        secondCount++;
-      } else if (
-        (Number(event.score) || 0) >
-        (Number(strongestBySecond[bucket].score) || 0)
-      ) {
-        strongestBySecond[bucket] = event;
-      }
-    }
-
-    if (secondCount < target) {
-      return sortedEvents;
-    }
-
-    var collapsed = [];
-    for (var key in strongestBySecond) {
-      if (Object.prototype.hasOwnProperty.call(strongestBySecond, key)) {
-        collapsed.push(strongestBySecond[key]);
-      }
-    }
-    return collapsed.sort(function (a, b) {
-      return a.time - b.time;
-    });
-  }
-
-  function selectByTargetCount(pool, n, strategy) {
-    if (!pool || pool.length === 0 || !isFinite(n) || n <= 0) return [];
-    n = Math.min(Math.floor(n), pool.length);
-    if (n >= pool.length) {
-      return pool.slice().sort(function (a, b) {
-        return a.time - b.time;
-      });
-    }
-    strategy = strategy || "balanced";
-
-    return selectBeatGridByTargetCount(pool, n, strategy);
-  }
-
-  function selectBeatGridByTargetCount(pool, n, strategy) {
-    if (!pool || pool.length === 0 || !isFinite(n) || n <= 0) return [];
-    var sorted = pool.slice().sort(function (a, b) {
-      return a.time - b.time;
-    });
-    var target = Math.min(Math.floor(n), sorted.length);
-    sorted = collapseBeatCandidatesBySecond(sorted, target);
-    target = Math.min(target, sorted.length);
-    if (target >= sorted.length) return sorted.slice();
-
-    var firstTime = sorted[0].time;
-    var lastTime = sorted[sorted.length - 1].time;
-    var duration = Math.max(0, lastTime - firstTime);
-    if (duration <= 0) {
-      return sorted.slice(0, target);
-    }
-
-    var segWidth = duration / target;
-    var selected = [];
-    var usedIndices = {};
-
-    for (var seg = 0; seg < target; seg++) {
-      var tLo = firstTime + seg * segWidth;
-      var tHi = seg === target - 1 ? lastTime + 0.001 : tLo + segWidth;
-      var center = tLo + segWidth * 0.5;
-      var best = null;
-      var bestIdx = -1;
-      var bestRank = -Infinity;
-
-      for (var k = 0; k < sorted.length; k++) {
-        if (usedIndices[k]) continue;
-        var event = sorted[k];
-        if (event.time < tLo || event.time >= tHi) continue;
-
-        var rank = Number(event.score) || 0;
-        if (strategy === "spread") {
-          var distance = Math.abs(event.time - center);
-          var closeness =
-            1 - Math.min(1, distance / Math.max(segWidth * 0.5, 0.001));
-          rank = closeness * 0.9 + rank * 0.1;
-        } else if (strategy === "balanced") {
-          var centerDistance = Math.abs(event.time - center);
-          var centerCloseness =
-            1 - Math.min(1, centerDistance / Math.max(segWidth * 0.5, 0.001));
-          rank = rank * 0.7 + centerCloseness * 0.3;
-        }
-
-        if (best === null || rank > bestRank) {
-          best = event;
-          bestIdx = k;
-          bestRank = rank;
-        }
-      }
-
-      if (best !== null) {
-        selected.push(best);
-        usedIndices[bestIdx] = true;
-      }
-    }
-
-    if (strategy !== "spread") {
-      fillSelectionToTarget(sorted, selected, usedIndices, target, strategy);
-    }
-    return selected.sort(function (a, b) {
-      return a.time - b.time;
-    });
-  }
-
-  function fillSelectionToTarget(
-    sorted,
-    selected,
-    usedIndices,
-    target,
-    strategy,
-  ) {
-    if (!sorted || !selected || !usedIndices || selected.length >= target)
-      return;
-
-    while (selected.length < target) {
-      var bestIdx = -1;
-      var bestRank = -Infinity;
-
-      for (var i = 0; i < sorted.length; i++) {
-        if (usedIndices[i]) continue;
-        var event = sorted[i];
-        var score = Number(event.score) || 0;
-        var spacing = nearestSelectedDistanceSeconds(event, selected);
-        var rank = score;
-
-        if (strategy === "spread") {
-          rank = spacing;
-        } else if (strategy === "balanced") {
-          rank = score * 0.65 + Math.min(spacing / 6, 1) * 0.35;
-        }
-
-        if (bestIdx < 0 || rank > bestRank) {
-          bestIdx = i;
-          bestRank = rank;
-        }
-      }
-
-      if (bestIdx < 0) break;
-      selected.push(sorted[bestIdx]);
-      usedIndices[bestIdx] = true;
-    }
-  }
-
-  function nearestSelectedDistanceSeconds(event, selected) {
-    if (!selected || selected.length === 0) return Number.MAX_VALUE;
-    var best = Number.MAX_VALUE;
-    var time = Number(event.time) || 0;
-    for (var i = 0; i < selected.length; i++) {
-      best = Math.min(best, Math.abs(time - (Number(selected[i].time) || 0)));
-    }
-    return best;
-  }
-
-  // Returns the user-entered target count (integer) or null if blank/invalid.
-  function getTargetCount() {
-    if (!dom.targetCountInput) return null;
-    var raw = dom.targetCountInput.value.trim();
-    if (raw === "") return null;
-    var n = Number(raw);
-    return isFinite(n) && n >= 1 ? Math.round(n) : null;
-  }
-
-  // Calibrate min/max bounds of the target-count input after analysis.
-  function calibrateTargetCountBounds(allEvents, clip) {
-    if (!dom.targetCountInput) return;
-    var total = allEvents.length;
-    if (total < 1) {
-      dom.targetCountInput.min = "1";
-      dom.targetCountInput.max = "1";
-      if (dom.targetCountHint) {
-        dom.targetCountHint.textContent =
-          "No usable events found for this analysis.";
-      }
-      return;
-    }
-    // Practical minimum: at least 1 but default to ~1 per 15 s of track
-    var duration = 0;
-    if (clip) {
-      duration =
-        Number(clip.durationSeconds) ||
-        Math.max(0, Number(clip.outPointSeconds) - Number(clip.inPointSeconds));
-      if (!duration) {
-        duration = Math.max(
-          0,
-          Number(clip.endSeconds) - Number(clip.startSeconds),
-        );
-      }
-    }
-    var minEstimate = duration > 0 ? Math.max(1, Math.round(duration / 15)) : 1;
-    var min = Math.min(minEstimate, Math.max(1, total));
-    var max = total;
-    dom.targetCountInput.min = String(min);
-    dom.targetCountInput.max = String(max);
-    // Update hint with range
-    if (dom.targetCountHint) {
-      dom.targetCountHint.textContent =
-        "Range: " +
-        min +
-        "\u2013" +
-        max +
-        " beat markers. Even Spread skips empty sections; Balanced and Section Best fill from real beats when possible.";
-    }
-  }
-
-  // Shuffle target-count selection. In beat mode this follows the same section
-  // logic as Strategy, then tops up from remaining real beats to honor the
-  // manually entered limit whenever enough detected beats exist.
-  function randomizeSelection() {
-    var n = getTargetCount();
-    if (!isFinite(n) || n <= 0 || state.allEvents.length === 0) return;
-
-    var pool = state.allEvents;
-    n = Math.min(Math.floor(n), pool.length);
-    if (n >= pool.length) {
-      state.filteredEvents = pool.slice().sort(function (a, b) {
-        return a.time - b.time;
-      });
-      updateCounterUI(n);
-      return;
-    }
-    var sorted = pool.slice().sort(function (a, b) {
-      return a.time - b.time;
-    });
-    sorted = collapseBeatCandidatesBySecond(sorted, n);
-    n = Math.min(n, sorted.length);
-    var firstTime = sorted[0].time;
-    var lastTime = sorted[sorted.length - 1].time;
-    var duration = Math.max(0, lastTime - firstTime);
-    var segWidth = duration > 0 ? duration / n : 0;
-    var selected = [];
-    var usedIndices = {};
-
-    for (var seg = 0; seg < n; seg++) {
-      var tLo = firstTime + seg * segWidth;
-      var tHi = seg === n - 1 ? lastTime + 0.001 : tLo + segWidth;
-      var candidates = [];
-      for (var k = 0; k < sorted.length; k++) {
-        if (!usedIndices[k] && sorted[k].time >= tLo && sorted[k].time < tHi) {
-          candidates.push(k);
-        }
-      }
-      if (candidates.length > 0) {
-        // Calculate cumulative score-weighted sum (using squared score to favor prominent events)
-        var totalWeight = 0;
-        var weights = [];
-        for (var c = 0; c < candidates.length; c++) {
-          var score = Number(sorted[candidates[c]].score) || 0.1;
-          var weight = Math.max(0.001, score * score);
-          totalWeight += weight;
-          weights.push(weight);
-        }
-
-        // Weighted random selection
-        var randomValue = Math.random() * totalWeight;
-        var runningSum = 0;
-        var pickIndex = candidates[0]; // fallback
-        for (var c = 0; c < candidates.length; c++) {
-          runningSum += weights[c];
-          if (randomValue <= runningSum) {
-            pickIndex = candidates[c];
-            break;
-          }
-        }
-
-        selected.push(sorted[pickIndex]);
-        usedIndices[pickIndex] = true;
-      }
-    }
-
-    if (getTargetStrategy() !== "spread") {
-      while (selected.length < n) {
-        var remaining = [];
-        for (var r = 0; r < sorted.length; r++) {
-          if (!usedIndices[r]) remaining.push(r);
-        }
-        if (remaining.length === 0) break;
-        var extraPick = remaining[Math.floor(Math.random() * remaining.length)];
-        selected.push(sorted[extraPick]);
-        usedIndices[extraPick] = true;
-      }
-    }
-
-    state.filteredEvents = selected.sort(function (a, b) {
-      return a.time - b.time;
-    });
-    updateCounterUI(n);
-  }
-
-  function updateCounterUI(targetN) {
-    var n = targetN !== undefined ? targetN : getTargetCount();
-    var displayTarget =
-      n !== null && state.allEvents.length > 0
-        ? Math.min(n, state.allEvents.length)
-        : n;
-    dom.filteredCount.textContent = String(state.filteredEvents.length);
-    if (n !== null) {
-      dom.totalCount.textContent =
-        "of " +
-        state.allEvents.length +
-        " events (target: " +
-        displayTarget +
-        ", " +
-        getTargetStrategyLabel() +
-        ")";
-      dom.thresholdLabel.textContent = "\u2022" + state.filteredEvents.length;
-    } else {
-      var threshold = getThreshold();
-      dom.thresholdLabel.textContent = threshold.toFixed(2);
-      dom.totalCount.textContent =
-        "of " + state.allEvents.length + " events selected";
-    }
-    dom.applyButton.disabled =
-      state.isBusy || state.filteredEvents.length === 0;
-    if (dom.randomizeButton)
-      dom.randomizeButton.disabled =
-        state.isBusy || state.allEvents.length === 0;
-    syncFilterTabUI();
-  }
-
-  function syncFilterTabUI() {
-    var hasLimit = getTargetCount() !== null;
-    if (hasLimit) {
-      if (dom.tabDensity) dom.tabDensity.classList.remove("is-active");
-      if (dom.tabLimit) dom.tabLimit.classList.add("is-active");
-      if (dom.densityTabContent)
-        dom.densityTabContent.classList.remove("is-active");
-      if (dom.limitTabContent) dom.limitTabContent.classList.add("is-active");
-    } else {
-      if (dom.tabDensity) dom.tabDensity.classList.add("is-active");
-      if (dom.tabLimit) dom.tabLimit.classList.remove("is-active");
-      if (dom.densityTabContent)
-        dom.densityTabContent.classList.add("is-active");
-      if (dom.limitTabContent)
-        dom.limitTabContent.classList.remove("is-active");
-    }
+  function updateCounterUI() {
+    dom.filteredCount.textContent = String(state.markerEvents.length);
+    dom.totalCount.textContent = "detected beat markers";
+    dom.applyButton.disabled = state.isBusy || state.markerEvents.length === 0;
   }
 
   function filterEvents() {
-    var n = getTargetCount();
-    if (n !== null) {
-      // ── Target Count mode ──
-      state.filteredEvents = selectByTargetCount(
-        state.allEvents,
-        n,
-        getTargetStrategy(),
-      );
-      if (dom.targetCountInput) dom.targetCountInput.classList.add("is-active");
-    } else {
-      var beatThreshold = getThreshold();
-      var beatEvents = state.allEvents.filter(function (event) {
-        return Number(event.score) >= beatThreshold;
-      });
-      state.filteredEvents =
-        beatThreshold <= 0.4
-          ? beatEvents
-          : keepStrongestWithMinimumGap(
-              keepStrongestPerSecond(beatEvents),
-              beatMinimumGapForThreshold(beatThreshold),
-            );
-      if (dom.targetCountInput)
-        dom.targetCountInput.classList.remove("is-active");
-    }
+    // The Rust analyzer already returns the final major-hit marker set. Keep
+    // the panel as a pass-through so markers are never filtered twice.
+    state.markerEvents = state.allEvents.slice().sort(function (a, b) {
+      return a.time - b.time;
+    });
     updateCounterUI();
   }
 
@@ -949,29 +547,12 @@
       });
   }
 
-  function markerColorIndexForEvent(event) {
-    return 3;
-  }
-
-  function getOffsetMs() {
-    return dom.offsetSlider ? Number(dom.offsetSlider.value) || 0 : 0;
-  }
-
-  function updateOffsetLabel() {
-    if (dom.offsetSlider && dom.offsetLabel) {
-      var val = Number(dom.offsetSlider.value) || 0;
-      var sign = val > 0 ? "+" : "";
-      dom.offsetLabel.innerText = sign + val + " ms";
-    }
-  }
-
   function eventsForPremiere(events) {
-    var offsetSec = getOffsetMs() / 1000.0;
     return events.map(function (event) {
       return {
-        time: event.time + offsetSec,
+        time: event.time,
         score: event.score,
-        colorIndex: markerColorIndexForEvent(event),
+        colorIndex: BEAT_MARKER_COLOR_INDEX,
       };
     });
   }
@@ -981,13 +562,9 @@
 
     setBusy(true);
     state.allEvents = [];
-    state.filteredEvents = [];
+    state.markerEvents = [];
     state.clip = null;
-    if (dom.offsetSlider) {
-      dom.offsetSlider.value = 0;
-      updateOffsetLabel();
-    }
-    dom.densityPanel.classList.add("is-hidden");
+    dom.beatResultsPanel.classList.add("is-hidden");
     setStatus("Reading the selected clip path from Premiere...", false, true);
 
     cepEval("AutoCutStudio.getSelectedClipInfo()")
@@ -1022,16 +599,14 @@
           sanitizeEvents(analysis.events || []),
           state.clip,
         );
-        // Calibrate target-count input bounds now we know the event pool size
-        calibrateTargetCountBounds(state.allEvents, state.clip);
         filterEvents();
-        dom.densityPanel.classList.remove("is-hidden");
+        dom.beatResultsPanel.classList.remove("is-hidden");
         setStatus(
           (isBrowserPreview()
             ? "Preview analysis complete: "
             : "Analysis complete: ") +
             "found " +
-            state.allEvents.length +
+            state.markerEvents.length +
             " " +
             getBeatWorkflowLabel() +
             " markers in the selected cut using Rust analyzer.",
@@ -1050,13 +625,13 @@
   }
 
   function applyMarkers() {
-    if (state.isBusy || state.filteredEvents.length === 0) {
+    if (state.isBusy || state.markerEvents.length === 0) {
       return;
     }
 
     setBusy(true);
     setStatus(
-      "Applying " + state.filteredEvents.length + " markers in Premiere...",
+      "Applying " + state.markerEvents.length + " markers in Premiere...",
       false,
       true,
     );
@@ -1071,7 +646,7 @@
       outPointSeconds: state.clip ? state.clip.outPointSeconds : null,
     };
 
-    var allEvents = eventsForPremiere(state.filteredEvents);
+    var allEvents = eventsForPremiere(state.markerEvents);
     var chunkSize = 50;
     var totalApplied = 0;
     var totalSkipped = 0;
@@ -2023,33 +1598,6 @@
     dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
   if (dom.resetColorButton)
     dom.resetColorButton.addEventListener("click", resetColorGrade);
-  if (dom.randomizeButton) {
-    dom.randomizeButton.addEventListener("click", function () {
-      // If no target count is set, default to current filtered count
-      if (getTargetCount() === null && state.filteredEvents.length > 0) {
-        dom.targetCountInput.value = String(state.filteredEvents.length);
-      }
-      randomizeSelection();
-    });
-  }
-  if (dom.densitySlider)
-    dom.densitySlider.addEventListener("input", filterEvents);
-  if (dom.offsetSlider) {
-    dom.offsetSlider.addEventListener("input", function () {
-      updateOffsetLabel();
-    });
-  }
-  if (dom.targetCountInput) {
-    dom.targetCountInput.addEventListener("input", function () {
-      if (state.allEvents.length > 0) filterEvents();
-    });
-  }
-  if (dom.targetStrategy) {
-    dom.targetStrategy.addEventListener("change", function () {
-      if (state.allEvents.length > 0 && getTargetCount() !== null)
-        filterEvents();
-    });
-  }
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function () {
       if (dom.autoZoomRatio) dom.autoZoomRatio.checked = false;
@@ -2516,32 +2064,6 @@
       }
     });
   }
-  if (dom.tabDensity) {
-    dom.tabDensity.addEventListener("click", function () {
-      if (state.isBusy) return;
-      if (dom.targetCountInput) {
-        dom.targetCountInput.value = "";
-        dispatchInputEvent(dom.targetCountInput);
-      }
-      syncFilterTabUI();
-    });
-  }
-
-  if (dom.tabLimit) {
-    dom.tabLimit.addEventListener("click", function () {
-      if (state.isBusy) return;
-      if (dom.targetCountInput) {
-        var val = dom.targetCountInput.value.trim();
-        if (val === "") {
-          var minVal = dom.targetCountInput.min || "10";
-          dom.targetCountInput.value = minVal;
-        }
-        dispatchInputEvent(dom.targetCountInput);
-      }
-      syncFilterTabUI();
-    });
-  }
-
   var githubLink = document.getElementById("githubLink");
   if (githubLink) {
     githubLink.addEventListener("click", function (e) {
@@ -2567,6 +2089,19 @@
   if (isBrowserPreview()) {
     setStatus(
       "Browser preview mode. Analyze uses simulated event markers; Premiere actions are mocked.",
+    );
+  } else {
+    ensureHostReady().then(
+      function (info) {
+        appendLog(
+          "Premiere host bridge ready: " +
+            (info.hostVersion || "unknown version"),
+        );
+      },
+      function (error) {
+        setStatus(error.message || String(error), "error");
+        appendLog("HOST BRIDGE STARTUP ERROR: " + (error.message || error));
+      },
     );
   }
 

@@ -178,7 +178,7 @@
               </div>
             </div>
 
-            <!-- Analyze / Randomize -->
+            <!-- Analyze -->
             <div class="action-row">
               <button id="analyzeButton" class="btn-primary" type="button">
                 <svg
@@ -197,142 +197,20 @@
                 <span class="full-label">Analyze Media</span>
                 <span class="short-label">Analyze</span>
               </button>
-              <button
-                id="randomizeButton"
-                class="btn-icon btn-secondary"
-                type="button"
-                disabled
-                title="Shuffle section picks from the detected beat pool"
-              >
-                <svg
-                  width="12"
-                  height="12"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  aria-hidden="true"
-                >
-                  <polyline points="16 3 21 3 21 8" />
-                  <line x1="4" y1="20" x2="21" y2="3" />
-                  <polyline points="21 16 21 21 16 21" />
-                  <line x1="15" y1="15" x2="21" y2="21" />
-                </svg>
-              </button>
             </div>
 
             <!-- Results panel -->
             <section
-              id="densityPanel"
-              class="density-panel is-hidden"
-              aria-label="Detected event markers"
+              id="beatResultsPanel"
+              class="beat-results-panel is-hidden"
+              aria-label="Detected beat markers"
             >
-              <div class="filter-tabs">
-                <button type="button" id="tabDensity" class="tab-btn is-active">
-                  <span class="full-label">Automatic Density</span>
-                  <span class="short-label">Auto</span>
-                </button>
-                <button type="button" id="tabLimit" class="tab-btn">
-                  <span class="full-label">Exact Limit</span>
-                  <span class="short-label">Limit</span>
-                </button>
-              </div>
-
-              <!-- Density mode -->
-              <div id="densityTabContent" class="tab-content is-active">
-                <div class="density-slider-container">
-                  <div class="density-head">
-                    <span class="section-subtitle">Density Threshold</span>
-                    <strong id="thresholdLabel" class="value-highlight"
-                      >0.70</strong
-                    >
-                  </div>
-                  <div class="slider-wrapper">
-                    <input
-                      id="densitySlider"
-                      type="range"
-                      min="20"
-                      max="90"
-                      value="70"
-                      step="1"
-                    />
-                  </div>
-                  <div class="slider-labels">
-                    <span>Dense (All Beats)</span>
-                    <span>Sparse (Major Hits)</span>
-                  </div>
-                </div>
-              </div>
-
-              <!-- Limit mode -->
-              <div id="limitTabContent" class="tab-content">
-                <div class="strategy-row">
-                  <div class="form-group flex-1">
-                    <label class="field-label" for="targetCountInput"
-                      >Marker Limit</label
-                    >
-                    <input
-                      id="targetCountInput"
-                      class="input-text"
-                      type="number"
-                      min="1"
-                      max="999"
-                      step="1"
-                      inputmode="numeric"
-                      value=""
-                      placeholder="Auto"
-                    />
-                  </div>
-                  <div class="form-group flex-1">
-                    <label class="field-label" for="targetStrategy"
-                      >Strategy</label
-                    >
-                    <div class="select-wrapper">
-                      <select id="targetStrategy">
-                        <option value="balanced">Balanced</option>
-                        <option value="strongest">Section Best</option>
-                        <option value="spread">Even Spread</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-                <p class="hint-text" id="targetCountHint">
-                  Even Spread keeps timing natural and skips empty sections.
-                  Balanced and Section Best can fill from real beats.
-                </p>
-              </div>
-
-              <!-- Counter -->
               <div class="events-badge-deck">
                 <div class="lcd-screen">
                   <div class="lcd-value"><span id="filteredCount">0</span></div>
                   <div class="lcd-label">
-                    <span id="totalCount">of 0 events active</span>
+                    <span id="totalCount">detected beat markers</span>
                   </div>
-                </div>
-              </div>
-
-              <!-- Offset -->
-              <div class="offset-slider-container">
-                <div class="offset-head">
-                  <span class="section-subtitle">Shift Marker Position</span>
-                  <strong id="offsetLabel" class="value-highlight">0 ms</strong>
-                </div>
-                <div class="slider-wrapper">
-                  <input
-                    id="offsetSlider"
-                    type="range"
-                    min="-250"
-                    max="250"
-                    value="0"
-                    step="5"
-                  />
-                </div>
-                <div class="slider-labels">
-                  <span>Early (-250 ms)</span>
-                  <span>Late (+250 ms)</span>
                 </div>
               </div>
             </section>
@@ -745,7 +623,7 @@
                 </div>
               </div>
               <div class="ratio-control-panel">
-                <div class="density-head compact-density-head">
+                <div class="control-head compact-control-head">
                   <span class="section-subtitle">Zoom Ratio</span>
                   <strong id="zoomLabel" class="value-highlight">110%</strong>
                 </div>

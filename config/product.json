@@ -5,7 +5,7 @@
   "version": "1.1.0",
   "platform": "windows",
   "compatibility": {
-    "cepHost": "PPRO [24.0,26.99]",
+    "cepHost": "PPRO [24.0,99.9]",
     "minimumCsxsRuntime": "11.0",
     "chromium": "88",
     "node": "15"

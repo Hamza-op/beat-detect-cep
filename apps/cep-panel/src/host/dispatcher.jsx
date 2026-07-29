@@ -117,6 +117,8 @@ var AutoCutStudio = AutoCutStudio || {};
     }
 
     var method = request.method;
+    if (method === "system.ping")
+      return call(request, api.hostInfo, request.payload);
     if (method === "clip.getSelected")
       return call(request, api.getSelectedClipInfo, request.payload);
     if (method === "markers.scan")

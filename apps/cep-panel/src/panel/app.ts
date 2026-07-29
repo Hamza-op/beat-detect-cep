@@ -16,6 +16,14 @@ export function startApp(): void {
     controllers,
   };
   document.documentElement.dataset.autocutReady = "true";
+  void bridge.ready().then(
+    () => {
+      document.documentElement.dataset.autocutHost = "ready";
+    },
+    () => {
+      document.documentElement.dataset.autocutHost = "unavailable";
+    },
+  );
 }
 
 if (document.readyState === "loading")

@@ -42,6 +42,15 @@ await writeFile(
     `var APP_VERSION = "${product.version}"`,
   ),
 );
+const legacyHostPath = path.join(root, "apps/cep-panel/src/host/legacy.jsx");
+const legacyHost = await readFile(legacyHostPath, "utf8");
+await writeFile(
+  legacyHostPath,
+  legacyHost.replace(
+    /var AUTOCUT_EXTENSION_VERSION = "[^"]+"/,
+    `var AUTOCUT_EXTENSION_VERSION = "${product.version}"`,
+  ),
+);
 const manifestPath = path.join(root, "CSXS/manifest.xml");
 const manifest = (await readFile(manifestPath, "utf8"))
   .replace(

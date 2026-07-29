@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 static int PercentileFromHistogram(const int histogram[256], int total_pixels, float percentile)
 {
@@ -49,6 +50,116 @@ static inline unsigned char GetChannel8(T val) {
     }
 }
 
+struct AnalysisBounds {
+    int left;
+    int top;
+    int right;
+    int bottom;
+};
+
+template <typename T, bool Is16Bit>
+static AnalysisBounds DetectContentBounds(
+    const T* pixel_buffer,
+    int width,
+    int height,
+    int row_bytes
+) {
+    AnalysisBounds full{0, 0, width, height};
+    if (width < 8 || height < 8) {
+        return full;
+    }
+
+    std::vector<int> dark_rows(static_cast<size_t>(height), 0);
+    std::vector<int> dark_columns(static_cast<size_t>(width), 0);
+    for (int y = 0; y < height; ++y) {
+        const T* row = reinterpret_cast<const T*>(
+            reinterpret_cast<const unsigned char*>(pixel_buffer) + (y * row_bytes)
+        );
+        for (int x = 0; x < width; ++x) {
+            const unsigned char r = GetChannel8<T, Is16Bit>(row[x * 4 + 0]);
+            const unsigned char g = GetChannel8<T, Is16Bit>(row[x * 4 + 1]);
+            const unsigned char b = GetChannel8<T, Is16Bit>(row[x * 4 + 2]);
+            const unsigned char a = GetChannel8<T, Is16Bit>(row[x * 4 + 3]);
+            const unsigned char max_channel = std::max({r, g, b});
+            // Letterbox pixels are nearly black across all channels. Treat
+            // transparent black as empty as well, but do not trim an entire
+            // genuinely dark frame unless a real content region remains.
+            if (a <= 3 || max_channel <= 10) {
+                dark_rows[static_cast<size_t>(y)]++;
+                dark_columns[static_cast<size_t>(x)]++;
+            }
+        }
+    }
+
+    const int minimum_content_rows = std::max(2, static_cast<int>(height * 0.20f));
+    const int minimum_content_columns = std::max(2, static_cast<int>(width * 0.20f));
+    const auto row_is_bar = [&](int y) {
+        return static_cast<double>(dark_rows[static_cast<size_t>(y)]) >=
+               static_cast<double>(width) * 0.97;
+    };
+    const auto column_is_bar = [&](int x) {
+        return static_cast<double>(dark_columns[static_cast<size_t>(x)]) >=
+               static_cast<double>(height) * 0.97;
+    };
+
+    int content_rows = 0;
+    for (int y = 0; y < height; ++y) {
+        if (!row_is_bar(y)) {
+            content_rows++;
+        }
+    }
+    int content_columns = 0;
+    for (int x = 0; x < width; ++x) {
+        if (!column_is_bar(x)) {
+            content_columns++;
+        }
+    }
+    if (content_rows < minimum_content_rows || content_columns < minimum_content_columns) {
+        return full;
+    }
+
+    int left = 0;
+    int top = 0;
+    int right = width;
+    int bottom = height;
+    const double full_area = static_cast<double>(width) * static_cast<double>(height);
+    const auto candidate_is_safe = [&](int candidate_left, int candidate_top,
+                                        int candidate_right, int candidate_bottom) {
+        const double candidate_area =
+            static_cast<double>(candidate_right - candidate_left) *
+            static_cast<double>(candidate_bottom - candidate_top);
+        return candidate_right - candidate_left >= minimum_content_columns &&
+               candidate_bottom - candidate_top >= minimum_content_rows &&
+               candidate_area >= full_area * 0.20;
+    };
+
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        if (top < bottom && row_is_bar(top) && candidate_is_safe(left, top + 1, right, bottom)) {
+            top++;
+            changed = true;
+        }
+        if (bottom > top && row_is_bar(bottom - 1) &&
+            candidate_is_safe(left, top, right, bottom - 1)) {
+            bottom--;
+            changed = true;
+        }
+        if (left < right && column_is_bar(left) &&
+            candidate_is_safe(left + 1, top, right, bottom)) {
+            left++;
+            changed = true;
+        }
+        if (right > left && column_is_bar(right - 1) &&
+            candidate_is_safe(left, top, right - 1, bottom)) {
+            right--;
+            changed = true;
+        }
+    }
+
+    return AnalysisBounds{left, top, right, bottom};
+}
+
 template <typename T, bool Is16Bit>
 static bool AnalyzeFrameTemplate(
     const T* pixel_buffer,
@@ -78,13 +189,17 @@ static bool AnalyzeFrameTemplate(
     int skin_r_sum = 0, skin_g_sum = 0, skin_b_sum = 0;
     int skin_count = 0;
 
-    int total_pixels = width * height;
+    const AnalysisBounds bounds =
+        DetectContentBounds<T, Is16Bit>(pixel_buffer, width, height, row_bytes);
+    const int analysis_width = bounds.right - bounds.left;
+    const int analysis_height = bounds.bottom - bounds.top;
+    const int total_pixels = analysis_width * analysis_height;
 
-    for (int y = 0; y < height; ++y) {
+    for (int y = bounds.top; y < bounds.bottom; ++y) {
         const T* row = reinterpret_cast<const T*>(
             reinterpret_cast<const unsigned char*>(pixel_buffer) + (y * row_bytes)
         );
-        for (int x = 0; x < width; ++x) {
+        for (int x = bounds.left; x < bounds.right; ++x) {
             // RGBA layout (4 bytes/shorts per pixel)
             unsigned char r = GetChannel8<T, Is16Bit>(row[x * 4 + 0]);
             unsigned char g = GetChannel8<T, Is16Bit>(row[x * 4 + 1]);
@@ -176,9 +291,19 @@ static bool AnalyzeFrameTemplate(
     }
     float std_dev = std::sqrt(var_sum / static_cast<float>(total_pixels));
 
-    // Identify footage traits
-    result.is_low_light = (mean_y < 50.0f);
-    result.is_log = (std_dev < 32.0f && shadow_luma > 25 && highlight_luma < 225);
+    // Identify footage traits. A flat-looking frame is not automatically Log:
+    // a plain wall, fog, or a nearly uniform gray frame can have low variance
+    // without needing a Log contrast lift.
+    const int waveform_spread = luma_p90 - luma_p10;
+    result.is_low_light = (luma_median < 58.0f && luma_p90 < 205.0f);
+    result.is_log =
+        !result.is_low_light &&
+        std_dev < 32.0f &&
+        waveform_spread >= 45 &&
+        shadow_luma > 25 &&
+        highlight_luma < 235 &&
+        luma_median > 45 &&
+        luma_median < 210;
 
     // Wedding-safe exposure
     float target_median = result.is_low_light ? 86.0f : 108.0f;
@@ -198,7 +323,6 @@ static bool AnalyzeFrameTemplate(
     if (result.is_log) {
         result.contrast = 18.0f;
     } else {
-        int waveform_spread = luma_p90 - luma_p10;
         if (waveform_spread > 145 || std_dev > 68.0f) {
             result.contrast = 0.0f;
         } else {
@@ -242,22 +366,34 @@ static bool AnalyzeFrameTemplate(
     result.temperature = 0.0f;
     result.tint = 0.0f;
 
-    bool has_neutral_reference = neutral_count > std::max(240, total_pixels / 420);
-    int balance_count = has_neutral_reference ? neutral_count : mid_count;
+    const bool has_neutral_reference =
+        neutral_count > std::max(240, total_pixels / 420);
+    const float parade_rb_diff = static_cast<float>(r_median - b_median);
+    const float parade_g_diff =
+        static_cast<float>(g_median) - static_cast<float>(r_median + b_median) * 0.5f;
+    // Without a real neutral reference, only use a restrained parade-based
+    // correction when the frame is not strongly dominated by one color. A
+    // saturated DJ light should not be "corrected" into an unnatural grade.
+    const bool use_midtone_balance =
+        !has_neutral_reference &&
+        mid_count > static_cast<int>(total_pixels * 0.35f) &&
+        std::fabs(parade_rb_diff) < 42.0f &&
+        std::fabs(parade_g_diff) < 28.0f;
+    int balance_count =
+        has_neutral_reference ? neutral_count : (use_midtone_balance ? mid_count : 0);
     if (balance_count > 100) {
         float avg_balance_r = static_cast<float>(has_neutral_reference ? neutral_r_sum : mid_r_sum) / balance_count;
         float avg_balance_g = static_cast<float>(has_neutral_reference ? neutral_g_sum : mid_g_sum) / balance_count;
         float avg_balance_b = static_cast<float>(has_neutral_reference ? neutral_b_sum : mid_b_sum) / balance_count;
 
-        float parade_rb_diff = static_cast<float>(r_median - b_median);
         float neutral_rb_diff = avg_balance_r - avg_balance_b;
         float neutral_fraction = static_cast<float>(neutral_count) / static_cast<float>(total_pixels);
         float neutral_weight = has_neutral_reference ? ClampFloat((neutral_fraction - 0.003f) / 0.045f, 0.35f, 0.82f) : 0.0f;
         float rb_diff = (neutral_rb_diff * neutral_weight) + (parade_rb_diff * (1.0f - neutral_weight));
         rb_diff = ApplyDeadZone(rb_diff, 2.0f);
-        float rb_scale = has_neutral_reference ? 0.42f : 0.28f;
-        float rb_limit_cool = has_neutral_reference ? -9.0f : -5.0f;
-        float rb_limit_warm = has_neutral_reference ? 12.0f : 7.0f;
+        float rb_scale = has_neutral_reference ? 0.42f : 0.16f;
+        float rb_limit_cool = has_neutral_reference ? -9.0f : -4.0f;
+        float rb_limit_warm = has_neutral_reference ? 12.0f : 4.0f;
 
         if (rb_diff > 0.0f) {
             result.temperature = std::max(rb_limit_cool, -rb_diff * rb_scale);
@@ -266,12 +402,11 @@ static bool AnalyzeFrameTemplate(
         }
 
         float avg_rb = (avg_balance_r + avg_balance_b) * 0.5f;
-        float parade_g_diff = static_cast<float>(g_median) - static_cast<float>(r_median + b_median) * 0.5f;
         float neutral_g_diff = avg_balance_g - avg_rb;
         float g_diff = (neutral_g_diff * neutral_weight) + (parade_g_diff * (1.0f - neutral_weight));
         g_diff = ApplyDeadZone(g_diff, 1.5f);
-        float tint_scale = has_neutral_reference ? 0.42f : 0.32f;
-        float tint_limit = has_neutral_reference ? 8.0f : 6.0f;
+        float tint_scale = has_neutral_reference ? 0.42f : 0.16f;
+        float tint_limit = has_neutral_reference ? 8.0f : 4.0f;
         result.tint = g_diff * tint_scale;
         result.tint = std::max(-tint_limit, std::min(tint_limit, result.tint));
     }
@@ -316,6 +451,11 @@ static bool AnalyzeFrameTemplate(
     if (result.is_low_light) confidence -= 0.15f;
     if (highlight_clip_pct > 0.15f) confidence -= 0.20f;
     if (shadow_crush_pct > 0.15f) confidence -= 0.15f;
+    if (waveform_spread < 38) confidence -= 0.10f;
+    if (std_dev < 12.0f) confidence -= 0.08f;
+    if (!has_neutral_reference && !use_midtone_balance && skin_count < total_pixels / 100) {
+        confidence -= 0.10f;
+    }
     result.confidence = std::max(0.30f, std::min(1.0f, confidence));
 
     return true;

@@ -20,6 +20,7 @@ struct ColorCorrectionParams {
     float shadows_tint;
     float highlights_temp;
     float highlights_tint;
+    float confidence;
 };
 
 struct CapturedAnalysisState {
@@ -126,6 +127,7 @@ static ColorCorrectionParams NeutralColorParams()
     p.shadows_tint = 0.0f;
     p.highlights_temp = 0.0f;
     p.highlights_tint = 0.0f;
+    p.confidence = 1.0f;
     return p;
 }
 
@@ -157,6 +159,7 @@ static ColorCorrectionParams ColorParamsFromAnalysis(const FrameAnalysisResult& 
     p.shadows_tint = analysis.shadows_tint;
     p.highlights_temp = analysis.highlights_temp;
     p.highlights_tint = analysis.highlights_tint;
+    p.confidence = analysis.confidence;
     return p;
 }
 
@@ -908,7 +911,13 @@ Render(
     if (!analysis_ok) {
         return PF_Err_BAD_CALLBACK_PARAM;
     }
-    const float auto_amount = Clamp01(ParamValue(params, AUTOCUT_AUTO_AMOUNT) / 100.0f);
+    // Low-confidence frames still receive a useful starting grade, but the
+    // most aggressive automatic changes are softened when the solver had
+    // poor exposure or color references to work from.
+    const float analysis_confidence = Clamp01(p.confidence);
+    const float confidence_amount = 0.60f + (0.40f * analysis_confidence);
+    const float auto_amount =
+        Clamp01(ParamValue(params, AUTOCUT_AUTO_AMOUNT) / 100.0f) * confidence_amount;
     const ColorCorrectionParams neutral = NeutralColorParams();
     p.temperature *= auto_amount;
     p.tint *= auto_amount;

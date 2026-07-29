@@ -1061,8 +1061,8 @@ button:disabled {
     0 0 0 2px var(--sky-veil);
 }
 
-/* ── Density / marker panel ───────────────────────────── */
-.density-panel {
+/* ── Beat marker results ──────────────────────────────── */
+.beat-results-panel {
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1075,71 +1075,12 @@ button:disabled {
     inset 0 2px 8px rgba(0, 0, 0, 0.6),
     inset 0 0 0 1px rgba(0, 0, 0, 0.4);
 }
-.density-panel.is-hidden {
+.beat-results-panel.is-hidden {
   display: none !important;
 }
 
-/* Filter/segment tabs */
-.filter-tabs {
-  display: flex;
-  width: 100%;
-  background: #060710;
-  border: 1px solid var(--rim);
-  border-radius: var(--r);
-  padding: 2px;
-  gap: 2px;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.7);
-}
-.tab-btn {
-  flex: 1;
-  height: 22px;
-  padding: 0 6px;
-  font-family: var(--font-mono);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.7px;
-  color: var(--ink-low);
-  background: transparent;
-  border: none;
-  border-radius: var(--r-sm);
-  text-transform: uppercase;
-  transition:
-    color var(--t) var(--ease),
-    background var(--t) var(--ease);
-}
-.tab-btn:hover:not(.is-active) {
-  color: var(--ink);
-}
-.tab-btn.is-active {
-  color: #160c01;
-  background: linear-gradient(180deg, #ffc673 0%, #ff9e28 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.4),
-    0 1px 2px rgba(0, 0, 0, 0.5),
-    0 0 0 1px rgba(0, 0, 0, 0.5);
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.2);
-}
-.tab-content {
-  display: none;
-}
-.tab-content.is-active {
-  display: block;
-}
-
 /* ── Sliders ──────────────────────────────────────────── */
-.density-slider-container,
-.offset-slider-container {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.offset-slider-container {
-  margin-top: 10px;
-  padding-top: 10px;
-  border-top: 1px solid var(--rim);
-}
-.density-head,
-.offset-head {
+.control-head {
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -1599,7 +1540,7 @@ input[type="range"]::-webkit-slider-thumb:active {
   flex-direction: column;
   gap: 6px;
 }
-.compact-density-head {
+.compact-control-head {
   margin-bottom: 2px;
 }
 

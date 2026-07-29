@@ -10,16 +10,17 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 
 - Premiere Pro CEP panel: `Window -> Extensions -> AutoCut Studio`
 - One-click analysis of the selected timeline clip's source media
-- Resolve-style beat detection for a consistent clip beat grid
+- Resolve-style automatic beat detection for a consistent clip beat grid
 - Marker target:
   - `Sequence Markers`
   - `Clip Markers`
-- Automatic beat marker selection without manual density tuning
-- Adaptive spacing so weak nearby events are suppressed but strong nearby dhol/tabla hits can survive
-- Final marker selection keeps only the strongest event per whole second
-- Beat-score marker color while marker name/comment fields remain blank
-- Exact marker count mode with Balanced, Strongest, and Spread selection strategies
-- Native AutoCutStudio color correction that samples the current playhead frame and applies one fixed 8/16/32-bpc grade across the selected clip
+- One unified beat-to-marker path with no density profiles or selection strategies
+- Local tempo tracking so gradual tempo changes do not force the whole song onto one fixed grid
+- Rhythmic decoding that can preserve a soft or implied beat inside an active passage
+- Quiet-section gating so long breakdowns are not filled with invented markers
+- Automatic major-hit selection that keeps locally prominent real beats without a per-minute quota
+- One beat-marker color while marker name/comment fields remain blank
+- Native AutoCutStudio color correction that samples the current playhead frame, uses confidence-aware scene statistics, and applies one fixed 8/16/32-bpc grade across the selected clip
 - One-by-one Warp Stabilizer queue for selected video clips
 - Remove blank AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
@@ -56,13 +57,23 @@ Download `AutoCutStudioSetup.exe` from a GitHub release and run it.
 
 The installer:
 
+- requests administrator permission through Windows UAC
+- waits for Premiere Pro, Media Encoder, After Effects, Audition, and Dynamic
+  Link processes to close so Adobe cannot keep the previous native effect
+  locked
+- stages and verifies the complete replacement before activating it; an
+  existing AutoCut Studio panel and native effect are preserved for rollback
+  until the new version passes its integrity checks
+- replaces only the AutoCut Studio-owned extension and native-effect folders,
+  removing stale files from the prior version without touching projects,
+  presets, or unrelated Adobe extensions
 - installs the extension to:
 
 ```text
 %APPDATA%\Adobe\CEP\extensions\com.autocutstudio.panel
 ```
 
-- enables unsigned CEP loading only for Adobe `CSXS.11` through `CSXS.13` registry keys
+- enables unsigned CEP loading for Adobe `CSXS.11` through `CSXS.15` registry keys
 - writes install logs to:
 
 ```text
@@ -177,37 +188,23 @@ To test the bundled analyzer against a real song, build first:
 .\scripts\build-setup-exe.ps1
 ```
 
-Then run the beats analyzer at the marker threshold used for review reports:
+Then run the beat analyzer and write the exact unified marker grid:
 
 ```powershell
 $media = "C:\Users\User\Downloads\Video\O Rangrez Full Video - Bhaag Milkha Bhaag_Farhan, Sonam_Shreya Ghoshal, Javed Bashir_3.mp4"
 $outDir = ".\analysis-reports"
-$threshold = 0.50
 New-Item -ItemType Directory -Force -Path $outDir | Out-Null
 $json = & .\bin\beat_analyzer.exe $media
-$events = $json | ConvertFrom-Json
-$selected = $events |
-  Where-Object { [double]$_.score -ge $threshold } |
-  Group-Object { [math]::Floor([double]$_.time) } |
-  ForEach-Object { $_.Group | Sort-Object score -Descending | Select-Object -First 1 } |
-  Sort-Object time
+$markers = $json | ConvertFrom-Json
 $lines = @(
   "AutoCut Studio Beat Analysis Report",
   "Media: $media",
-  "Threshold: $threshold",
-  "Raw beat count: $($events.Count)",
-  "Selected beat count: $($selected.Count)",
+  "Beat marker count: $($markers.Count)",
   "",
   "time_seconds`tscore"
 )
-$lines += $selected | ForEach-Object { "{0:N3}`t{1:N3}" -f [double]$_.time, [double]$_.score }
-Set-Content -LiteralPath "$outDir\o-rangrez-beats-threshold-050.txt" -Value $lines -Encoding UTF8
-```
-
-Current generated threshold reports in this repo:
-
-```text
-analysis-reports\o-rangrez-beats-threshold-050.txt
+$lines += $markers | ForEach-Object { "{0:N3}`t{1:N3}" -f [double]$_.time, [double]$_.score }
+Set-Content -LiteralPath "$outDir\o-rangrez-beats.txt" -Value $lines -Encoding UTF8
 ```
 
 ## Premiere Workflow
@@ -224,7 +221,10 @@ To clean generated markers, keep the same marker target selected and click:
 Remove AutoCut Studio Markers
 ```
 
-AutoCut Studio applies blank markers: marker name and comments are intentionally empty. Marker color carries the event category signal. Because the markers are intentionally blank, avoid using the remove button on ranges that contain user-created blank markers you want to keep.
+AutoCut Studio applies blank markers: marker name and comments are intentionally
+empty, and every generated beat marker uses one fixed color. Because the
+markers are intentionally blank, avoid using the remove button on ranges that
+contain user-created blank markers you want to keep.
 
 ## Warp Stabilizer Queue
 
@@ -252,16 +252,21 @@ The core Rust analyzer uses multiple onset methods and fuses them:
   - each section is judged against its own recent context, so late quiet hits are not buried by loud earlier drops
   - direct onset-evidence gating prevents steady hum/noise sections from producing fake markers
 
-Scores use non-saturated calibrated confidence, but the panel now uses the `beats` grid output directly instead of asking the editor to tune density.
+The fused onset evidence is decoded as a musical pulse with local tempo
+estimation and dynamic programming. This keeps the grid coherent through
+gradual tempo movement and lets surrounding beats support a weak attack,
+while direct-onset section gating prevents markers from continuing through a
+long quiet breakdown.
 
-Panel filtering then applies:
-
-- threshold filtering
-- adaptive strongest-in-window spacing
-- one strongest selected event per whole second
-- optional extra thinning at the strict end of the slider
-
-The panel uses one Rust `beats` grid path so marker output stays coherent instead of blending unrelated detector styles.
+The marker path then keeps only locally prominent major hits. Each candidate
+must be in the strongest part of its surrounding musical section, clear a
+song-relative strength floor, and be the strongest nearby beat. There is no
+marker-per-minute target, cadence window, or exact count: a song or section
+with many genuine major hits can produce many markers, while a soft section
+can produce very few. Every selected timestamp comes directly from the
+decoded beat grid; no marker time is invented or moved off-beat. There are no
+density controls, timing offsets, or alternate detection profiles exposed to
+the editor.
 
 ## Logs
 
@@ -280,6 +285,10 @@ Panel runtime log:
 ## Current Scope
 
 - Windows is the supported production target.
-- Premiere Pro CEP is the extension platform.
+- Premiere Pro 24.0 or newer is the declared CEP host range. The upper manifest
+  bound is future-tolerant, while runtime diagnostics report the actual Adobe
+  host and bridge versions.
+- Runtime decoding supports the bundled Symphonia formats; Opus/WebA input
+  should be converted to WAV, AAC, MP3, or MP4/M4A before analysis.
 - No FFmpeg, Python, Cargo, or Rust runtime is required on editor machines; runtime decoding is handled by bundled binaries.
 - The setup executable installs an unsigned CEP extension. For wider public distribution, signing/ZXP packaging can be added later.

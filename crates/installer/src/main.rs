@@ -41,8 +41,9 @@ mod windows_installer {
     use std::env;
     use std::error::Error;
     use std::fs;
-    use std::io::Write;
+    use std::io::{self, Write};
     use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
@@ -62,9 +63,14 @@ mod windows_installer {
         log.run_header();
         log.line("AutoCut Studio setup started.");
         verify_embedded_payload()?;
+        wait_for_adobe_apps_to_close(&mut log)?;
 
         let target_dir = target_extension_dir()?;
         log.line(&format!("Target: {}", target_dir.display()));
+        if target_dir.exists() {
+            log.line("Previous AutoCut Studio version detected; clean upgrade started.");
+            println!("Previous AutoCut Studio version found. Replacing it cleanly...");
+        }
 
         let backup_dir = install_files(&target_dir)?;
         verify_files(&target_dir)?;
@@ -107,7 +113,7 @@ mod windows_installer {
         }
         println!();
         if registry_warnings.is_empty() {
-            println!("Unsigned CEP debug mode enabled for CSXS.11 through CSXS.13.");
+            println!("Unsigned CEP debug mode enabled for CSXS.11 through CSXS.15.");
         } else {
             println!("Installed files correctly, but registry setup reported warnings.");
             println!("If the panel does not appear, run this as your Windows user:");
@@ -135,6 +141,77 @@ mod windows_installer {
             .join("CEP")
             .join("extensions")
             .join(EXTENSION_ID))
+    }
+
+    fn wait_for_adobe_apps_to_close(log: &mut InstallLog) -> Result<(), Box<dyn Error>> {
+        loop {
+            let running = match running_adobe_apps() {
+                Ok(running) => running,
+                Err(error) => {
+                    log.line(&format!(
+                        "Warning: could not inspect running Adobe applications: {error}"
+                    ));
+                    return Ok(());
+                }
+            };
+            if running.is_empty() {
+                return Ok(());
+            }
+
+            let names = running.join(", ");
+            log.line(&format!("Waiting for Adobe applications to close: {names}"));
+            println!("Close these Adobe applications before installation:");
+            println!("{names}");
+            println!();
+            println!("This prevents Premiere or Media Encoder from locking the old plugin.");
+            println!("Close them, then press Enter to retry. Type Q and press Enter to cancel.");
+
+            let mut answer = String::new();
+            io::stdin().read_line(&mut answer)?;
+            if answer.trim().eq_ignore_ascii_case("q") {
+                return Err("installation cancelled while Adobe applications were running".into());
+            }
+            println!();
+        }
+    }
+
+    fn running_adobe_apps() -> Result<Vec<String>, Box<dyn Error>> {
+        const ADOBE_MEDIA_PROCESSES: &[&str] = &[
+            "Adobe Premiere Pro.exe",
+            "Adobe Media Encoder.exe",
+            "AfterFX.exe",
+            "aerender.exe",
+            "Adobe Audition.exe",
+            "dynamiclinkmanager.exe",
+        ];
+
+        let output = Command::new("tasklist")
+            .args(["/FO", "CSV", "/NH"])
+            .output()?;
+        if !output.status.success() {
+            return Err(format!("tasklist exited with {}", output.status).into());
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let mut found = Vec::new();
+        for line in text.lines() {
+            let process_name = line
+                .strip_prefix('"')
+                .and_then(|value| value.split("\",").next())
+                .unwrap_or("");
+            if let Some(display_name) = ADOBE_MEDIA_PROCESSES
+                .iter()
+                .find(|candidate| candidate.eq_ignore_ascii_case(process_name))
+            {
+                if !found
+                    .iter()
+                    .any(|existing: &String| existing.eq_ignore_ascii_case(display_name))
+                {
+                    found.push((*display_name).to_string());
+                }
+            }
+        }
+        Ok(found)
     }
 
     fn install_files(target_dir: &Path) -> Result<PathBuf, Box<dyn Error>> {
@@ -300,34 +377,49 @@ mod windows_installer {
     }
 
     fn write_native_plugins(target_dir: &Path, files: &[&FileEntry]) -> Result<(), Box<dyn Error>> {
-        if target_dir.exists() {
-            fs::remove_dir_all(target_dir)?;
-        }
-        fs::create_dir_all(target_dir)?;
-        for file in files {
-            let relative = file
-                .relative_path
-                .strip_prefix(NATIVE_PLUGIN_PREFIX)
-                .ok_or("invalid native plugin payload path")?;
-            let path = target_dir.join(relative);
-            if let Some(parent) = path.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(&path, file.bytes)?;
-            let written = fs::read(&path)?;
-            if Sha256::digest(&written) != Sha256::digest(file.bytes) {
-                return Err(
-                    format!("native plugin verification failed: {}", path.display()).into(),
-                );
-            }
-        }
-        Ok(())
+        autocut_studio_setup::native::replace_directory_transactionally(
+            target_dir,
+            |staging| {
+                for file in files {
+                    let relative = file
+                        .relative_path
+                        .strip_prefix(NATIVE_PLUGIN_PREFIX)
+                        .ok_or("invalid native plugin payload path")?;
+                    let path = staging.join(relative);
+                    if let Some(parent) = path.parent() {
+                        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                    }
+                    fs::write(&path, file.bytes).map_err(|error| error.to_string())?;
+                }
+                Ok(())
+            },
+            |candidate| {
+                for file in files {
+                    let relative = file
+                        .relative_path
+                        .strip_prefix(NATIVE_PLUGIN_PREFIX)
+                        .ok_or("invalid native plugin payload path")?;
+                    let path = candidate.join(relative);
+                    let written = fs::read(&path).map_err(|error| {
+                        format!("could not read native plugin {}: {error}", path.display())
+                    })?;
+                    if Sha256::digest(&written) != Sha256::digest(file.bytes) {
+                        return Err(format!(
+                            "native plugin verification failed: {}",
+                            path.display()
+                        ));
+                    }
+                }
+                Ok(())
+            },
+        )
+        .map_err(Into::into)
     }
 
     fn enable_unsigned_cep() -> Vec<String> {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let mut warnings = Vec::new();
-        for version in 11..=13 {
+        for version in 11..=15 {
             let path = format!("Software\\Adobe\\CSXS.{version}");
             match hkcu.create_subkey(&path) {
                 Ok((key, _)) => {

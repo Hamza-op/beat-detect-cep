@@ -111,5 +111,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Run installer upgrade and stale-file tests
-        run: cargo test -p autocut_studio_setup install::tests
+      - name: Run installer transaction tests
+        run: cargo test -p autocut_studio_setup

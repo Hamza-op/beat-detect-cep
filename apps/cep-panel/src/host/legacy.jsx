@@ -14,6 +14,7 @@ if (!JSON.parse) {
 
 (function () {
   var TICKS_PER_SECOND = 254016000000;
+  var AUTOCUT_EXTENSION_VERSION = "1.1.0";
 
   function esc(value) {
     return String(value)
@@ -82,6 +83,20 @@ if (!JSON.parse) {
       throw new Error("JSON parsing failed in scripting host: " + e.message);
     }
   }
+
+  AutoCutStudio.hostInfo = function () {
+    try {
+      return ok({
+        bridgeVersion: 1,
+        extensionVersion: AUTOCUT_EXTENSION_VERSION,
+        hostName: app && app.name ? String(app.name) : "Premiere Pro",
+        hostVersion: app && app.version ? String(app.version) : "unknown",
+        projectAvailable: Boolean(app && app.project)
+      });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
 
   function timeToSeconds(time) {
     if (!time) {

@@ -10,6 +10,12 @@ The native color engine now supports 8-bpc, 16-bpc, and 32-bpc float render path
 - HDR-preserving float correction math that keeps channel values above `1.0` instead of clipping highlights to SDR.
 - Playhead-frame native analysis for the panel Auto Color workflow.
 - Shared 8-bpc, 16-bpc, and 32-bpc correction kernel so bit-depth paths do not drift.
+- Letterbox-aware frame statistics that ignore contiguous black bars without
+  discarding genuinely dark footage.
+- Conservative white-balance fallback that refuses to neutralize strongly
+  saturated stage lighting when no neutral reference is present.
+- Confidence-aware auto amount so clipped, low-light, or low-information frames
+  receive a softer starting grade.
 
 ## Not Implemented Yet
 

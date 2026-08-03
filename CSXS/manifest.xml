@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
     ExtensionBundleId="com.autocutstudio"
-    ExtensionBundleVersion="1.1.0"
+    ExtensionBundleVersion="1.1.1"
     ExtensionBundleName="AutoCut Studio">
   <ExtensionList>
-    <Extension Id="com.autocutstudio.panel" Version="1.1.0"/>
+    <Extension Id="com.autocutstudio.panel" Version="1.1.1"/>
   </ExtensionList>
   <ExecutionEnvironment>
     <HostList>

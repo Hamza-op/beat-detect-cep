@@ -14,7 +14,7 @@ if (!JSON.parse) {
 
 (function () {
   var TICKS_PER_SECOND = 254016000000;
-  var AUTOCUT_EXTENSION_VERSION = "1.1.0";
+  var AUTOCUT_EXTENSION_VERSION = "1.1.1";
 
   function esc(value) {
     return String(value)

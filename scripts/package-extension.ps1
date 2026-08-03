@@ -24,7 +24,7 @@ try {
 New-Item -ItemType Directory -Force (Join-Path $packageDir "bin"),(Join-Path $packageDir "native\MediaCore") | Out-Null
 Copy-Item (Join-Path $root "bin\beat_analyzer.exe") (Join-Path $packageDir "bin\beat_analyzer.exe")
 Copy-Item $nativePlugin (Join-Path $packageDir "native\MediaCore\AutoCutColorEngine.aex")
-Set-Content -LiteralPath (Join-Path $packageDir "INSTALL.txt") -Value "AutoCut Studio 1.1.0 (unsigned Windows build). Copy this directory to the Adobe CEP extensions folder." -Encoding UTF8
+Set-Content -LiteralPath (Join-Path $packageDir "INSTALL.txt") -Value "AutoCut Studio 1.1.1 (unsigned Windows build). Copy this directory to the Adobe CEP extensions folder." -Encoding UTF8
 
 node (Join-Path $root "tools\package\assemble.mjs")
 node (Join-Path $root "tools\verify\payload.mjs")

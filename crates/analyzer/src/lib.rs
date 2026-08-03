@@ -374,16 +374,18 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
     events.sort_by(|a, b| a.time.total_cmp(&b.time));
 
     const CONTEXT_SECONDS: f64 = 6.0;
-    const PEAK_RADIUS_SECONDS: f64 = 1.25;
-    const GLOBAL_MAJOR_PERCENTILE: f32 = 0.70;
+    const GLOBAL_MAJOR_PERCENTILE: f32 = 0.60;
     let global_scores = events.iter().map(|event| event.score).collect::<Vec<_>>();
     let global_major_floor = robust_percentile(&global_scores, GLOBAL_MAJOR_PERCENTILE);
+    let peak_radius_seconds = marker_peak_radius(&events);
     let mut selected = Vec::new();
 
     for (index, event) in events.iter().enumerate() {
         // Scores are rank-calibrated over the decoded beat grid. A global
         // percentile floor removes isolated weak candidates in sparse
-        // passages while remaining relative to each song's dynamics.
+        // passages while remaining relative to each song's dynamics. It is
+        // intentionally broad: a repeated musical accent should survive even
+        // when its score is a little below a single drop or cymbal crash.
         if event.score < global_major_floor {
             continue;
         }
@@ -395,19 +397,22 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
             .collect::<Vec<_>>();
 
         // Sparse passages already contain only meaningful candidates. In
-        // denser passages, require a beat to sit in the strongest local fifth
-        // and rise clearly above the surrounding beat strength.
+        // Denser passages need contrast against their local background. A
+        // fixed high percentile misses recurring secondary accents, while a
+        // simple median lets a long run of weak beats through. Interpolating
+        // from the background toward the local accent level keeps genuine
+        // dhol, clap, and kick patterns without flooding the timeline.
         if context_scores.len() >= 6 {
-            let local_median = robust_percentile(&context_scores, 0.50);
-            let local_strong = robust_percentile(&context_scores, 0.85);
-            let threshold = local_strong.max(local_median + 0.08);
-            if event.score < threshold {
+            let local_background = robust_percentile(&context_scores, 0.40);
+            let local_accent = robust_percentile(&context_scores, 0.85);
+            let local_threshold = local_background + (local_accent - local_background) * 0.30;
+            if event.score < local_threshold {
                 continue;
             }
         }
 
         let is_local_peak = events.iter().enumerate().all(|(other_index, candidate)| {
-            if other_index == index || (candidate.time - event.time).abs() > PEAK_RADIUS_SECONDS {
+            if other_index == index || (candidate.time - event.time).abs() > peak_radius_seconds {
                 return true;
             }
             candidate.score < event.score
@@ -427,6 +432,31 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
         }
     }
     selected
+}
+
+fn marker_peak_radius(events: &[Event]) -> f64 {
+    // The decoded event grid already expresses the song's pulse. Suppress
+    // only competing events inside the same beat, not valid accents in the
+    // following beats. The bounds cover dense percussion while retaining a
+    // small guard against duplicate frame-level candidates.
+    let mut gaps = events
+        .windows(2)
+        .filter_map(|pair| {
+            let gap = pair[1].time - pair[0].time;
+            (gap.is_finite() && gap > 0.0).then_some(gap)
+        })
+        .collect::<Vec<_>>();
+    if gaps.is_empty() {
+        return 0.45;
+    }
+    gaps.sort_by(|left, right| left.total_cmp(right));
+    let middle = gaps.len() / 2;
+    let median_gap = if gaps.len() % 2 == 0 {
+        (gaps[middle - 1] + gaps[middle]) * 0.5
+    } else {
+        gaps[middle]
+    };
+    (median_gap * 0.72).clamp(0.32, 0.75)
 }
 
 struct FramePreData {
@@ -2310,6 +2340,31 @@ mod tests {
         assert!(
             major_hits.iter().all(|event| event.score >= 0.70),
             "weak background beats should not survive major-hit selection: {major_hits:?}"
+        );
+    }
+
+    #[test]
+    fn retains_repeated_strong_accents_in_a_dense_rhythm() {
+        let events = (0..32)
+            .map(|index| Event {
+                time: index as f64 * 0.50,
+                score: match index % 4 {
+                    0 => 0.94,
+                    2 => 0.82,
+                    _ => 0.36,
+                },
+            })
+            .collect::<Vec<_>>();
+
+        let major_hits = select_major_hit_markers(events);
+
+        assert!(
+            major_hits.len() >= 14,
+            "repeated strong accents were over-pruned: {major_hits:?}"
+        );
+        assert!(
+            major_hits.iter().all(|event| event.score >= 0.82),
+            "weak in-between beats must not become markers: {major_hits:?}"
         );
     }
 

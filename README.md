@@ -1,6 +1,6 @@
 ﻿# AutoCut Studio
 
-Version: `1.1.0`
+Version: `1.1.1`
 
 AutoCut Studio is a Windows-first Adobe Premiere Pro tool for beat-grid edit markers, automated timeline helpers, and native color-correction work. The beat analyzer is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, claps, drops, and strong rhythmic sections.
 

@@ -2,7 +2,7 @@
   "use strict";
 
   var cs = new CSInterface();
-  var APP_VERSION = "1.1.0";
+  var APP_VERSION = "1.1.1";
   var BEAT_MARKER_COLOR_INDEX = 3;
   var state = {
     allEvents: [],
@@ -595,17 +595,26 @@
         return runHybridAnalyzer(state.clip.mediaPath, state.clip);
       })
       .then(function (analysis) {
-        state.allEvents = cropEventsToSelectedClip(
-          sanitizeEvents(analysis.events || []),
-          state.clip,
-        );
+        var analyzerEvents = sanitizeEvents(analysis.events || []);
+        state.allEvents = cropEventsToSelectedClip(analyzerEvents, state.clip);
         filterEvents();
         dom.beatResultsPanel.classList.remove("is-hidden");
+        if (state.allEvents.length !== analyzerEvents.length) {
+          appendLog(
+            "BEAT RANGE: analyzer returned " +
+              analyzerEvents.length +
+              "; kept " +
+              state.allEvents.length +
+              " within the selected clip range.",
+          );
+        }
         setStatus(
           (isBrowserPreview()
             ? "Preview analysis complete: "
             : "Analysis complete: ") +
-            "found " +
+            "received " +
+            analyzerEvents.length +
+            "; keeping " +
             state.markerEvents.length +
             " " +
             getBeatWorkflowLabel() +

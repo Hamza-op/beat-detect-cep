@@ -89,7 +89,11 @@ mod windows_installer {
             fs::remove_dir_all(&backup_dir)?;
         }
 
-        let registry_warnings = enable_unsigned_cep();
+        let registry_warnings = if cfg!(feature = "development-unsigned") {
+            enable_unsigned_cep()
+        } else {
+            Vec::new()
+        };
         for warning in &registry_warnings {
             log.line(&format!("Warning: {warning}"));
         }
@@ -112,8 +116,12 @@ mod windows_installer {
             }
         }
         println!();
-        if registry_warnings.is_empty() {
-            println!("Unsigned CEP debug mode enabled for CSXS.11 through CSXS.15.");
+        if !cfg!(feature = "development-unsigned") {
+            println!("Production-signed install: Adobe CEP debug mode was not changed.");
+        } else if registry_warnings.is_empty() {
+            println!(
+                "Development install: unsigned CEP debug mode enabled for CSXS.11 through CSXS.15."
+            );
         } else {
             println!("Installed files correctly, but registry setup reported warnings.");
             println!("If the panel does not appear, run this as your Windows user:");
@@ -314,6 +322,7 @@ mod windows_installer {
         for file in FILES {
             autocut_studio_setup::payload::validate_relative_path(file.relative_path)?;
             if file.relative_path != "payload-manifest.json"
+                && !file.relative_path.starts_with("META-INF/")
                 && !manifest.files.contains_key(file.relative_path)
             {
                 return Err(format!(

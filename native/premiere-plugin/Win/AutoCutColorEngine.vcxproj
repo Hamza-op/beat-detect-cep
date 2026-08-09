@@ -115,6 +115,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <CustomBuild Include="..\AutoCutColorEnginePiPL.r">
+      <AdditionalInputs>..\autocut_product_version.h;%(AdditionalInputs)</AdditionalInputs>
       <Message Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compiling the PiPL</Message>
       <Message Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compiling the PiPL</Message>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">cl /I "$(ProjectDir)..\..\..\vendor\adobe-sdk\Headers" /EP ".."\\"%(Filename).r" &gt; "$(IntDir)"\\"%(Filename).rr"

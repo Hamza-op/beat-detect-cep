@@ -1,4 +1,5 @@
 #include "../color_engine.h"
+#include <algorithm>
 #include <cassert>
 #include <cmath>
 #include <vector>
@@ -22,8 +23,48 @@ int main() {
     assert_result(result);
 
     std::vector<float> pixels32(width * height * 4, 0.5f);
+    for (size_t i = 3; i < pixels32.size(); i += 4) {
+        pixels32[i] = 1.0f;
+    }
     assert(ColorEngine{}.AnalyzeFrame32(pixels32.data(), width, height, width * 16, result));
     assert_result(result);
+
+    {
+        // Float analysis must retain scene-referred highlight separation above
+        // 1.0 instead of making it identical to a hard-clipped SDR frame.
+        const int hdr_width = 32;
+        const int hdr_height = 16;
+        std::vector<float> hdr(hdr_width * hdr_height * 4, 1.0f);
+        std::vector<float> clipped(hdr_width * hdr_height * 4, 1.0f);
+        for (int y = 0; y < hdr_height; ++y) {
+            for (int x = 0; x < hdr_width; ++x) {
+                const size_t offset =
+                    (static_cast<size_t>(y) * hdr_width + static_cast<size_t>(x)) * 4;
+                const float value = x < 8 ? 0.35f : (x < 16 ? 1.2f : (x < 24 ? 2.0f : 4.0f));
+                hdr[offset + 0] = value;
+                hdr[offset + 1] = value * 0.96f;
+                hdr[offset + 2] = value * 0.90f;
+                hdr[offset + 3] = 1.0f;
+                clipped[offset + 0] = std::min(1.0f, hdr[offset + 0]);
+                clipped[offset + 1] = std::min(1.0f, hdr[offset + 1]);
+                clipped[offset + 2] = std::min(1.0f, hdr[offset + 2]);
+                clipped[offset + 3] = 1.0f;
+            }
+        }
+        FrameAnalysisResult hdr_result{};
+        FrameAnalysisResult clipped_result{};
+        assert(ColorEngine{}.AnalyzeFrame32(
+            hdr.data(), hdr_width, hdr_height, hdr_width * 16, hdr_result));
+        assert(ColorEngine{}.AnalyzeFrame32(
+            clipped.data(), hdr_width, hdr_height, hdr_width * 16, clipped_result));
+        assert_result(hdr_result);
+        assert_result(clipped_result);
+        assert(
+            std::fabs(hdr_result.exposure - clipped_result.exposure) > 0.001f ||
+            std::fabs(hdr_result.highlights - clipped_result.highlights) > 0.001f ||
+            std::fabs(hdr_result.whites - clipped_result.whites) > 0.001f
+        );
+    }
 
     assert(!ColorEngine{}.AnalyzeFrame8(nullptr, width, height, width * 4, result));
 

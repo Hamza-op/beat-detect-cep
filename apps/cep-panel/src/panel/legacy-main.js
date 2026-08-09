@@ -3,7 +3,6 @@
 
   var cs = new CSInterface();
   var APP_VERSION = "1.1.1";
-  var BEAT_MARKER_COLOR_INDEX = 3;
   var state = {
     allEvents: [],
     markerEvents: [],
@@ -29,6 +28,12 @@
     filteredCount: document.getElementById("filteredCount"),
     totalCount: document.getElementById("totalCount"),
     markerTarget: document.getElementById("markerTarget"),
+    markerTimingOffsetSlider: document.getElementById(
+      "markerTimingOffsetSlider",
+    ),
+    markerTimingOffsetLabel: document.getElementById(
+      "markerTimingOffsetLabel",
+    ),
     zoomSlider: document.getElementById("zoomSlider"),
     zoomLabel: document.getElementById("zoomLabel"),
     autoZoomRatio: document.getElementById("autoZoomRatio"),
@@ -91,6 +96,8 @@
     if (dom.autoColorButton) dom.autoColorButton.disabled = isBusy;
     if (dom.resetColorButton) dom.resetColorButton.disabled = isBusy;
     if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
+    if (dom.markerTimingOffsetSlider)
+      dom.markerTimingOffsetSlider.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.markerEvents.length === 0;
   }
 
@@ -547,12 +554,45 @@
       });
   }
 
-  function eventsForPremiere(events) {
+  function markerTimingOffsetMilliseconds() {
+    if (!dom.markerTimingOffsetSlider) return 0;
+
+    var offset = Number(dom.markerTimingOffsetSlider.value);
+    if (!isFinite(offset)) return 0;
+
+    var minimum = Number(dom.markerTimingOffsetSlider.min);
+    var maximum = Number(dom.markerTimingOffsetSlider.max);
+    if (!isFinite(minimum)) minimum = -500;
+    if (!isFinite(maximum)) maximum = 500;
+    return Math.max(minimum, Math.min(maximum, Math.round(offset)));
+  }
+
+  function updateMarkerTimingOffsetLabel() {
+    if (!dom.markerTimingOffsetLabel) return;
+
+    var offset = markerTimingOffsetMilliseconds();
+    dom.markerTimingOffsetLabel.textContent =
+      (offset > 0 ? "+" : "") + offset + " ms";
+  }
+
+  function markerTimingDescription(offsetMilliseconds) {
+    if (!offsetMilliseconds) return "";
+
+    return (
+      " (" +
+      Math.abs(offsetMilliseconds) +
+      " ms " +
+      (offsetMilliseconds < 0 ? "earlier" : "later") +
+      ")"
+    );
+  }
+
+  function eventsForPremiere(events, offsetMilliseconds) {
+    var offsetSeconds = offsetMilliseconds / 1000;
     return events.map(function (event) {
       return {
-        time: event.time,
+        time: Number((event.time + offsetSeconds).toFixed(6)),
         score: event.score,
-        colorIndex: BEAT_MARKER_COLOR_INDEX,
       };
     });
   }
@@ -638,9 +678,14 @@
       return;
     }
 
+    var markerOffsetMilliseconds = markerTimingOffsetMilliseconds();
     setBusy(true);
     setStatus(
-      "Applying " + state.markerEvents.length + " markers in Premiere...",
+      "Applying " +
+        state.markerEvents.length +
+        " markers in Premiere" +
+        markerTimingDescription(markerOffsetMilliseconds) +
+        "...",
       false,
       true,
     );
@@ -655,7 +700,10 @@
       outPointSeconds: state.clip ? state.clip.outPointSeconds : null,
     };
 
-    var allEvents = eventsForPremiere(state.markerEvents);
+    var allEvents = eventsForPremiere(
+      state.markerEvents,
+      markerOffsetMilliseconds,
+    );
     var chunkSize = 50;
     var totalApplied = 0;
     var totalSkipped = 0;
@@ -754,7 +802,9 @@
             totalApplied +
             "; skipped " +
             totalSkipped +
-            " outside the selected clip range.",
+            " outside the selected clip range" +
+            markerTimingDescription(markerOffsetMilliseconds) +
+            ".",
           false,
           false,
           true,
@@ -823,6 +873,10 @@
       return;
     }
 
+    if (!confirm("Clear AutoCut Studio markers in the selected range?")) {
+      return;
+    }
+
     setBusy(true);
     setStatus(
       "Removing AutoCut Studio markers from the selected " +
@@ -837,10 +891,6 @@
       identity: state.clip ? state.clip.identity : "",
       mediaPath: state.clip ? state.clip.mediaPath : "",
     };
-
-    if (!confirm("Clear AutoCut Studio markers in the selected range?")) {
-      return;
-    }
 
     cepEval(
       "AutoCutStudio.removeMarkers(" +
@@ -1113,7 +1163,7 @@
 
     var autoColorStarted = Date.now();
     function waitForAutoColorEffect() {
-      return cepEval("AutoCutStudio.isAutoColorEffectReady()").then(
+      return cepEval("AutoCutStudio.prepareAutoColorAtPlayhead()").then(
         function (result) {
           if (result.ready) return result;
           if (Date.now() - autoColorStarted >= 5000) {
@@ -1131,7 +1181,7 @@
         return result.ready ? result : waitForAutoColorEffect();
       })
       .then(function () {
-        return cepEval("AutoCutStudio.autoColorAtPlayhead()");
+        return cepEval("AutoCutStudio.autoColorSelectedClips()");
       })
       .then(function (result) {
         var engine = result.engine || "AutoCut custom correction";
@@ -1607,6 +1657,13 @@
     dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
   if (dom.resetColorButton)
     dom.resetColorButton.addEventListener("click", resetColorGrade);
+  if (dom.markerTimingOffsetSlider) {
+    dom.markerTimingOffsetSlider.addEventListener(
+      "input",
+      updateMarkerTimingOffsetLabel,
+    );
+    updateMarkerTimingOffsetLabel();
+  }
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function () {
       if (dom.autoZoomRatio) dom.autoZoomRatio.checked = false;

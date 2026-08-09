@@ -18,6 +18,7 @@ pub struct PayloadManifest {
 
 pub const ALLOWLIST: &[&str] = &[
     "CSXS/manifest.xml",
+    "META-INF/",
     "index.html",
     "css/",
     "js/",

@@ -7,10 +7,7 @@ const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
-const hostFiles = [
-  "apps/cep-panel/src/host/legacy.jsx",
-  "apps/cep-panel/src/host/dispatcher.jsx",
-];
+const hostFiles = ["apps/cep-panel/src/host/legacy.jsx"];
 
 for (const relativeFile of hostFiles) {
   const source = await readFile(path.join(root, relativeFile), "utf8");

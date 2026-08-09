@@ -186,7 +186,7 @@ static bool AnalyzeFrameTemplate(
     int r_histogram[256] = {0};
     int g_histogram[256] = {0};
     int b_histogram[256] = {0};
-    int skin_r_sum = 0, skin_g_sum = 0, skin_b_sum = 0;
+    int skin_r_sum = 0, skin_g_sum = 0;
     int skin_count = 0;
 
     const AnalysisBounds bounds =
@@ -253,7 +253,6 @@ static bool AnalyzeFrameTemplate(
             if (h >= 5.0f && h <= 34.0f && s >= 0.18f && s <= 0.60f && v >= 0.25f && v <= 0.95f) {
                 skin_r_sum += r;
                 skin_g_sum += g;
-                skin_b_sum += b;
                 skin_count++;
             }
 
@@ -415,8 +414,6 @@ static bool AnalyzeFrameTemplate(
     if (skin_count > 200) {
         float avg_skin_r = static_cast<float>(skin_r_sum) / skin_count;
         float avg_skin_g = static_cast<float>(skin_g_sum) / skin_count;
-        float avg_skin_b = static_cast<float>(skin_b_sum) / skin_count;
-
         float rg_ratio = avg_skin_r / (avg_skin_g + 0.001f);
         if (rg_ratio > 1.45f) {
             result.temperature -= 0.7f;
@@ -491,14 +488,72 @@ bool ColorEngine::AnalyzeFrame32(
     if (!pixel_buffer || width <= 0 || height <= 0 || row_bytes < width * 4 * static_cast<int>(sizeof(float))) {
         return false;
     }
+    // Premiere float frames can legitimately carry scene-referred values above
+    // 1.0. Preserve their ordering instead of clipping every super-white to the
+    // same 8-bit value. SDR frames remain byte-for-byte equivalent to the
+    // existing path; HDR frames reserve the top 10% for highlight headroom.
+    constexpr int kHeadroomBins = 512;
+    constexpr float kMaxHeadroom = 16.0f;
+    size_t headroom_histogram[kHeadroomBins] = {};
+    size_t pixel_count = 0;
+    for (int y = 0; y < height; ++y) {
+        const float* source = reinterpret_cast<const float*>(
+            reinterpret_cast<const unsigned char*>(pixel_buffer) + static_cast<size_t>(y) * row_bytes);
+        for (int x = 0; x < width; ++x) {
+            const size_t offset = static_cast<size_t>(x) * 4u;
+            const float r = std::isfinite(source[offset]) ? std::max(0.0f, source[offset]) : 0.0f;
+            const float g = std::isfinite(source[offset + 1]) ? std::max(0.0f, source[offset + 1]) : 0.0f;
+            const float b = std::isfinite(source[offset + 2]) ? std::max(0.0f, source[offset + 2]) : 0.0f;
+            const float peak = std::min(kMaxHeadroom, std::max(r, std::max(g, b)));
+            const int bin = std::min(
+                kHeadroomBins - 1,
+                static_cast<int>((peak / kMaxHeadroom) * static_cast<float>(kHeadroomBins - 1))
+            );
+            ++headroom_histogram[bin];
+            ++pixel_count;
+        }
+    }
+
+    const size_t percentile_target = std::max<size_t>(1, (pixel_count * 99u + 99u) / 100u);
+    size_t cumulative = 0;
+    int percentile_bin = 0;
+    for (; percentile_bin < kHeadroomBins; ++percentile_bin) {
+        cumulative += headroom_histogram[percentile_bin];
+        if (cumulative >= percentile_target) {
+            break;
+        }
+    }
+    const float robust_peak =
+        (static_cast<float>(percentile_bin) / static_cast<float>(kHeadroomBins - 1)) * kMaxHeadroom;
+    const bool has_hdr_headroom = robust_peak > 1.02f;
+    const float analysis_white = std::max(1.02f, robust_peak);
+
     std::vector<unsigned char> converted(static_cast<size_t>(width) * static_cast<size_t>(height) * 4u);
     for (int y = 0; y < height; ++y) {
         const float* source = reinterpret_cast<const float*>(
             reinterpret_cast<const unsigned char*>(pixel_buffer) + static_cast<size_t>(y) * row_bytes);
-        for (int x = 0; x < width * 4; ++x) {
-            const float value = std::isfinite(source[x]) ? source[x] : 0.0f;
-            converted[static_cast<size_t>(y) * width * 4u + static_cast<size_t>(x)] =
-                static_cast<unsigned char>(ClampFloat(value, 0.0f, 1.0f) * 255.0f + 0.5f);
+        for (int x = 0; x < width; ++x) {
+            const size_t source_offset = static_cast<size_t>(x) * 4u;
+            const size_t destination_offset =
+                static_cast<size_t>(y) * static_cast<size_t>(width) * 4u + source_offset;
+            for (int channel = 0; channel < 3; ++channel) {
+                const float raw = std::isfinite(source[source_offset + channel])
+                    ? std::max(0.0f, source[source_offset + channel])
+                    : 0.0f;
+                float mapped = raw;
+                if (has_hdr_headroom) {
+                    mapped = raw <= 1.0f
+                        ? raw * 0.9f
+                        : 0.9f + 0.1f * ClampFloat((raw - 1.0f) / (analysis_white - 1.0f), 0.0f, 1.0f);
+                }
+                converted[destination_offset + static_cast<size_t>(channel)] =
+                    static_cast<unsigned char>(ClampFloat(mapped, 0.0f, 1.0f) * 255.0f + 0.5f);
+            }
+            const float alpha = std::isfinite(source[source_offset + 3])
+                ? source[source_offset + 3]
+                : 0.0f;
+            converted[destination_offset + 3] =
+                static_cast<unsigned char>(ClampFloat(alpha, 0.0f, 1.0f) * 255.0f + 0.5f);
         }
     }
     return AnalyzeFrame8(converted.data(), width, height, width * 4, result);

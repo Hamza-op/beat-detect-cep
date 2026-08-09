@@ -7,5 +7,6 @@ and analysis-status support.
 
 Warp Stabilizer stops when Premiere cannot report analysis status. This is
 intentional: the queue never applies the next effect blindly. Motion Clear
-only touches AutoCutStudio Transform components and preserves built-in Motion
-keys. Color Reset only disables the exact AutoCutStudio Color Engine instance.
+only touches the dedicated Premiere Transform component recorded by AutoCut
+Studio and preserves built-in Motion and unrelated Transform keys. Color Reset
+only disables the exact AutoCutStudio Color Engine instance.

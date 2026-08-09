@@ -1,6 +1,7 @@
 {
   "name": "autocut-studio",
   "private": true,
+  "type": "module",
   "version": "1.1.1",
   "engines": {
     "node": ">=20"
@@ -13,20 +14,20 @@
     "test:browser": "playwright test",
     "build": "node tools/build/generate-metadata.mjs && node tools/build/panel.mjs",
     "preview": "node tools/build/preview.mjs",
-    "package": "node tools/package/assemble.mjs",
+    "package": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-extension.ps1",
     "verify": "node tools/verify/payload.mjs",
     "verify:host": "node tools/verify/host-es3.mjs"
   },
   "devDependencies": {
-    "@playwright/test": "1.45.3",
-    "@types/node": "20.14.12",
-    "@typescript-eslint/eslint-plugin": "7.16.1",
-    "@typescript-eslint/parser": "7.16.1",
-    "esbuild": "0.23.0",
-    "eslint": "8.57.0",
-    "espree": "9.6.1",
-    "prettier": "3.3.3",
-    "typescript": "5.5.4",
-    "vitest": "2.0.5"
+    "@playwright/test": "^1.62.1",
+    "@types/node": "^22.18.8",
+    "@typescript-eslint/eslint-plugin": "^8.40.0",
+    "@typescript-eslint/parser": "^8.40.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^9.35.0",
+    "espree": "^10.4.0",
+    "prettier": "^3.6.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
   }
 }

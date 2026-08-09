@@ -6,6 +6,7 @@ edition = "2021"
 [features]
 default = []
 embedded-payload = []
+development-unsigned = []
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }

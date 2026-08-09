@@ -17,7 +17,7 @@ if (
 )
   throw new Error("Unsupported payload manifest schema");
 const allowed =
-  /^(CSXS\/manifest\.xml|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt|payload-manifest\.json)$/;
+  /^(CSXS\/manifest\.xml|META-INF\/.+|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt|payload-manifest\.json)$/;
 const actualFiles = [];
 async function walk(dir, relative = "") {
   for (const entry of await readdir(dir, { withFileTypes: true })) {

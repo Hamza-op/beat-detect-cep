@@ -7,6 +7,8 @@
 
   function CSInterface() {}
 
+  window.__autocutPreviewCalls = window.__autocutPreviewCalls || [];
+
   if (!window.SystemPath) {
     window.SystemPath = {
       EXTENSION: "extension"
@@ -30,6 +32,8 @@
       return;
     }
 
+    window.__autocutPreviewCalls.push(script);
+
     if (typeof callback === "function") {
       if (script.indexOf("AutoCutStudio.getSelectedClipInfo") === 0) {
         callback(JSON.stringify({
@@ -46,8 +50,13 @@
         return;
       }
 
-      if (script.indexOf("AutoCutStudio.applyMarkersChunk") === 0 || script.indexOf("AutoCutStudio.applyMarkers") === 0) {
-        var match = script.match(/AutoCutStudio\.(?:applyMarkersChunk|applyMarkers)\((.*)\)/);
+      if (script.indexOf("AutoCutStudio.scanMarkers") === 0) {
+        callback(JSON.stringify({ ok: true, count: 12 }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.applyMarkersChunk") === 0) {
+        var match = script.match(/AutoCutStudio\.applyMarkersChunk\((.*)\)/);
         var applied = 0;
         if (match && match[1]) {
           try {
@@ -58,6 +67,11 @@
           }
         }
         callback(JSON.stringify({ ok: true, applied: applied, skipped: 0 }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.removeMarkersExactTimes") === 0) {
+        callback(JSON.stringify({ ok: true, removed: 0 }));
         return;
       }
 
@@ -81,7 +95,12 @@
         return;
       }
 
-      if (script.indexOf("AutoCutStudio.autoColorSelectedClips") === 0 || script.indexOf("AutoCutStudio.autoColorAtPlayhead") === 0) {
+      if (script.indexOf("AutoCutStudio.prepareAutoColorAtPlayhead") === 0) {
+        callback(JSON.stringify({ ok: true, ready: true }));
+        return;
+      }
+
+      if (script.indexOf("AutoCutStudio.autoColorSelectedClips") === 0) {
         callback(JSON.stringify({
           ok: true,
           applied: 1,

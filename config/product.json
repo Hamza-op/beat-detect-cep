@@ -15,16 +15,7 @@
     "extensionZip": "AutoCutStudio-CEP-Windows.zip",
     "payloadDirectory": "dist/com.autocutstudio.panel"
   },
-  "markerColors": {
-    "weak": 1,
-    "moderate": 3,
-    "strong": 6,
-    "peak": 11
-  },
   "nativeEffects": {
-    "colorDisplayName": "AutoCutStudio Color Engine",
-    "colorMatchName": "com.autocutstudio.color.engine",
-    "transformDisplayName": "AutoCutStudio Transform",
-    "transformMatchName": "com.autocutstudio.transform"
+    "colorMatchName": "com.autocutstudio.color.engine"
   }
 }

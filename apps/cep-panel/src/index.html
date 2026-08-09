@@ -160,6 +160,42 @@
               </div>
             </div>
 
+            <!-- Placement timing -->
+            <div class="marker-timing-control">
+              <div class="control-head">
+                <label class="section-subtitle" for="markerTimingOffsetSlider"
+                  >Marker Timing Offset</label
+                >
+                <output
+                  id="markerTimingOffsetLabel"
+                  class="value-highlight"
+                  for="markerTimingOffsetSlider"
+                  aria-live="polite"
+                  >0 ms</output
+                >
+              </div>
+              <div class="slider-wrapper">
+                <input
+                  id="markerTimingOffsetSlider"
+                  type="range"
+                  min="-500"
+                  max="500"
+                  value="0"
+                  step="1"
+                  aria-describedby="markerTimingOffsetHint"
+                />
+              </div>
+              <div class="slider-labels" aria-hidden="true">
+                <span>-500 ms</span>
+                <span>0 ms</span>
+                <span>+500 ms</span>
+              </div>
+              <p id="markerTimingOffsetHint" class="marker-timing-note">
+                Shifts every detected marker. Detection and strongest-hit
+                selection stay unchanged.
+              </p>
+            </div>
+
             <!-- Engine info -->
             <div class="mode-summary-deck">
               <span class="field-label">Active&nbsp;Engine</span>

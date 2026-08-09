@@ -34,15 +34,9 @@ const manifestTemplate = await readFile(
 );
 await mkdir(path.join(output, "CSXS"), { recursive: true });
 await writeFile(path.join(output, "CSXS", "manifest.xml"), manifestTemplate);
-const hostParts = [
-  path.join(source, "host", "legacy.jsx"),
-  path.join(source, "host", "dispatcher.jsx"),
-];
 await mkdir(path.join(output, "jsx"), { recursive: true });
 await writeFile(
   path.join(output, "jsx", "host.jsx"),
-  (await Promise.all(hostParts.map((part) => readFile(part, "utf8")))).join(
-    "\n\n",
-  ),
+  await readFile(path.join(source, "host", "legacy.jsx"), "utf8"),
 );
 console.log(`Built CEP panel at ${path.relative(root, output)}`);

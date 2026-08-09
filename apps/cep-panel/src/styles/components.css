@@ -146,8 +146,8 @@ select optgroup {
 }
 select option:checked,
 select option:hover {
-  background: linear-gradient(0deg, var(--amber-veil), var(--amber-veil)),
-    #1a1d26;
+  background:
+    linear-gradient(0deg, var(--amber-veil), var(--amber-veil)), #1a1d26;
   color: var(--amber-hot);
 }
 select option:disabled {
@@ -1164,6 +1164,20 @@ input[type="range"]::-webkit-slider-thumb:active {
   text-transform: uppercase;
 }
 
+.marker-timing-control {
+  padding: 9px 10px 8px;
+  border: 1px solid var(--rim);
+  border-radius: var(--r-sm);
+  background: var(--bg-control-dn);
+}
+
+.marker-timing-note {
+  margin: 7px 0 0;
+  color: var(--ink-low);
+  font-size: 8px;
+  line-height: 1.45;
+}
+
 .strategy-row {
   display: flex;
   gap: 8px;
@@ -1475,7 +1489,8 @@ input[type="range"]::-webkit-slider-thumb:active {
 .viewfinder-grid {
   position: absolute;
   inset: 0;
-  background: linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.015) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.015) 1px, transparent 1px);
   background-size: 20px 20px;
 }
@@ -1943,7 +1958,8 @@ input[type="range"]::-webkit-slider-thumb:active {
 .dolly-overlay-grid {
   position: absolute;
   inset: 0;
-  background: linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
+  background:
+    linear-gradient(rgba(255, 255, 255, 0.012) 1px, transparent 1px),
     linear-gradient(90deg, rgba(255, 255, 255, 0.012) 1px, transparent 1px);
   background-size: 24px 24px;
   pointer-events: none;
@@ -1960,7 +1976,8 @@ input[type="range"]::-webkit-slider-thumb:active {
   right: 0;
   top: 0;
   bottom: 0;
-  background: linear-gradient(
+  background:
+    linear-gradient(
       180deg,
       transparent 33.3%,
       rgba(255, 255, 255, 0.04) 33.3%,
@@ -1980,7 +1997,8 @@ input[type="range"]::-webkit-slider-thumb:active {
   right: 0;
   top: 0;
   bottom: 0;
-  background: linear-gradient(
+  background:
+    linear-gradient(
       90deg,
       transparent 33.3%,
       rgba(255, 255, 255, 0.04) 33.3%,

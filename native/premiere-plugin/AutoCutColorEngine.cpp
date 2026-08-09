@@ -28,10 +28,11 @@ struct CapturedAnalysisState {
     A_Boolean valid;
     float capture_token;
     float capture_seconds;
+    A_u_long manual_override_mask;
     ColorCorrectionParams params;
 };
 
-static const A_long CAPTURE_STATE_VERSION = 1;
+static const A_long CAPTURE_STATE_VERSION = 2;
 
 static float Clamp01(float value)
 {
@@ -131,6 +132,24 @@ static ColorCorrectionParams NeutralColorParams()
     return p;
 }
 
+static A_u_long ManualOverrideBit(int index)
+{
+    if (index < AUTOCUT_TEMPERATURE || index > AUTOCUT_HIGHLIGHTS_TINT) {
+        return 0;
+    }
+    return static_cast<A_u_long>(1u) << static_cast<A_u_long>(index - AUTOCUT_TEMPERATURE);
+}
+
+static bool IsManualOverride(
+    PF_ParamDef* const params[],
+    A_u_long override_mask,
+    int index,
+    float default_value)
+{
+    return (override_mask & ManualOverrideBit(index)) != 0 ||
+        !IsDefaultParam(params, index, default_value);
+}
+
 static CapturedAnalysisState DefaultCaptureState()
 {
     CapturedAnalysisState state;
@@ -138,6 +157,7 @@ static CapturedAnalysisState DefaultCaptureState()
     state.valid = FALSE;
     state.capture_token = 0.0f;
     state.capture_seconds = 0.0f;
+    state.manual_override_mask = 0;
     state.params = NeutralColorParams();
     return state;
 }
@@ -163,22 +183,65 @@ static ColorCorrectionParams ColorParamsFromAnalysis(const FrameAnalysisResult& 
     return p;
 }
 
-static void ApplyManualOverrides(PF_ParamDef* const params[], ColorCorrectionParams& p)
+static void ApplyManualOverrides(
+    PF_ParamDef* const params[],
+    A_u_long override_mask,
+    ColorCorrectionParams& p)
 {
-    if (!IsDefaultParam(params, AUTOCUT_TEMPERATURE, 0.0f)) p.temperature = ParamValue(params, AUTOCUT_TEMPERATURE);
-    if (!IsDefaultParam(params, AUTOCUT_TINT, 0.0f)) p.tint = ParamValue(params, AUTOCUT_TINT);
-    if (!IsDefaultParam(params, AUTOCUT_EXPOSURE, 0.0f)) p.exposure = ParamValue(params, AUTOCUT_EXPOSURE);
-    if (!IsDefaultParam(params, AUTOCUT_CONTRAST, 0.0f)) p.contrast = ParamValue(params, AUTOCUT_CONTRAST);
-    if (!IsDefaultParam(params, AUTOCUT_HIGHLIGHTS, 0.0f)) p.highlights = ParamValue(params, AUTOCUT_HIGHLIGHTS);
-    if (!IsDefaultParam(params, AUTOCUT_SHADOWS, 0.0f)) p.shadows = ParamValue(params, AUTOCUT_SHADOWS);
-    if (!IsDefaultParam(params, AUTOCUT_WHITES, 0.0f)) p.whites = ParamValue(params, AUTOCUT_WHITES);
-    if (!IsDefaultParam(params, AUTOCUT_BLACKS, 0.0f)) p.blacks = ParamValue(params, AUTOCUT_BLACKS);
-    if (!IsDefaultParam(params, AUTOCUT_SATURATION, 100.0f)) p.saturation = ParamValue(params, AUTOCUT_SATURATION);
-    if (!IsDefaultParam(params, AUTOCUT_VIBRANCE, 0.0f)) p.vibrance = ParamValue(params, AUTOCUT_VIBRANCE);
-    if (!IsDefaultParam(params, AUTOCUT_SHADOWS_TEMP, 0.0f)) p.shadows_temp = ParamValue(params, AUTOCUT_SHADOWS_TEMP);
-    if (!IsDefaultParam(params, AUTOCUT_SHADOWS_TINT, 0.0f)) p.shadows_tint = ParamValue(params, AUTOCUT_SHADOWS_TINT);
-    if (!IsDefaultParam(params, AUTOCUT_HIGHLIGHTS_TEMP, 0.0f)) p.highlights_temp = ParamValue(params, AUTOCUT_HIGHLIGHTS_TEMP);
-    if (!IsDefaultParam(params, AUTOCUT_HIGHLIGHTS_TINT, 0.0f)) p.highlights_tint = ParamValue(params, AUTOCUT_HIGHLIGHTS_TINT);
+    if (IsManualOverride(params, override_mask, AUTOCUT_TEMPERATURE, 0.0f)) p.temperature = ParamValue(params, AUTOCUT_TEMPERATURE);
+    if (IsManualOverride(params, override_mask, AUTOCUT_TINT, 0.0f)) p.tint = ParamValue(params, AUTOCUT_TINT);
+    if (IsManualOverride(params, override_mask, AUTOCUT_EXPOSURE, 0.0f)) p.exposure = ParamValue(params, AUTOCUT_EXPOSURE);
+    if (IsManualOverride(params, override_mask, AUTOCUT_CONTRAST, 0.0f)) p.contrast = ParamValue(params, AUTOCUT_CONTRAST);
+    if (IsManualOverride(params, override_mask, AUTOCUT_HIGHLIGHTS, 0.0f)) p.highlights = ParamValue(params, AUTOCUT_HIGHLIGHTS);
+    if (IsManualOverride(params, override_mask, AUTOCUT_SHADOWS, 0.0f)) p.shadows = ParamValue(params, AUTOCUT_SHADOWS);
+    if (IsManualOverride(params, override_mask, AUTOCUT_WHITES, 0.0f)) p.whites = ParamValue(params, AUTOCUT_WHITES);
+    if (IsManualOverride(params, override_mask, AUTOCUT_BLACKS, 0.0f)) p.blacks = ParamValue(params, AUTOCUT_BLACKS);
+    if (IsManualOverride(params, override_mask, AUTOCUT_SATURATION, 100.0f)) p.saturation = ParamValue(params, AUTOCUT_SATURATION);
+    if (IsManualOverride(params, override_mask, AUTOCUT_VIBRANCE, 0.0f)) p.vibrance = ParamValue(params, AUTOCUT_VIBRANCE);
+    if (IsManualOverride(params, override_mask, AUTOCUT_SHADOWS_TEMP, 0.0f)) p.shadows_temp = ParamValue(params, AUTOCUT_SHADOWS_TEMP);
+    if (IsManualOverride(params, override_mask, AUTOCUT_SHADOWS_TINT, 0.0f)) p.shadows_tint = ParamValue(params, AUTOCUT_SHADOWS_TINT);
+    if (IsManualOverride(params, override_mask, AUTOCUT_HIGHLIGHTS_TEMP, 0.0f)) p.highlights_temp = ParamValue(params, AUTOCUT_HIGHLIGHTS_TEMP);
+    if (IsManualOverride(params, override_mask, AUTOCUT_HIGHLIGHTS_TINT, 0.0f)) p.highlights_tint = ParamValue(params, AUTOCUT_HIGHLIGHTS_TINT);
+}
+
+static A_u_long GetManualOverrideMask(PF_InData* in_data)
+{
+    if (!in_data || !in_data->sequence_data ||
+        PF_GET_HANDLE_SIZE(in_data->sequence_data) < sizeof(CapturedAnalysisState)) {
+        return 0;
+    }
+    CapturedAnalysisState* state = reinterpret_cast<CapturedAnalysisState*>(
+        PF_LOCK_HANDLE(in_data->sequence_data));
+    if (!state) {
+        return 0;
+    }
+    const A_u_long mask = state->version == CAPTURE_STATE_VERSION
+        ? state->manual_override_mask
+        : 0;
+    PF_UNLOCK_HANDLE(in_data->sequence_data);
+    return mask;
+}
+
+static void UpdateManualOverrideMask(PF_InData* in_data, int param_index)
+{
+    if (!in_data || !in_data->sequence_data ||
+        PF_GET_HANDLE_SIZE(in_data->sequence_data) < sizeof(CapturedAnalysisState)) {
+        return;
+    }
+    CapturedAnalysisState* state = reinterpret_cast<CapturedAnalysisState*>(
+        PF_LOCK_HANDLE(in_data->sequence_data));
+    if (!state) {
+        return;
+    }
+    if (state->version != CAPTURE_STATE_VERSION) {
+        *state = DefaultCaptureState();
+    }
+    if (param_index == AUTOCUT_CAPTURE_TOKEN) {
+        state->manual_override_mask = 0;
+    } else {
+        state->manual_override_mask |= ManualOverrideBit(param_index);
+    }
+    PF_UNLOCK_HANDLE(in_data->sequence_data);
 }
 
 static bool ValidateAnalysisDimensions(A_long width, A_long height, size_t& pixel_count)
@@ -228,10 +291,11 @@ static bool AnalyzeAdobeLayer(PF_InData* in_data, PF_LayerDef* input_layer, Fram
         return false;
     }
 
-    std::vector<unsigned char> rgba(pixel_count * 4);
     const char* base = reinterpret_cast<const char*>(input_layer->data);
+    ColorEngine engine;
 
     if (is_float) {
+        std::vector<float> rgba(pixel_count * 4);
         for (A_long y = 0; y < input_layer->height; ++y) {
             const PF_PixelFloat* row = reinterpret_cast<const PF_PixelFloat*>(
                 reinterpret_cast<const char*>(float_pixels) + (y * input_layer->rowbytes)
@@ -239,13 +303,23 @@ static bool AnalyzeAdobeLayer(PF_InData* in_data, PF_LayerDef* input_layer, Fram
             for (A_long x = 0; x < input_layer->width; ++x) {
                 const PF_PixelFloat& px = row[x];
                 const size_t dst = (static_cast<size_t>(y) * static_cast<size_t>(input_layer->width) + static_cast<size_t>(x)) * 4;
-                rgba[dst + 0] = UnitToChannel8(Clamp01(px.red));
-                rgba[dst + 1] = UnitToChannel8(Clamp01(px.green));
-                rgba[dst + 2] = UnitToChannel8(Clamp01(px.blue));
-                rgba[dst + 3] = UnitToChannel8(Clamp01(px.alpha));
+                rgba[dst + 0] = px.red;
+                rgba[dst + 1] = px.green;
+                rgba[dst + 2] = px.blue;
+                rgba[dst + 3] = px.alpha;
             }
         }
-    } else if (PF_WORLD_IS_DEEP(input_layer)) {
+        return engine.AnalyzeFrame32(
+            rgba.data(),
+            static_cast<int>(input_layer->width),
+            static_cast<int>(input_layer->height),
+            static_cast<int>(static_cast<size_t>(input_layer->width) * 4u * sizeof(float)),
+            analysis
+        );
+    }
+
+    std::vector<unsigned char> rgba(pixel_count * 4);
+    if (PF_WORLD_IS_DEEP(input_layer)) {
         for (A_long y = 0; y < input_layer->height; ++y) {
             const PF_Pixel16* row = reinterpret_cast<const PF_Pixel16*>(base + (y * input_layer->rowbytes));
             for (A_long x = 0; x < input_layer->width; ++x) {
@@ -271,7 +345,6 @@ static bool AnalyzeAdobeLayer(PF_InData* in_data, PF_LayerDef* input_layer, Fram
         }
     }
 
-    ColorEngine engine;
     return engine.AnalyzeFrame8(
         rgba.data(),
         static_cast<int>(input_layer->width),
@@ -313,7 +386,8 @@ static bool AnalyzeLayerAtSeconds(PF_InData* in_data, float seconds, FrameAnalys
 
 static bool TryGetCapturedParams(PF_InData* in_data, float capture_token, float capture_seconds, ColorCorrectionParams& params)
 {
-    if (!in_data || !in_data->sequence_data) {
+    if (!in_data || !in_data->sequence_data ||
+        PF_GET_HANDLE_SIZE(in_data->sequence_data) < sizeof(CapturedAnalysisState)) {
         return false;
     }
 
@@ -336,7 +410,8 @@ static bool TryGetCapturedParams(PF_InData* in_data, float capture_token, float 
 
 static void StoreCapturedParams(PF_InData* in_data, float capture_token, float capture_seconds, const ColorCorrectionParams& params)
 {
-    if (!in_data || !in_data->sequence_data) {
+    if (!in_data || !in_data->sequence_data ||
+        PF_GET_HANDLE_SIZE(in_data->sequence_data) < sizeof(CapturedAnalysisState)) {
         return;
     }
 
@@ -674,10 +749,11 @@ About(
     
     suites.ANSICallbacksSuite1()->sprintf(
         out_data->return_msg,
-        "%s v%d.%d\r%s",
+        "%s v%d.%d.%d\r%s",
         STR(StrID_Name),
         MAJOR_VERSION,
         MINOR_VERSION,
+        BUG_VERSION,
         STR(StrID_Description));
         
     return PF_Err_NONE;
@@ -755,7 +831,8 @@ SequenceResetup(
     PF_InData* in_data,
     PF_OutData* out_data)
 {
-    if (in_data && in_data->sequence_data) {
+    if (in_data && in_data->sequence_data &&
+        PF_GET_HANDLE_SIZE(in_data->sequence_data) >= sizeof(CapturedAnalysisState)) {
         out_data->sequence_data = in_data->sequence_data;
         return PF_Err_NONE;
     }
@@ -933,7 +1010,7 @@ Render(
     p.shadows_tint *= auto_amount;
     p.highlights_temp *= auto_amount;
     p.highlights_tint *= auto_amount;
-    ApplyManualOverrides(params, p);
+    ApplyManualOverrides(params, GetManualOverrideMask(in_data), p);
 
     A_long linesL = output->extent_hint.bottom - output->extent_hint.top;
     if (linesL <= 0) {
@@ -985,8 +1062,15 @@ UserChangedParam(
     void            *extra)
 {
     PF_UserChangedParamExtra* changed = reinterpret_cast<PF_UserChangedParamExtra*>(extra);
-    if (changed && changed->param_index == AUTOCUT_AUTO_TRIGGER) {
-        out_data->out_flags |= PF_OutFlag_FORCE_RERENDER;
+    if (changed) {
+        UpdateManualOverrideMask(in_data, changed->param_index);
+        if (
+            changed->param_index == AUTOCUT_AUTO_TRIGGER ||
+            changed->param_index == AUTOCUT_CAPTURE_TOKEN ||
+            ManualOverrideBit(changed->param_index) != 0
+        ) {
+            out_data->out_flags |= PF_OutFlag_FORCE_RERENDER;
+        }
     }
     return PF_Err_NONE;
 }

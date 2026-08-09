@@ -83,17 +83,45 @@ await writeFile(
   ),
 );
 const [major, minor, patch] = product.version.split(".").map(Number);
-await writeFile(
-  path.join(root, "native/premiere-plugin/autocut_product_version.h"),
-  [
-    "#pragma once",
-    `#define AUTOCUT_PRODUCT_VERSION "${product.version}"`,
-    `#define AUTOCUT_PRODUCT_VERSION_MAJOR ${major}`,
-    `#define AUTOCUT_PRODUCT_VERSION_MINOR ${minor}`,
-    `#define AUTOCUT_PRODUCT_VERSION_PATCH ${patch}`,
-    `#define AUTOCUT_COLOR_MATCH_NAME "${product.nativeEffects.colorMatchName}"`,
-    `#define AUTOCUT_TRANSFORM_MATCH_NAME "${product.nativeEffects.transformMatchName}"`,
-    "",
-  ].join("\n"),
+if (
+  ![major, minor, patch].every(Number.isInteger) ||
+  major < 0 ||
+  major > 127 ||
+  minor < 0 ||
+  minor > 15 ||
+  patch < 0 ||
+  patch > 15
+) {
+  throw new Error(
+    `Native Adobe effect version must fit 127.15.15; received ${product.version}`,
+  );
+}
+const effectVersion =
+  (((major >> 3) & 0x0f) << 26) |
+  ((major & 0x07) << 19) |
+  ((minor & 0x0f) << 15) |
+  ((patch & 0x0f) << 11);
+const nativeVersionPath = path.join(
+  root,
+  "native/premiere-plugin/autocut_product_version.h",
 );
+const nativeVersionHeader = [
+  "#pragma once",
+  `#define AUTOCUT_PRODUCT_VERSION "${product.version}"`,
+  `#define AUTOCUT_PRODUCT_VERSION_MAJOR ${major}`,
+  `#define AUTOCUT_PRODUCT_VERSION_MINOR ${minor}`,
+  `#define AUTOCUT_PRODUCT_VERSION_PATCH ${patch}`,
+  `#define AUTOCUT_EFFECT_VERSION ${effectVersion}`,
+  `#define AUTOCUT_COLOR_MATCH_NAME "${product.nativeEffects.colorMatchName}"`,
+  "",
+].join("\n");
+let existingNativeVersion = "";
+try {
+  existingNativeVersion = await readFile(nativeVersionPath, "utf8");
+} catch {
+  // The first metadata generation creates the header.
+}
+if (existingNativeVersion !== nativeVersionHeader) {
+  await writeFile(nativeVersionPath, nativeVersionHeader);
+}
 console.log(`Generated metadata for ${product.productName} ${product.version}`);

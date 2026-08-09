@@ -1,8 +1,4 @@
-#![allow(clippy::all, dead_code, unused_imports)]
-
-pub mod audio;
 mod cli;
-pub mod detection;
 pub mod model;
 
 use cli::parse_args;
@@ -44,16 +40,6 @@ struct FrameEnergy {
     log_bands: [f32; LOG_BANDS],
 }
 
-struct DropRiseCandidateContext<'a> {
-    samples: &'a [f32],
-    sample_rate: u32,
-    frames: &'a [FrameEnergy],
-    drop_rise_scores: &'a [f32],
-    stable_scores: &'a [f32],
-    min_score: f32,
-    lag: usize,
-}
-
 pub fn run() -> Result<(), Box<dyn Error>> {
     std::panic::set_hook(Box::new(|panic_info| {
         eprintln!("internal analyzer error: {panic_info}");
@@ -61,10 +47,7 @@ pub fn run() -> Result<(), Box<dyn Error>> {
 
     let options = parse_args()?;
     if options.help {
-        println!(
-            "{}",
-            "usage: beat_analyzer [--start seconds] [--duration seconds] <media-file-path>"
-        );
+        println!("usage: beat_analyzer [--start seconds] [--duration seconds] <media-file-path>");
         return Ok(());
     }
     if options.version {
@@ -184,6 +167,9 @@ pub fn decode_mono_audio(
         }
         None => usize::MAX,
     };
+    if target_end_sample != usize::MAX {
+        mono.reserve(target_end_sample.saturating_sub(target_start_sample));
+    }
 
     loop {
         let packet = match format.next_packet() {
@@ -233,25 +219,25 @@ pub fn decode_mono_audio(
 
     let start_idx = first_packet_sample_index.unwrap_or(0);
     let discard = target_start_sample.saturating_sub(start_idx);
-    let mut final_mono = if mono.len() > discard {
-        mono[discard..].to_vec()
+    if discard < mono.len() {
+        mono.drain(..discard);
     } else {
-        Vec::new()
-    };
-
-    let total_needed = target_end_sample.saturating_sub(target_start_sample);
-    if final_mono.len() > total_needed {
-        final_mono.truncate(total_needed);
+        mono.clear();
     }
 
-    if final_mono.is_empty() {
+    let total_needed = target_end_sample.saturating_sub(target_start_sample);
+    if mono.len() > total_needed {
+        mono.truncate(total_needed);
+    }
+
+    if mono.is_empty() {
         return Err("selected clip range contains no decodable audio samples".into());
     }
 
     let actual_start_sample = start_idx + discard;
     let actual_offset_seconds = actual_start_sample as f64 / sample_rate as f64;
 
-    Ok((final_mono, sample_rate, actual_offset_seconds))
+    Ok((mono, sample_rate, actual_offset_seconds))
 }
 
 fn push_decoded_as_mono(decoded: AudioBufferRef<'_>, mono: &mut Vec<f32>) {
@@ -390,9 +376,12 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
             continue;
         }
 
-        let context_scores = events
+        let context_start =
+            events.partition_point(|candidate| candidate.time < event.time - CONTEXT_SECONDS);
+        let context_end =
+            events.partition_point(|candidate| candidate.time <= event.time + CONTEXT_SECONDS);
+        let context_scores = events[context_start..context_end]
             .iter()
-            .filter(|candidate| (candidate.time - event.time).abs() <= CONTEXT_SECONDS)
             .map(|candidate| candidate.score)
             .collect::<Vec<_>>();
 
@@ -411,13 +400,21 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
             }
         }
 
-        let is_local_peak = events.iter().enumerate().all(|(other_index, candidate)| {
-            if other_index == index || (candidate.time - event.time).abs() > peak_radius_seconds {
-                return true;
-            }
-            candidate.score < event.score
-                || ((candidate.score - event.score).abs() < f32::EPSILON && other_index > index)
-        });
+        let peak_start =
+            events.partition_point(|candidate| candidate.time < event.time - peak_radius_seconds);
+        let peak_end =
+            events.partition_point(|candidate| candidate.time <= event.time + peak_radius_seconds);
+        let is_local_peak =
+            events[peak_start..peak_end]
+                .iter()
+                .enumerate()
+                .all(|(relative_index, candidate)| {
+                    let other_index = peak_start + relative_index;
+                    other_index == index
+                        || candidate.score < event.score
+                        || ((candidate.score - event.score).abs() < f32::EPSILON
+                            && other_index > index)
+                });
         if is_local_peak {
             selected.push(event.clone());
         }
@@ -551,15 +548,20 @@ fn band_energies(samples: &[f32], sample_rate: u32) -> Vec<FrameEnergy> {
             let mut wide_bins = 0;
             let mut flux = 0.0;
 
-            for bin in 1..(window_size / 2) {
+            for (bin, previous_mag) in prev_mags
+                .iter_mut()
+                .enumerate()
+                .take(window_size / 2)
+                .skip(1)
+            {
                 let mag = data.mags[bin];
-                let diff = mag - prev_mags[bin];
+                let diff = mag - *previous_mag;
                 if diff > 0.0 {
                     // High-frequency content (HFC) weighting for flux: multiply by a mild frequency factor
                     let freq_weight = 1.0 + (bin as f32 / (window_size / 2) as f32);
                     flux += diff * freq_weight;
                 }
-                prev_mags[bin] = mag;
+                *previous_mag = mag;
 
                 let freq = bin as f32 * sr / window_size as f32;
                 let power = mag * mag;
@@ -1428,7 +1430,12 @@ fn dynamic_programming_beat_path(scores: &[f32], lag_curve: &[usize]) -> Vec<usi
         let first_predecessor = index.saturating_sub(max_distance);
         let last_predecessor = index.saturating_sub(min_distance);
         if index >= min_distance {
-            for predecessor in first_predecessor..=last_predecessor {
+            for (predecessor, predecessor_score) in cumulative
+                .iter()
+                .enumerate()
+                .take(last_predecessor + 1)
+                .skip(first_predecessor)
+            {
                 let distance = index.saturating_sub(predecessor);
                 if distance < min_distance || distance > max_distance {
                     continue;
@@ -1440,7 +1447,7 @@ fn dynamic_programming_beat_path(scores: &[f32], lag_curve: &[usize]) -> Vec<usi
                 // logarithmic term still allows gradual tempo drift.
                 let skipped_beats = ((distance as f32 / target as f32) - 1.0).max(0.0);
                 let transition_penalty = 18.0 * timing_error * timing_error + 3.0 * skipped_beats;
-                let candidate = cumulative[predecessor] - transition_penalty;
+                let candidate = *predecessor_score - transition_penalty;
                 if candidate > best_score {
                     best_score = candidate;
                     best_predecessor = predecessor;
@@ -1642,88 +1649,6 @@ fn estimate_beat_lag(norm: &[f32], frame_step: f64) -> Option<usize> {
     }
 
     (best_lag > 0 && best_score >= 0.10).then_some(best_lag)
-}
-
-fn estimate_beat_phase(norm: &[f32], lag: usize) -> Option<usize> {
-    if lag == 0 || norm.len() < lag * 2 {
-        return None;
-    }
-
-    let mut best_phase = 0;
-    let mut best_score = 0.0_f32;
-    for phase in 0..lag {
-        let mut score = 0.0_f32;
-        let mut count = 0;
-        let mut index = phase;
-        while index < norm.len() {
-            let lo = index.saturating_sub(2);
-            let hi = (index + 2).min(norm.len() - 1);
-            let local = norm[lo..=hi].iter().copied().fold(0.0_f32, f32::max);
-            score += local;
-            count += 1;
-            index += lag;
-        }
-        if count > 0 {
-            score /= count as f32;
-        }
-        if score > best_score {
-            best_score = score;
-            best_phase = phase;
-        }
-    }
-
-    (best_score >= 0.06).then_some(best_phase)
-}
-
-fn best_local_grid_onset(scores: &[f32], center: usize, radius: usize) -> Option<(usize, f32)> {
-    if scores.is_empty() || center >= scores.len() {
-        return None;
-    }
-
-    let lo = center.saturating_sub(radius);
-    let hi = (center + radius).min(scores.len() - 1);
-    let mut best_index = center;
-    let mut best_score = 0.0_f32;
-    for (offset, score) in scores[lo..=hi].iter().enumerate() {
-        if *score > best_score {
-            best_score = *score;
-            best_index = lo + offset;
-        }
-    }
-
-    (best_score > 0.0).then_some((best_index, best_score))
-}
-
-fn add_drop_rise_candidates(ctx: DropRiseCandidateContext<'_>, beats: &mut Vec<(f64, f32)>) {
-    let frames = ctx.frames;
-    let drop_rise_scores = ctx.drop_rise_scores;
-    let stable_scores = ctx.stable_scores;
-    if frames.is_empty() || drop_rise_scores.is_empty() || stable_scores.is_empty() {
-        return;
-    }
-
-    let threshold = robust_percentile(drop_rise_scores, 0.94).max(0.28);
-    let mut candidates = drop_rise_scores
-        .iter()
-        .enumerate()
-        .filter_map(|(index, score)| {
-            if *score < threshold || index >= frames.len() || index >= stable_scores.len() {
-                return None;
-            }
-            if !has_direct_onset_evidence(frames, index, ctx.lag.clamp(4, 32)) {
-                return None;
-            }
-            let stable = stable_scores[index].max(ctx.min_score * 0.90);
-            Some((index, (*score + stable).max(stable)))
-        })
-        .collect::<Vec<_>>();
-
-    candidates.sort_by(|a, b| b.1.total_cmp(&a.1));
-    let max_candidates = (frames.len() / 180).clamp(1, 4);
-    for (index, score) in candidates.into_iter().take(max_candidates) {
-        let snapped = snap_event_time(ctx.samples, ctx.sample_rate, frames[index].time);
-        beats.push((snapped, score));
-    }
 }
 
 fn reinforce_rhythmic_scores(frames: &[FrameEnergy], scores: &[f32]) -> Vec<f32> {

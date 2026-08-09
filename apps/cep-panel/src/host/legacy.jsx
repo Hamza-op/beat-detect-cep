@@ -375,12 +375,6 @@ if (!JSON.parse) {
     return String(value || "").toLowerCase();
   }
 
-  function isMotionComponent(component) {
-    var matchName = normalizedName(component && component.matchName);
-    var displayName = normalizedName(component && component.displayName);
-    return matchName.indexOf("motion") >= 0 || displayName === "motion";
-  }
-
   function isScaleProperty(prop) {
     var matchName = normalizedName(prop && prop.matchName);
     var displayName = normalizedName(prop && prop.displayName);
@@ -419,61 +413,10 @@ if (!JSON.parse) {
     return null;
   }
 
-  function findMotionScaleProperty(clip) {
-    if (!clip || !clip.components) {
-      return null;
+  function requireHostSuccess(result, operation) {
+    if ((typeof result === "number" && result !== 0) || result === false) {
+      throw new Error(operation + " failed in Premiere (code " + result + ").");
     }
-
-    for (var c = 0; c < clip.components.numItems; c++) {
-      var component = clip.components[c];
-      if (isMotionComponent(component)) {
-        var motionScale = findScalePropertyOnComponent(component);
-        if (motionScale) {
-          return motionScale;
-        }
-      }
-    }
-
-    // Fallback for localized or odd Premiere builds: use the first keyframeable
-    // Scale property we can find on the selected video TrackItem.
-    for (var c2 = 0; c2 < clip.components.numItems; c2++) {
-      var fallbackScale = findScalePropertyOnComponent(clip.components[c2]);
-      if (fallbackScale) {
-        return fallbackScale;
-      }
-    }
-
-    return null;
-  }
-
-  function findMotionPositionProperty(clip) {
-    if (!clip || !clip.components) {
-      return null;
-    }
-
-    for (var c = 0; c < clip.components.numItems; c++) {
-      var component = clip.components[c];
-      if (isMotionComponent(component)) {
-        var motionPosition = findPositionPropertyOnComponent(component);
-        if (motionPosition) {
-          return motionPosition;
-        }
-      }
-    }
-
-    for (var c2 = 0; c2 < clip.components.numItems; c2++) {
-      var fallbackComponent = clip.components[c2];
-      var fallbackPosition = findPositionPropertyOnComponent(fallbackComponent);
-      var fallbackScale = findScalePropertyOnComponent(fallbackComponent);
-      if (fallbackPosition && !fallbackScale) {
-        continue;
-      }
-      if (fallbackPosition) {
-        return fallbackPosition;
-      }
-    }
-
-    return null;
   }
 
   function removeKeysInRange(prop, startSeconds, endSeconds) {
@@ -482,15 +425,33 @@ if (!JSON.parse) {
     }
     var startTime = timeFromSeconds(startSeconds);
     var endTime = timeFromSeconds(endSeconds);
+    var rangeError = null;
 
     if (prop.removeKeyRange) {
       try {
-        prop.removeKeyRange(startTime, endTime);
-        return;
-      } catch (_) {}
+        var rangeResult = prop.removeKeyRange(startTime, endTime);
+        if (
+          !(
+            (typeof rangeResult === "number" && rangeResult !== 0) ||
+            rangeResult === false
+          )
+        ) {
+          return;
+        }
+        rangeError = new Error(
+          "Remove keyframe range failed in Premiere (code " +
+            rangeResult +
+            ")."
+        );
+      } catch (error) {
+        rangeError = error;
+      }
     }
 
     if (!prop.getKeys || !prop.removeKey) {
+      if (rangeError) {
+        throw rangeError;
+      }
       return;
     }
     var keys = prop.getKeys() || [];
@@ -498,9 +459,7 @@ if (!JSON.parse) {
       var keyTime = keys[k];
       var keySeconds = timeToSeconds(keyTime);
       if (keySeconds >= startSeconds && keySeconds <= endSeconds) {
-        try {
-          prop.removeKey(keyTime);
-        } catch (_) {}
+        requireHostSuccess(prop.removeKey(keyTime), "Remove keyframe");
       }
     }
   }
@@ -509,13 +468,16 @@ if (!JSON.parse) {
     var time = timeFromSeconds(seconds);
     var addError = null;
     try {
-      prop.addKey(time);
+      requireHostSuccess(prop.addKey(time), "Add Scale keyframe");
     } catch (error) {
       addError = error;
     }
 
     try {
-      prop.setValueAtKey(time, value, 1);
+      requireHostSuccess(
+        prop.setValueAtKey(time, value, 1),
+        "Set Scale keyframe value"
+      );
     } catch (valueError) {
       if (addError) {
         throw new Error(
@@ -529,13 +491,14 @@ if (!JSON.parse) {
     }
 
     if (prop.setInterpolationTypeAtKey) {
-      try {
+      requireHostSuccess(
         prop.setInterpolationTypeAtKey(
           time,
           typeof interpolationType === "number" ? interpolationType : 5,
           1
-        );
-      } catch (_) {}
+        ),
+        "Set Scale keyframe interpolation"
+      );
     }
   }
 
@@ -547,9 +510,34 @@ if (!JSON.parse) {
     return startSeconds + duration * Math.max(0, Math.min(1, ratio));
   }
 
-  function setScaleKeys(prop, keys, interpolationType) {
-    for (var i = 0; i < keys.length; i++) {
-      setScaleKey(prop, keys[i][0], keys[i][1], interpolationType);
+  function importantKeyframes(keys, frameDuration) {
+    var sorted = keys.slice(0).sort(function (a, b) {
+      return a[0] - b[0];
+    });
+    var result = [];
+    var minGap = Math.max(0.0005, (Number(frameDuration) || 1 / 30) * 0.5);
+    for (var i = 0; i < sorted.length; i++) {
+      if (
+        result.length &&
+        sorted[i][0] - result[result.length - 1][0] < minGap
+      ) {
+        result[result.length - 1] = sorted[i];
+      } else {
+        result.push(sorted[i]);
+      }
+    }
+    return result;
+  }
+
+  function setScaleKeys(prop, keys, interpolationType, frameDuration) {
+    var important = importantKeyframes(keys, frameDuration);
+    for (var i = 0; i < important.length; i++) {
+      setScaleKey(
+        prop,
+        important[i][0],
+        important[i][1],
+        interpolationType
+      );
     }
   }
 
@@ -561,13 +549,16 @@ if (!JSON.parse) {
     var time = timeFromSeconds(seconds);
     var addError = null;
     try {
-      prop.addKey(time);
+      requireHostSuccess(prop.addKey(time), "Add " + label + " keyframe");
     } catch (error) {
       addError = error;
     }
 
     try {
-      prop.setValueAtKey(time, value, 1);
+      requireHostSuccess(
+        prop.setValueAtKey(time, value, 1),
+        "Set " + label + " keyframe value"
+      );
     } catch (valueError) {
       if (addError) {
         throw new Error(
@@ -583,14 +574,51 @@ if (!JSON.parse) {
     }
 
     if (prop.setInterpolationTypeAtKey) {
-      try {
+      requireHostSuccess(
         prop.setInterpolationTypeAtKey(
           time,
           typeof interpolationType === "number" ? interpolationType : 5,
           1
-        );
-      } catch (_) {}
+        ),
+        "Set " + label + " keyframe interpolation"
+      );
     }
+  }
+
+  function setValueKeys(prop, keys, label, interpolationType, frameDuration) {
+    var important = importantKeyframes(keys, frameDuration);
+    for (var i = 0; i < important.length; i++) {
+      setValueKey(
+        prop,
+        important[i][0],
+        important[i][1],
+        label,
+        interpolationType
+      );
+    }
+  }
+
+  function setKeyframingEnabled(prop, enabled, label) {
+    if (!prop || !prop.setTimeVarying) {
+      throw new Error(label + " does not expose keyframing controls.");
+    }
+    requireHostSuccess(
+      prop.setTimeVarying(enabled),
+      (enabled ? "Enable " : "Disable ") + label + " keyframing"
+    );
+  }
+
+  function resetAnimatedProperty(prop, startSeconds, endSeconds, value, label) {
+    if (!prop) {
+      return false;
+    }
+    removeKeysInRange(prop, startSeconds, endSeconds);
+    setKeyframingEnabled(prop, false, label);
+    if (!prop.setValue) {
+      throw new Error(label + " does not expose a static value control.");
+    }
+    requireHostSuccess(prop.setValue(value, 1), "Reset " + label);
+    return true;
   }
 
   function boundedScale(value, fallback, min, max) {
@@ -623,6 +651,29 @@ if (!JSON.parse) {
     var x = boundedScale(xPercent, 50.0, 0.0, 100.0);
     var y = boundedScale(yPercent, 50.0, 0.0, 100.0);
     return [x / 100.0, y / 100.0];
+  }
+
+  function positionPropertyUsesPixels(prop) {
+    try {
+      var value = prop && prop.getValue ? prop.getValue() : null;
+      return (
+        value &&
+        value.length >= 2 &&
+        (Math.abs(Number(value[0])) > 2 || Math.abs(Number(value[1])) > 2)
+      );
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function positionValueForProperty(prop, normalizedPoint, sequenceSize) {
+    if (!positionPropertyUsesPixels(prop)) {
+      return normalizedPoint;
+    }
+    return [
+      normalizedPoint[0] * sequenceSize.width,
+      normalizedPoint[1] * sequenceSize.height
+    ];
   }
 
   function dollyInterpolationType(easing) {
@@ -714,42 +765,6 @@ if (!JSON.parse) {
     var base = baseZoomForStyle(style);
     var intensity = (base - 100.0) * durationZoomScale(style, duration);
     return boundedZoom(100.0 + intensity);
-  }
-
-  function resetZoomOnClip(clip) {
-    var prop = findMotionScaleProperty(clip);
-    var positionProp = findMotionPositionProperty(clip);
-    if (!prop && !positionProp) {
-      return false;
-    }
-
-    var range = clipTimelineRange(clip);
-    var inTime = range.start;
-    var outTime = range.end;
-    var duration = range.duration;
-    if (!isFinite(duration) || duration <= 0.001) {
-      throw new Error("clip duration is too short");
-    }
-
-    if (prop) {
-      removeKeysInRange(prop, inTime, outTime);
-      try {
-        prop.setTimeVarying(false);
-      } catch (_) {}
-      if (prop.setValue) {
-        prop.setValue(100.0, 1);
-      }
-    }
-    if (positionProp) {
-      removeKeysInRange(positionProp, inTime, outTime);
-      try {
-        positionProp.setTimeVarying(false);
-      } catch (_) {}
-      if (positionProp.setValue) {
-        positionProp.setValue([0.5, 0.5], 1);
-      }
-    }
-    return true;
   }
 
   function getWarpStabilizerEffect() {
@@ -858,8 +873,8 @@ if (!JSON.parse) {
 
   function getAutoCutTransformEffect() {
     return getVideoEffectByNames(
-      ["AutoCutStudio Transform"],
-      "AutoCutStudio Transform"
+      ["Transform"],
+      "Premiere Transform"
     );
   }
 
@@ -868,7 +883,9 @@ if (!JSON.parse) {
     var display = normalizedName((component && component.displayName) || "");
     return (
       name.indexOf("com.autocutstudio.transform") >= 0 ||
-      display === "autocutstudio transform"
+      display === "autocutstudio transform" ||
+      name === "adbe transform" ||
+      display === "transform"
     );
   }
 
@@ -930,14 +947,25 @@ if (!JSON.parse) {
     }
   }
 
-  function persistMotionLedger(ref, preset) {
+  function persistMotionLedger(ref, component, preset) {
     try {
       var info = getClipInfo(ref.clip);
       var componentIndex = -1;
       for (var i = 0; i < ref.clip.components.numItems; i++) {
-        if (isAutoCutTransformComponent(ref.clip.components[i])) {
+        if (
+          ref.clip.components[i] === component ||
+          hasAutoCutTransformOwnership(ref.clip.components[i], ref)
+        ) {
           componentIndex = i;
           break;
+        }
+      }
+      if (componentIndex < 0) {
+        for (var fallback = ref.clip.components.numItems - 1; fallback >= 0; fallback--) {
+          if (isAutoCutTransformComponent(ref.clip.components[fallback])) {
+            componentIndex = fallback;
+            break;
+          }
         }
       }
       if (componentIndex < 0) return;
@@ -951,7 +979,8 @@ if (!JSON.parse) {
         originalStartSeconds: info.startSeconds,
         inPointSeconds: info.inPointSeconds,
         outPointSeconds: info.outPointSeconds,
-        effectMatchName: "com.autocutstudio.transform",
+        effectMatchName:
+          normalizedName(component && component.matchName) || "adbe transform",
         componentIndex: componentIndex,
         preset: preset || "",
         generatedScaleKeys: [],
@@ -976,7 +1005,7 @@ if (!JSON.parse) {
     } catch (_) {}
   }
 
-  function hasPersistedMotionLedger(ref) {
+  function persistedMotionRecord(ref) {
     try {
       var info = getClipInfo(ref.clip);
       var records = readMotionLedger();
@@ -993,11 +1022,15 @@ if (!JSON.parse) {
           Math.abs(Number(record.outPointSeconds) - info.outPointSeconds) <
             0.002
         ) {
-          return true;
+          return record;
         }
       }
     } catch (_) {}
-    return false;
+    return null;
+  }
+
+  function hasPersistedMotionLedger(ref) {
+    return !!persistedMotionRecord(ref);
   }
 
   function hasAutoCutTransformOwnership(component, ref) {
@@ -1020,18 +1053,39 @@ if (!JSON.parse) {
     }
   }
 
+  function findOwnedTransformComponent(ref) {
+    var clip = ref && ref.clip;
+    if (!clip || !clip.components) {
+      return null;
+    }
+    for (var i = 0; i < clip.components.numItems; i++) {
+      var candidate = clip.components[i];
+      if (
+        isAutoCutTransformComponent(candidate) &&
+        hasAutoCutTransformOwnership(candidate, ref)
+      ) {
+        return candidate;
+      }
+    }
+    var record = persistedMotionRecord(ref);
+    if (record) {
+      var index = Number(record.componentIndex);
+      if (
+        isFinite(index) &&
+        index >= 0 &&
+        index < clip.components.numItems &&
+        isAutoCutTransformComponent(clip.components[index])
+      ) {
+        return clip.components[index];
+      }
+    }
+    return null;
+  }
+
   function ensureAutoCutTransformComponent(ref) {
     var clip = ref.clip;
     var before = clip && clip.components ? clip.components.numItems : 0;
-    var existing = null;
-    if (clip && clip.components) {
-      for (var i = 0; i < before; i++) {
-        if (isAutoCutTransformComponent(clip.components[i])) {
-          existing = clip.components[i];
-          break;
-        }
-      }
-    }
+    var existing = findOwnedTransformComponent(ref);
     if (existing) return existing;
     applyVideoEffectToClipRef(ref, getAutoCutTransformEffect());
     if (clip && clip.components) {
@@ -1042,7 +1096,7 @@ if (!JSON.parse) {
       }
     }
     throw new Error(
-      "AutoCutStudio Transform was added but could not be identified."
+      "Premiere Transform was added but could not be identified."
     );
   }
 
@@ -1142,17 +1196,9 @@ if (!JSON.parse) {
       var existing = findAutoCutColorComponent(selected.ref.clip);
       if (!existing) {
         ensureAutoCutColorComponent(selected.ref);
+        existing = findAutoCutColorComponent(selected.ref.clip);
       }
       return ok({ ready: !!existing });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.isAutoColorEffectReady = function () {
-    try {
-      var selected = selectedAutoColorRef();
-      return ok({ ready: !!findAutoCutColorComponent(selected.ref.clip) });
     } catch (error) {
       return fail(error.message || String(error));
     }
@@ -1478,12 +1524,14 @@ if (!JSON.parse) {
     }
   }
 
+  var AUTOCUT_BEAT_MARKER_SIGNATURE = "AutoCutStudio Beat Marker v1";
+
   function setMarkerFields(marker, colorIndex) {
     if (!marker) {
       return;
     }
     marker.name = "";
-    marker.comments = "";
+    marker.comments = AUTOCUT_BEAT_MARKER_SIGNATURE;
     if (
       marker.setColorByIndex &&
       colorIndex !== null &&
@@ -1503,55 +1551,16 @@ if (!JSON.parse) {
     );
   }
 
-  function beatMarkerColor(target) {
+  function beatMarkerColor() {
     return 3;
   }
-
-  function markerColorForEvent(event, target) {
-    var score = Number(event && event.score);
-    if (!isFinite(score)) {
-      return beatMarkerColor(target);
-    }
-    if (score < 0.5) return 1;
-    if (score < 0.7) return 3;
-    if (score < 0.85) return 6;
-    return 11;
-  }
-
-  var BD_COLOR_INDICES = [1, 3, 6, 11];
 
   function isAutoCutStudioMarker(marker) {
     if (!marker) {
       return false;
     }
-    var name = marker.name || "";
     var comments = marker.comments || "";
-    if (name !== "" || comments !== "") {
-      return false;
-    }
-
-    var color = null;
-    try {
-      if (marker.getColorByIndex) {
-        color = Number(marker.getColorByIndex());
-      } else if (marker.getColor) {
-        color = Number(marker.getColor());
-      } else if (marker.color !== undefined) {
-        color = Number(marker.color);
-      }
-    } catch (_) {}
-
-    if (color === null || isNaN(color)) {
-      // Unknown marker colors are never owned. This prevents a blank marker
-      // from being deleted when Premiere cannot report its color.
-      return false;
-    }
-    for (var i = 0; i < BD_COLOR_INDICES.length; i++) {
-      if (color === BD_COLOR_INDICES[i]) {
-        return true;
-      }
-    }
-    return false;
+    return comments === AUTOCUT_BEAT_MARKER_SIGNATURE;
   }
 
   function markerTimeSeconds(marker) {
@@ -1715,96 +1724,6 @@ if (!JSON.parse) {
     }
   };
 
-  AutoCutStudio.applyMarkers = function (payloadJson) {
-    try {
-      var payload = parseJson(payloadJson);
-      var target = payload.target === "clip" ? "clip" : "sequence";
-      var events = payload.events || [];
-      var seq = app.project.activeSequence;
-      var clip = getExactlyOneSelectedClip();
-      var info = getClipInfo(clip);
-      var applied = 0;
-      var skipped = 0;
-      var createdTimes = [];
-
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      verifyClipInfo(payload, info);
-      if (target === "sequence" && info.variableTimeRemap) {
-        throw new Error(
-          "Sequence markers cannot be mapped safely on a variable time-remapped clip."
-        );
-      }
-
-      if (target === "clip") {
-        var clipCollection = clipMarkerCollection(clip);
-        var existingClipMarkers = collectMarkers(
-          clipCollection,
-          info.inPointSeconds,
-          info.outPointSeconds
-        );
-        for (var cm = 0; cm < existingClipMarkers.length; cm++) {
-          deleteMarker(clipCollection, existingClipMarkers[cm]);
-        }
-      } else {
-        var existingSeqMarkers = collectMarkers(
-          seq.markers,
-          info.startSeconds,
-          info.endSeconds
-        );
-        for (var sm = 0; sm < existingSeqMarkers.length; sm++) {
-          deleteMarker(seq.markers, existingSeqMarkers[sm]);
-        }
-      }
-
-      for (var i = 0; i < events.length; i++) {
-        var eventTime = Number(events[i].time);
-        var score = Number(events[i].score);
-        if (!isClipSourceTimeInRange(eventTime, info)) {
-          skipped++;
-          continue;
-        }
-
-        var color = markerColorForEvent(events[i], target);
-
-        if (target === "clip") {
-          var clipTime = snapToLastValidFrame(
-            eventTime,
-            seq,
-            info.inPointSeconds,
-            info.outPointSeconds
-          );
-          setMarkerFields(createClipMarker(clip, clipTime), color);
-          createdTimes.push(clipTime);
-        } else {
-          var sequenceTime = clipSourceTimeToSequenceTime(eventTime, info);
-          sequenceTime = snapToLastValidFrame(
-            sequenceTime,
-            seq,
-            info.startSeconds,
-            info.endSeconds
-          );
-          if (!isSequenceTimeInClipRange(sequenceTime, info)) {
-            skipped++;
-            continue;
-          }
-          setMarkerFields(seq.markers.createMarker(sequenceTime), color);
-          createdTimes.push(sequenceTime);
-        }
-        applied++;
-      }
-
-      return ok({
-        applied: applied,
-        skipped: skipped,
-        createdTimes: createdTimes
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
   AutoCutStudio.applyMarkersChunk = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
@@ -1829,13 +1748,12 @@ if (!JSON.parse) {
 
       for (var i = 0; i < events.length; i++) {
         var eventTime = Number(events[i].time);
-        var score = Number(events[i].score);
         if (!isClipSourceTimeInRange(eventTime, info)) {
           skipped++;
           continue;
         }
 
-        var color = markerColorForEvent(events[i], target);
+        var color = beatMarkerColor();
 
         if (target === "clip") {
           var clipTime = snapToLastValidFrame(
@@ -1954,7 +1872,7 @@ if (!JSON.parse) {
           var positionProp = findPositionPropertyOnComponent(transform);
           if (!prop) {
             skipped++;
-            errors.push(name + ": AutoCutStudio Transform > Scale not found");
+            errors.push(name + ": Premiere Transform > Scale not found");
             continue;
           }
           if (prop.areKeyframesSupported && !prop.areKeyframesSupported()) {
@@ -1963,7 +1881,7 @@ if (!JSON.parse) {
             continue;
           }
 
-          prop.setTimeVarying(true);
+          setKeyframingEnabled(prop, true, "Scale");
 
           var range = clipTimelineRange(clip);
           var inTime = range.start;
@@ -2051,7 +1969,7 @@ if (!JSON.parse) {
             setScaleKeys(prop, [
               [inTime, zoomTarget],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "crash_in") {
             var crashInStart = Math.max(
               inTime,
@@ -2061,7 +1979,7 @@ if (!JSON.parse) {
               [inTime, 100.0],
               [crashInStart, 100.0],
               [safeEndTime, zoomTarget]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "crash_out") {
             var crashOutEnd = Math.min(
               safeEndTime,
@@ -2071,7 +1989,7 @@ if (!JSON.parse) {
               [inTime, zoomTarget],
               [crashOutEnd, 100.0],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "punch_in") {
             setScaleKeys(prop, [
               [inTime, 100.0],
@@ -2081,13 +1999,13 @@ if (!JSON.parse) {
               ],
               [beatSettle, softTarget],
               [safeEndTime, softTarget]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "punch_out") {
             setScaleKeys(prop, [
               [inTime, zoomTarget],
               [clampTime(inTime + frameDuration, inTime, safeEndTime), 100.0],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "pulse") {
             setScaleKeys(prop, [
               [inTime, 100.0],
@@ -2095,7 +2013,7 @@ if (!JSON.parse) {
               [pulseB, 100.0],
               [pulseC, softTarget],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "snap_back") {
             setScaleKeys(prop, [
               [inTime, 100.0],
@@ -2105,7 +2023,7 @@ if (!JSON.parse) {
               ],
               [snapReturn, 100.0],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "triple_hit") {
             setScaleKeys(prop, [
               [inTime, 100.0],
@@ -2114,20 +2032,20 @@ if (!JSON.parse) {
               [tripleC, softTarget],
               [tripleD, 100.0],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "breath") {
             setScaleKeys(prop, [
               [inTime, 100.0],
               [midTime, breathTarget],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "reveal") {
             var revealStart = timeAt(inTime, safeEndTime - inTime, 0.62);
             setScaleKeys(prop, [
               [inTime, zoomTarget],
               [revealStart, zoomTarget],
               [safeEndTime, 100.0]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "dolly_zoom") {
             var dolly = payload.dolly || {};
             var interpolationType = dollyInterpolationType(dolly.easing);
@@ -2197,6 +2115,23 @@ if (!JSON.parse) {
               );
             }
 
+            var sequenceSize = getSequenceSize(seq);
+            startPoint = positionValueForProperty(
+              positionProp,
+              startPoint,
+              sequenceSize
+            );
+            midpointPoint = positionValueForProperty(
+              positionProp,
+              midpointPoint,
+              sequenceSize
+            );
+            endPoint = positionValueForProperty(
+              positionProp,
+              endPoint,
+              sequenceSize
+            );
+
             setScaleKeys(
               prop,
               [
@@ -2204,37 +2139,26 @@ if (!JSON.parse) {
                 [midTime, midpointScale],
                 [safeEndTime, endScale]
               ],
-              interpolationType
+              interpolationType,
+              frameDuration
             );
             if (
               positionProp &&
               (!positionProp.areKeyframesSupported ||
                 positionProp.areKeyframesSupported())
             ) {
-              try {
-                positionProp.setTimeVarying(true);
-              } catch (_) {}
+              setKeyframingEnabled(positionProp, true, "Position");
               removeKeysInRange(positionProp, inTime, rawOutTime);
-              setValueKey(
+              setValueKeys(
                 positionProp,
-                inTime,
-                startPoint,
+                [
+                  [inTime, startPoint],
+                  [midTime, midpointPoint],
+                  [safeEndTime, endPoint]
+                ],
                 "Position",
-                interpolationType
-              );
-              setValueKey(
-                positionProp,
-                midTime,
-                midpointPoint,
-                "Position",
-                interpolationType
-              );
-              setValueKey(
-                positionProp,
-                safeEndTime,
-                endPoint,
-                "Position",
-                interpolationType
+                interpolationType,
+                frameDuration
               );
             } else {
               errors.push(
@@ -2248,27 +2172,27 @@ if (!JSON.parse) {
               [timeAt(inTime, safeEndTime - inTime, 0.22), overshootTarget],
               [timeAt(inTime, safeEndTime - inTime, 0.55), softTarget],
               [safeEndTime, zoomTarget]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "swell") {
             setScaleKeys(prop, [
               [inTime, 100.0],
               [timeAt(inTime, safeEndTime - inTime, 0.45), 100.0],
               [safeEndTime, zoomTarget]
-            ]);
+            ], undefined, frameDuration);
           } else if (zoomStyle === "drift") {
             setScaleKeys(prop, [
               [inTime, 100.0],
               [safeEndTime, driftTarget]
-            ]);
+            ], undefined, frameDuration);
           } else {
             setScaleKeys(prop, [
               [inTime, 100.0],
               [safeEndTime, zoomTarget]
-            ]);
+            ], undefined, frameDuration);
           }
 
           markAutoCutTransformOwnership(transform, ref, zoomStyle);
-          persistMotionLedger(ref, zoomStyle);
+          persistMotionLedger(ref, transform, zoomStyle);
           appliedCount++;
         } catch (err) {
           skipped++;
@@ -2313,20 +2237,12 @@ if (!JSON.parse) {
         var clip = ref.clip;
         var name = ref.name || clipName(clip, i);
         try {
-          var transform = null;
-          if (clip && clip.components) {
-            for (var c = 0; c < clip.components.numItems; c++) {
-              if (isAutoCutTransformComponent(clip.components[c])) {
-                transform = clip.components[c];
-                break;
-              }
-            }
-          }
+          var transform = findOwnedTransformComponent(ref);
           if (!transform) {
             skipped++;
             errors.push(
               name +
-                ": AutoCutStudio Transform not found; built-in Motion was preserved"
+                ": owned Premiere Transform not found; built-in Motion was preserved"
             );
             continue;
           }
@@ -2344,8 +2260,29 @@ if (!JSON.parse) {
           var scale = findScalePropertyOnComponent(transform);
           var position = findPositionPropertyOnComponent(transform);
           var range = clipTimelineRange(clip);
-          if (scale) removeKeysInRange(scale, range.start, range.end);
-          if (position) removeKeysInRange(position, range.start, range.end);
+          if (scale) {
+            resetAnimatedProperty(
+              scale,
+              range.start,
+              range.end,
+              100.0,
+              "Scale"
+            );
+          }
+          if (position) {
+            var neutralPosition = positionValueForProperty(
+              position,
+              [0.5, 0.5],
+              getSequenceSize(seq)
+            );
+            resetAnimatedProperty(
+              position,
+              range.start,
+              range.end,
+              neutralPosition,
+              "Position"
+            );
+          }
           if (scale || position) {
             cleared++;
           } else {
@@ -2548,8 +2485,6 @@ if (!JSON.parse) {
       return fail(error.message || String(error));
     }
   };
-
-  AutoCutStudio.autoColorAtPlayhead = AutoCutStudio.autoColorSelectedClips;
 
   function removeEffectViaQE(ref, effectNames) {
     // Try to remove effects via QE DOM (works when ExtendScript can't see the component)

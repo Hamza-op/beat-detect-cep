@@ -19,10 +19,11 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 - Rhythmic decoding that can preserve a soft or implied beat inside an active passage
 - Quiet-section gating so long breakdowns are not filled with invented markers
 - Automatic major-hit selection that keeps locally prominent real beats without a per-minute quota
-- One beat-marker color while marker name/comment fields remain blank
+- Global `-500 ms` to `+500 ms` marker placement offset with `1 ms` precision and a `0 ms` default
+- One beat-marker color with a blank display name and an exact internal ownership signature
 - Native AutoCutStudio color correction that samples the current playhead frame, uses confidence-aware scene statistics, and applies one fixed 8/16/32-bpc grade across the selected clip
 - One-by-one Warp Stabilizer queue for selected video clips
-- Remove blank AutoCut Studio markers from the selected target/range
+- Remove only signed AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
 - Browser preview mode by opening `index.html` without Premiere
 - Single Windows setup executable
@@ -73,7 +74,8 @@ The installer:
 %APPDATA%\Adobe\CEP\extensions\com.autocutstudio.panel
 ```
 
-- enables unsigned CEP loading for Adobe `CSXS.11` through `CSXS.15` registry keys
+- development installers enable unsigned CEP loading for Adobe `CSXS.11`
+  through `CSXS.15`; production-signed installers do not change Adobe debug keys
 - writes install logs to:
 
 ```text
@@ -129,7 +131,9 @@ AutoCutStudioSetup.exe
 
 The package script builds the Rust analyzer and the native `AutoCutColorEngine.aex` before embedding runtime files. If MSBuild is unavailable, it refuses to package a missing or stale native plugin instead of silently shipping an old color engine.
 
-Release artifacts are explicitly labeled unsigned unless signing is configured. See [docs/release/README.md](docs/release/README.md) for the out-of-scope signing integration.
+Rolling artifacts are explicitly labeled development/unsigned. Stable builds
+are blocked unless the production signing checks pass. See
+[docs/release/README.md](docs/release/README.md).
 
 ## GitHub Release Build
 
@@ -175,7 +179,7 @@ beats
 Expected stdout is JSON only:
 
 ```json
-[{"time":25.739,"score":0.963}]
+[{ "time": 25.739, "score": 0.963 }]
 ```
 
 Errors are written to stderr with a non-zero exit code.
@@ -213,7 +217,8 @@ Set-Content -LiteralPath "$outDir\o-rangrez-beats.txt" -Value $lines -Encoding U
 2. Select one timeline clip with linked source media.
 3. Choose `Sequence Markers` or `Clip Markers`.
 4. Click `Analyze Track`.
-5. Click `Apply Markers to Timeline`.
+5. Optionally adjust `Marker Timing Offset`: negative values move every marker earlier and positive values move every marker later.
+6. Click `Apply Markers to Timeline`.
 
 To clean generated markers, keep the same marker target selected and click:
 
@@ -221,10 +226,10 @@ To clean generated markers, keep the same marker target selected and click:
 Remove AutoCut Studio Markers
 ```
 
-AutoCut Studio applies blank markers: marker name and comments are intentionally
-empty, and every generated beat marker uses one fixed color. Because the
-markers are intentionally blank, avoid using the remove button on ranges that
-contain user-created blank markers you want to keep.
+AutoCut Studio applies markers with a blank display name and one fixed color.
+An exact `AutoCutStudio Beat Marker v1` comment signature identifies ownership,
+so Remove Markers does not infer ownership from color or blank fields and will
+not delete unrelated user markers.
 
 ## Warp Stabilizer Queue
 
@@ -264,9 +269,13 @@ song-relative strength floor, and be the strongest nearby beat. There is no
 marker-per-minute target, cadence window, or exact count: a song or section
 with many genuine major hits can produce many markers, while a soft section
 can produce very few. Every selected timestamp comes directly from the
-decoded beat grid; no marker time is invented or moved off-beat. There are no
-density controls, timing offsets, or alternate detection profiles exposed to
-the editor.
+decoded beat grid. There are no density controls or alternate detection
+profiles exposed to the editor. The optional global timing offset is a
+post-detection placement calibration: it shifts every selected marker by the
+same `-500 ms` to `+500 ms` amount without changing detection, beat strength,
+or marker count. At `0 ms`, marker placement is identical to the analyzer
+output. Premiere still snaps each result to a valid video frame and skips any
+shifted marker that lands outside the selected clip range.
 
 ## Logs
 
@@ -291,4 +300,5 @@ Panel runtime log:
 - Runtime decoding supports the bundled Symphonia formats; Opus/WebA input
   should be converted to WAV, AAC, MP3, or MP4/M4A before analysis.
 - No FFmpeg, Python, Cargo, or Rust runtime is required on editor machines; runtime decoding is handled by bundled binaries.
-- The setup executable installs an unsigned CEP extension. For wider public distribution, signing/ZXP packaging can be added later.
+- Local setup builds are unsigned development installers. The stable release
+  path requires CEP and Authenticode signing and never enables Adobe debug mode.

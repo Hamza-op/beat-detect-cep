@@ -8,7 +8,7 @@ const root = path.resolve(
 );
 const payload = path.join(root, "dist", "com.autocutstudio.panel");
 const allowed =
-  /^(CSXS\/manifest\.xml|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt)$/;
+  /^(CSXS\/manifest\.xml|META-INF\/.+|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt)$/;
 async function walk(dir, relative = "") {
   const entries = await readdir(dir, { withFileTypes: true });
   const out = [];
@@ -42,7 +42,9 @@ if (missing.length)
   throw new Error(
     `Payload is missing required release files:\n${missing.join("\n")}`,
   );
-const files = allFiles;
+// CEP signatures are generated after assembly and sign this manifest too.
+// Keep META-INF out of the self-hash to avoid a circular signature dependency.
+const files = allFiles.filter((file) => !file.startsWith("META-INF/"));
 const manifest = {};
 for (const file of files) {
   const bytes = await readFile(path.join(payload, file));

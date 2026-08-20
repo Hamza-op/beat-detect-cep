@@ -440,7 +440,8 @@ static ColorCorrectionParams ResolveAutoColorParams(PF_InData* in_data, PF_Param
             return p;
         }
 
-        if (AnalyzeLayerAtSeconds(in_data, capture_seconds, analysis)) {
+        if (AnalyzeLayerAtSeconds(in_data, capture_seconds, analysis) ||
+            AnalyzeAdobeLayer(in_data, &params[AUTOCUT_INPUT]->u.ld, analysis)) {
             p = ColorParamsFromAnalysis(analysis);
             StoreCapturedParams(in_data, capture_token, capture_seconds, p);
         } else {
@@ -957,11 +958,11 @@ ParamsSetup(
         return err;
     }
 
-    err = AddInternalFloatSlider(in_data, def, STR(StrID_AutoAmount_Param_Name),
-                               0.0f, 100.0f, 100.0f, AUTO_AMOUNT_DISK_ID);
-    if (err != PF_Err_NONE) {
-        return err;
-    }
+    // Keep automatic correction conservative and editable. This is the base
+    // grade; the public controls above remain manual offsets for refinement.
+    AEFX_CLR_STRUCT(def);
+    PF_ADD_FLOAT_SLIDERX(STR(StrID_AutoAmount_Param_Name), 0, 100, 0, 100, 80,
+                          PF_Precision_HUNDREDTHS, 0, 0, AUTO_AMOUNT_DISK_ID);
     
     out_data->num_params = AUTOCUT_NUM_PARAMS;
 

@@ -1,5 +1,5 @@
 import "./CSInterface.js";
-import "./motion/dolly";
+import "./markers/distribution";
 import "./legacy-main.js";
 
 export function startApp(): void {

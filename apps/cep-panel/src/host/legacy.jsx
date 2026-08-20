@@ -14,7 +14,7 @@ if (!JSON.parse) {
 
 (function () {
   var TICKS_PER_SECOND = 254016000000;
-  var AUTOCUT_EXTENSION_VERSION = "1.1.1";
+  var AUTOCUT_EXTENSION_VERSION = "1.2.0";
 
   function esc(value) {
     return String(value)
@@ -353,24 +353,6 @@ if (!JSON.parse) {
     return selected;
   }
 
-  function clipHasWarpStabilizer(clip) {
-    if (!clip || !clip.components) {
-      return false;
-    }
-    for (var c = 0; c < clip.components.numItems; c++) {
-      var component = clip.components[c];
-      var matchName = String(component.matchName || "");
-      var displayName = String(component.displayName || "");
-      if (
-        matchName.indexOf("SubspaceStabilizer") >= 0 ||
-        displayName.toLowerCase().indexOf("warp stabilizer") >= 0
-      ) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   function normalizedName(value) {
     return String(value || "").toLowerCase();
   }
@@ -545,59 +527,6 @@ if (!JSON.parse) {
     return Math.max(101.0, Math.min(150.0, Number(value) || 110.0));
   }
 
-  function setValueKey(prop, seconds, value, label, interpolationType) {
-    var time = timeFromSeconds(seconds);
-    var addError = null;
-    try {
-      requireHostSuccess(prop.addKey(time), "Add " + label + " keyframe");
-    } catch (error) {
-      addError = error;
-    }
-
-    try {
-      requireHostSuccess(
-        prop.setValueAtKey(time, value, 1),
-        "Set " + label + " keyframe value"
-      );
-    } catch (valueError) {
-      if (addError) {
-        throw new Error(
-          "Could not add " +
-            label +
-            " keyframe: " +
-            (addError.message || addError) +
-            "; " +
-            (valueError.message || valueError)
-        );
-      }
-      throw valueError;
-    }
-
-    if (prop.setInterpolationTypeAtKey) {
-      requireHostSuccess(
-        prop.setInterpolationTypeAtKey(
-          time,
-          typeof interpolationType === "number" ? interpolationType : 5,
-          1
-        ),
-        "Set " + label + " keyframe interpolation"
-      );
-    }
-  }
-
-  function setValueKeys(prop, keys, label, interpolationType, frameDuration) {
-    var important = importantKeyframes(keys, frameDuration);
-    for (var i = 0; i < important.length; i++) {
-      setValueKey(
-        prop,
-        important[i][0],
-        important[i][1],
-        label,
-        interpolationType
-      );
-    }
-  }
-
   function setKeyframingEnabled(prop, enabled, label) {
     if (!prop || !prop.setTimeVarying) {
       throw new Error(label + " does not expose keyframing controls.");
@@ -621,14 +550,6 @@ if (!JSON.parse) {
     return true;
   }
 
-  function boundedScale(value, fallback, min, max) {
-    var scale = Number(value);
-    if (!isFinite(scale)) {
-      scale = fallback;
-    }
-    return Math.max(min, Math.min(max, scale));
-  }
-
   function getSequenceSize(seq) {
     var size = { width: 1920.0, height: 1080.0 };
     try {
@@ -645,12 +566,6 @@ if (!JSON.parse) {
       }
     } catch (_) {}
     return size;
-  }
-
-  function pointFromPercent(xPercent, yPercent) {
-    var x = boundedScale(xPercent, 50.0, 0.0, 100.0);
-    var y = boundedScale(yPercent, 50.0, 0.0, 100.0);
-    return [x / 100.0, y / 100.0];
   }
 
   function positionPropertyUsesPixels(prop) {
@@ -676,39 +591,6 @@ if (!JSON.parse) {
     ];
   }
 
-  function dollyInterpolationType(easing) {
-    if (easing === "linear") return 0;
-    if (easing === "ease_in") return 1;
-    if (easing === "ease_out") return 2;
-    if (easing === "ease_in_out") return 3;
-    return 5;
-  }
-
-  function dollyScaleValue(keys, index, fallback) {
-    if (
-      keys &&
-      keys.length > index &&
-      keys[index] &&
-      keys[index].value !== undefined
-    ) {
-      return boundedScale(keys[index].value, fallback, 100.0, 180.0);
-    }
-    return boundedScale(fallback, 100.0, 100.0, 180.0);
-  }
-
-  function dollyPositionValue(keys, index, fallbackX, fallbackY) {
-    if (
-      keys &&
-      keys.length > index &&
-      keys[index] &&
-      keys[index].value &&
-      keys[index].value.length >= 2
-    ) {
-      return pointFromPercent(keys[index].value[0], keys[index].value[1]);
-    }
-    return pointFromPercent(fallbackX, fallbackY);
-  }
-
   function baseZoomForStyle(style) {
     var bases = {
       smooth_in: 108.0,
@@ -716,30 +598,38 @@ if (!JSON.parse) {
       drift: 105.0,
       breath: 106.0,
       reveal: 112.0,
-      dolly_zoom: 118.0,
       settle_in: 114.0,
-      swell: 110.0,
-      crash_in: 126.0,
-      crash_out: 124.0,
       punch_in: 118.0,
       punch_out: 116.0,
       pulse: 112.0,
-      snap_back: 120.0,
-      triple_hit: 116.0
+      snap_back: 120.0
     };
     return bases[style] || 110.0;
   }
 
   function isFastZoomStyle(style) {
     return (
-      style === "crash_in" ||
-      style === "crash_out" ||
       style === "punch_in" ||
       style === "punch_out" ||
       style === "pulse" ||
-      style === "snap_back" ||
-      style === "triple_hit"
+      style === "snap_back"
     );
+  }
+
+  function isSupportedZoomStyle(style) {
+    var supported = {
+      smooth_in: true,
+      smooth_out: true,
+      drift: true,
+      breath: true,
+      reveal: true,
+      settle_in: true,
+      punch_in: true,
+      punch_out: true,
+      pulse: true,
+      snap_back: true
+    };
+    return supported[style] === true;
   }
 
   function durationZoomScale(style, duration) {
@@ -765,36 +655,6 @@ if (!JSON.parse) {
     var base = baseZoomForStyle(style);
     var intensity = (base - 100.0) * durationZoomScale(style, duration);
     return boundedZoom(100.0 + intensity);
-  }
-
-  function getWarpStabilizerEffect() {
-    if (!app.enableQE) {
-      throw new Error(
-        "Premiere QE DOM is unavailable; cannot apply Warp Stabilizer by script."
-      );
-    }
-    app.enableQE();
-    if (
-      typeof qe === "undefined" ||
-      !qe.project ||
-      !qe.project.getVideoEffectByName
-    ) {
-      throw new Error(
-        "Premiere QE project API is unavailable; cannot find Warp Stabilizer."
-      );
-    }
-
-    var names = ["Warp Stabilizer", "Warp Stabilizer VFX"];
-    for (var i = 0; i < names.length; i++) {
-      var effect = qe.project.getVideoEffectByName(names[i]);
-      if (effect) {
-        return effect;
-      }
-    }
-
-    throw new Error(
-      "Could not find the Warp Stabilizer video effect in this Premiere installation."
-    );
   }
 
   function getVideoEffectByNames(names, label) {
@@ -1157,19 +1017,42 @@ if (!JSON.parse) {
     return null;
   }
 
+  var pendingAutoColorIdentity = "";
+  var pendingAutoColorStarted = 0;
+
   function ensureAutoCutColorComponent(ref) {
     var component = findAutoCutColorComponent(ref.clip);
     if (component) {
+      pendingAutoColorIdentity = "";
+      pendingAutoColorStarted = 0;
       return component;
     }
 
-    // Try to apply via QE DOM
-    try {
-      applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
-    } catch (_applyErr) {
+    var identity = getClipInfo(ref.clip).identity;
+    var now = new Date().getTime();
+    if (
+      pendingAutoColorIdentity === identity &&
+      now - pendingAutoColorStarted < 5000
+    ) {
       return null;
     }
-    return null;
+
+    try {
+      applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
+      pendingAutoColorIdentity = identity;
+      pendingAutoColorStarted = now;
+    } catch (applyError) {
+      throw new Error(
+        "Could not add AutoCutStudio Color Engine. Restart Premiere after installing AutoCutStudioSetup.exe as Administrator. " +
+          (applyError.message || String(applyError))
+      );
+    }
+    component = findAutoCutColorComponent(ref.clip);
+    if (component) {
+      pendingAutoColorIdentity = "";
+      pendingAutoColorStarted = 0;
+    }
+    return component;
   }
 
   function selectedAutoColorRef() {
@@ -1195,8 +1078,7 @@ if (!JSON.parse) {
       assertPlayheadInsideClip(selected.ref, playheadSeconds);
       var existing = findAutoCutColorComponent(selected.ref.clip);
       if (!existing) {
-        ensureAutoCutColorComponent(selected.ref);
-        existing = findAutoCutColorComponent(selected.ref.clip);
+        existing = ensureAutoCutColorComponent(selected.ref);
       }
       return ok({ ready: !!existing });
     } catch (error) {
@@ -1270,7 +1152,12 @@ if (!JSON.parse) {
       ["frame capture seconds", "capture seconds"],
       localSeconds
     );
-    return tokenSet && secondsSet;
+    var amountSet = setLumetriProperty(
+      component,
+      ["auto amount"],
+      80.0
+    );
+    return tokenSet && secondsSet && amountSet;
   }
 
   function sequencePlayheadSeconds(seq) {
@@ -1365,49 +1252,6 @@ if (!JSON.parse) {
     }
     prop.setValue(Number(value), 1);
     return true;
-  }
-
-  function applyLumetriValues(component, values) {
-    var applied = 0;
-    var missing = [];
-    var map = [
-      {
-        key: "temperature",
-        names: ["temperature", "temp"],
-        value: values.temperature
-      },
-      { key: "tint", names: ["tint"], value: values.tint },
-      { key: "exposure", names: ["exposure"], value: values.exposure },
-      { key: "contrast", names: ["contrast"], value: values.contrast },
-      {
-        key: "highlights",
-        names: ["highlights", "highlight"],
-        value: values.highlights
-      },
-      { key: "shadows", names: ["shadows", "shadow"], value: values.shadows },
-      { key: "whites", names: ["whites", "white"], value: values.whites },
-      { key: "blacks", names: ["blacks", "black"], value: values.blacks },
-      { key: "saturation", names: ["saturation"], value: values.saturation },
-      { key: "vibrance", names: ["vibrance"], value: values.vibrance }
-    ];
-
-    for (var i = 0; i < map.length; i++) {
-      if (map[i].value === undefined || map[i].value === null) {
-        continue;
-      }
-      if (setLumetriProperty(component, map[i].names, map[i].value)) {
-        applied++;
-      } else {
-        missing.push(map[i].key);
-      }
-    }
-
-    if (applied === 0) {
-      throw new Error(
-        "Lumetri properties were not exposed by this Premiere version."
-      );
-    }
-    return missing;
   }
 
   function getMediaPath(projectItem) {
@@ -1706,24 +1550,6 @@ if (!JSON.parse) {
     }
   };
 
-  AutoCutStudio.getDollyFrameInfo = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      var size = getSequenceSize(seq);
-      return ok({
-        width: size.width,
-        height: size.height,
-        orientation: size.height > size.width ? "portrait" : "landscape",
-        sequenceName: seq.name || ""
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
   AutoCutStudio.applyMarkersChunk = function (payloadJson) {
     try {
       var payload = parseJson(payloadJson);
@@ -1845,6 +1671,9 @@ if (!JSON.parse) {
       var payloadZoom = boundedZoom(payload.zoom);
       var zoomStyle = payload.style || "smooth_in";
       var autoRatio = payload.autoRatio !== false;
+      if (!isSupportedZoomStyle(zoomStyle)) {
+        throw new Error("Unsupported Scale movement: " + zoomStyle);
+      }
 
       var seq = app.project.activeSequence;
       if (!seq) {
@@ -1869,7 +1698,6 @@ if (!JSON.parse) {
         try {
           var transform = ensureAutoCutTransformComponent(ref);
           var prop = findScalePropertyOnComponent(transform);
-          var positionProp = findPositionPropertyOnComponent(transform);
           if (!prop) {
             skipped++;
             errors.push(name + ": Premiere Transform > Scale not found");
@@ -1932,26 +1760,6 @@ if (!JSON.parse) {
             safeEndTime
           );
           var pulseC = clampTime(inTime + pulseWindow, inTime, safeEndTime);
-          var tripleA = clampTime(
-            inTime + pulseWindow * 0.2,
-            inTime,
-            safeEndTime
-          );
-          var tripleB = clampTime(
-            inTime + pulseWindow * 0.38,
-            inTime,
-            safeEndTime
-          );
-          var tripleC = clampTime(
-            inTime + pulseWindow * 0.56,
-            inTime,
-            safeEndTime
-          );
-          var tripleD = clampTime(
-            inTime + pulseWindow * 0.74,
-            inTime,
-            safeEndTime
-          );
           var snapReturn = clampTime(
             inTime + Math.min(0.28, duration * 0.28),
             inTime,
@@ -1968,26 +1776,6 @@ if (!JSON.parse) {
           if (zoomStyle === "smooth_out") {
             setScaleKeys(prop, [
               [inTime, zoomTarget],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "crash_in") {
-            var crashInStart = Math.max(
-              inTime,
-              safeEndTime - Math.min(0.35, duration * 0.25)
-            );
-            setScaleKeys(prop, [
-              [inTime, 100.0],
-              [crashInStart, 100.0],
-              [safeEndTime, zoomTarget]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "crash_out") {
-            var crashOutEnd = Math.min(
-              safeEndTime,
-              inTime + Math.min(0.35, duration * 0.25)
-            );
-            setScaleKeys(prop, [
-              [inTime, zoomTarget],
-              [crashOutEnd, 100.0],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "punch_in") {
@@ -2024,15 +1812,6 @@ if (!JSON.parse) {
               [snapReturn, 100.0],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
-          } else if (zoomStyle === "triple_hit") {
-            setScaleKeys(prop, [
-              [inTime, 100.0],
-              [tripleA, zoomTarget],
-              [tripleB, 100.0],
-              [tripleC, softTarget],
-              [tripleD, 100.0],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
           } else if (zoomStyle === "breath") {
             setScaleKeys(prop, [
               [inTime, 100.0],
@@ -2046,137 +1825,11 @@ if (!JSON.parse) {
               [revealStart, zoomTarget],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
-          } else if (zoomStyle === "dolly_zoom") {
-            var dolly = payload.dolly || {};
-            var interpolationType = dollyInterpolationType(dolly.easing);
-            var scaleKeys = dolly.scaleKeys;
-            var positionKeys = dolly.positionKeys;
-            var startScale;
-            var midpointScale;
-            var endScale;
-            var startPoint;
-            var midpointPoint;
-            var endPoint;
-
-            if (scaleKeys && scaleKeys.length >= 3) {
-              startScale = dollyScaleValue(scaleKeys, 0, 100.0);
-              midpointScale = dollyScaleValue(scaleKeys, 1, 118.0);
-              endScale = dollyScaleValue(scaleKeys, 2, 108.0);
-              startPoint = dollyPositionValue(positionKeys, 0, 50.0, 50.0);
-              midpointPoint = dollyPositionValue(positionKeys, 1, 50.0, 50.0);
-              endPoint = dollyPositionValue(positionKeys, 2, 50.0, 50.0);
-            } else {
-              var fallbackIntensity =
-                boundedScale(dolly.intensity, 65.0, 0.0, 100.0) / 100.0;
-              var rawStartScale = boundedScale(
-                dolly.startScale,
-                100.0,
-                100.0,
-                180.0
-              );
-              var rawMidScale = boundedScale(
-                dolly.midScale,
-                118.0,
-                100.0,
-                180.0
-              );
-              var rawEndScale = boundedScale(
-                dolly.endScale,
-                108.0,
-                100.0,
-                180.0
-              );
-              startScale = 100.0 + (rawStartScale - 100.0) * fallbackIntensity;
-              midpointScale = 100.0 + (rawMidScale - 100.0) * fallbackIntensity;
-              endScale = 100.0 + (rawEndScale - 100.0) * fallbackIntensity;
-              startPoint = pointFromPercent(
-                50.0 +
-                  (boundedScale(dolly.startX, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity,
-                50.0 +
-                  (boundedScale(dolly.startY, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity
-              );
-              midpointPoint = pointFromPercent(
-                50.0 +
-                  (boundedScale(dolly.midX, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity,
-                50.0 +
-                  (boundedScale(dolly.midY, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity
-              );
-              endPoint = pointFromPercent(
-                50.0 +
-                  (boundedScale(dolly.endX, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity,
-                50.0 +
-                  (boundedScale(dolly.endY, 50.0, 0.0, 100.0) - 50.0) *
-                    fallbackIntensity
-              );
-            }
-
-            var sequenceSize = getSequenceSize(seq);
-            startPoint = positionValueForProperty(
-              positionProp,
-              startPoint,
-              sequenceSize
-            );
-            midpointPoint = positionValueForProperty(
-              positionProp,
-              midpointPoint,
-              sequenceSize
-            );
-            endPoint = positionValueForProperty(
-              positionProp,
-              endPoint,
-              sequenceSize
-            );
-
-            setScaleKeys(
-              prop,
-              [
-                [inTime, startScale],
-                [midTime, midpointScale],
-                [safeEndTime, endScale]
-              ],
-              interpolationType,
-              frameDuration
-            );
-            if (
-              positionProp &&
-              (!positionProp.areKeyframesSupported ||
-                positionProp.areKeyframesSupported())
-            ) {
-              setKeyframingEnabled(positionProp, true, "Position");
-              removeKeysInRange(positionProp, inTime, rawOutTime);
-              setValueKeys(
-                positionProp,
-                [
-                  [inTime, startPoint],
-                  [midTime, midpointPoint],
-                  [safeEndTime, endPoint]
-                ],
-                "Position",
-                interpolationType,
-                frameDuration
-              );
-            } else {
-              errors.push(
-                name +
-                  ": Transform > Position not found; applied scale-only Dolly-Style Motion"
-              );
-            }
           } else if (zoomStyle === "settle_in") {
             setScaleKeys(prop, [
               [inTime, 100.0],
               [timeAt(inTime, safeEndTime - inTime, 0.22), overshootTarget],
               [timeAt(inTime, safeEndTime - inTime, 0.55), softTarget],
-              [safeEndTime, zoomTarget]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "swell") {
-            setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, safeEndTime - inTime, 0.45), 100.0],
               [safeEndTime, zoomTarget]
             ], undefined, frameDuration);
           } else if (zoomStyle === "drift") {
@@ -2374,22 +2027,12 @@ if (!JSON.parse) {
       component.enabled = true;
     } catch (_) {}
 
-    var values = defaultAutoCutColorValues();
     var captureLocalSeconds = clipLocalSecondsAtPlayhead(
       ref,
       captureFrameSeconds
     );
     var missing = [];
     var warnings = [];
-
-    try {
-      missing = applyAutoCutColorValues(component, values);
-    } catch (error) {
-      throw new Error(
-        "Native engine properties were not exposed: " +
-          (error.message || String(error))
-      );
-    }
 
     if (
       !setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)
@@ -2409,7 +2052,7 @@ if (!JSON.parse) {
       usedNativeAuto: true,
       missing: missing,
       warnings: warnings,
-      values: values,
+      autoAmount: 80,
       captureFrameSeconds: captureFrameSeconds,
       captureLocalSeconds: captureLocalSeconds,
       colorSpace: colorInfo.colorSpace,
@@ -2476,6 +2119,7 @@ if (!JSON.parse) {
         clips: clips,
         engine: clips[0].engine,
         usedNativeAuto: true,
+        autoAmount: clips[0].autoAmount,
         name: applied === 1 ? clips[0].name : applied + " selected clips",
         captureFrameSeconds: playheadSeconds,
         colorScience:
@@ -2696,95 +2340,6 @@ if (!JSON.parse) {
         marker = next;
       }
       return ok({ removed: removed });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.applyWarpStabilizerToSelectedClip = function (payloadJson) {
-    try {
-      var payload = payloadJson ? parseJson(payloadJson) : {};
-      var index = Number(payload.index) || 0;
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-
-      var refs = getSelectedVideoClipRefs(seq);
-      if (refs.length === 0) {
-        throw new Error(
-          "Select at least one video clip in the active sequence."
-        );
-      }
-      if (index < 0 || index >= refs.length) {
-        throw new Error("Selected clip index is out of range.");
-      }
-
-      var ref = null;
-      if (payload.identity) {
-        for (var ri = 0; ri < refs.length; ri++) {
-          if (refs[ri].identity === String(payload.identity)) {
-            ref = refs[ri];
-            index = ri;
-            break;
-          }
-        }
-        if (!ref) {
-          throw new Error("Selected clip identity is no longer present.");
-        }
-      } else {
-        ref = refs[index];
-      }
-      if (clipHasWarpStabilizer(ref.clip)) {
-        return ok({
-          applied: 0,
-          skipped: true,
-          reason: "Warp Stabilizer already exists",
-          index: index,
-          total: refs.length,
-          name: ref.name
-        });
-      }
-
-      applyVideoEffectToClipRef(ref, getWarpStabilizerEffect());
-      return ok({
-        applied: 1,
-        skipped: false,
-        index: index,
-        total: refs.length,
-        name: ref.name
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.listWarpSelection = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) throw new Error("No active sequence is open.");
-      var refs = getSelectedVideoClipRefs(seq);
-      var identities = [];
-      for (var i = 0; i < refs.length; i++)
-        identities.push({ identity: refs[i].identity, name: refs[i].name });
-      return ok({ clips: identities });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.isVideoEffectAnalysisDone = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      if (!seq.isDoneAnalyzingForVideoEffects) {
-        throw new Error(
-          "This Premiere version does not expose video-effect analysis status to scripts."
-        );
-      }
-      return ok({ done: Boolean(seq.isDoneAnalyzingForVideoEffects()) });
     } catch (error) {
       return fail(error.message || String(error));
     }

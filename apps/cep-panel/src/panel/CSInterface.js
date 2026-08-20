@@ -80,11 +80,6 @@
         return;
       }
 
-      if (script.indexOf("AutoCutStudio.getDollyFrameInfo") === 0) {
-        callback(JSON.stringify({ ok: true, width: 1920, height: 1080, orientation: "landscape", sequenceName: "Browser Preview Sequence" }));
-        return;
-      }
-
       if (script.indexOf("AutoCutStudio.applyGimbalZoom") === 0) {
         callback(JSON.stringify({ ok: true, applied: 3 }));
         return;
@@ -111,6 +106,7 @@
           ],
           engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
           usedNativeAuto: true,
+          autoAmount: 80,
           captureFrameSeconds: 12.5,
           colorScience: "SDR Standard (Preview)"
         }));
@@ -124,32 +120,6 @@
 
       if (script.indexOf("AutoCutStudio.getSelectedVideoClipCount") === 0) {
         callback(JSON.stringify({ ok: true, count: 3 }));
-        return;
-      }
-
-      if (script.indexOf("AutoCutStudio.applyWarpStabilizerToSelectedClip") === 0) {
-        var warpMatch = script.match(/AutoCutStudio\.applyWarpStabilizerToSelectedClip\((.*)\)/);
-        var index = 0;
-        if (warpMatch && warpMatch[1]) {
-          try {
-            index = JSON.parse(JSON.parse(warpMatch[1])).index || 0;
-          } catch (_) {
-            index = 0;
-          }
-        }
-        callback(JSON.stringify({
-          ok: true,
-          applied: 1,
-          skipped: false,
-          index: index,
-          total: 3,
-          name: "Preview Clip " + (index + 1)
-        }));
-        return;
-      }
-
-      if (script.indexOf("AutoCutStudio.isVideoEffectAnalysisDone") === 0) {
-        callback(JSON.stringify({ ok: true, done: true }));
         return;
       }
 

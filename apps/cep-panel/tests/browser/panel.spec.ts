@@ -84,6 +84,43 @@ test("the timing slider shifts every applied marker without changing detection",
   });
 });
 
+test("the beat percentage keeps an exact evenly distributed subset", async ({
+  page,
+}) => {
+  await page.goto("http://127.0.0.1:4173/");
+  await page.locator("#beatSelectionSlider").fill("50");
+  await expect(page.locator("#beatSelectionLabel")).toHaveText("50%");
+  await page.locator("#analyzeButton").click();
+  await expect(page.locator("#filteredCount")).toHaveText("21");
+  await expect(page.locator("#beatSelectionSummary")).toContainText(
+    "Keeps 21 of 42",
+  );
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#applyButton").click();
+  await expect(page.locator("#status")).toContainText("Applied 21");
+
+  const times = await page.evaluate(() => {
+    const calls =
+      (window as Window & { __autocutPreviewCalls?: string[] })
+        .__autocutPreviewCalls ?? [];
+    const call =
+      calls.find((entry) =>
+        entry.startsWith("AutoCutStudio.applyMarkersChunk"),
+      ) ?? "";
+    const encoded = call.slice(call.indexOf("(") + 1, -1);
+    const payload = JSON.parse(JSON.parse(encoded)) as {
+      events: Array<{ time: number }>;
+    };
+    return payload.events.map((event) => event.time);
+  });
+  expect(times).toHaveLength(21);
+  for (let index = 1; index < times.length; index += 1) {
+    expect(times[index]).toBeGreaterThan(times[index - 1]);
+    expect(times[index] - times[index - 1]).toBeLessThanOrEqual(1.5);
+  }
+});
+
 test("cancelling marker removal does not leave the production UI locked", async ({
   page,
 }) => {
@@ -100,7 +137,12 @@ test("Auto Color uses the canonical prepare and apply host functions", async ({
   await page.goto("http://127.0.0.1:4173/");
   await page.locator("#mainTabColorButton").click();
   await page.locator("#autoColorButton").click();
-  await expect(page.locator("#status")).toContainText("Auto color applied");
+  await expect(page.locator("#status")).toContainText(
+    "Editable starting grade applied",
+  );
+  await expect(page.locator("#status")).toContainText(
+    "Refine it in Effect Controls",
+  );
 
   const calls = await page.evaluate(
     () =>
@@ -119,43 +161,32 @@ test("Auto Color uses the canonical prepare and apply host functions", async ({
   ).toBe(true);
 });
 
-test("Dolly-Style Motion uses explicit flat-clip keyframes", async ({
+test("the motion toolbox exposes only ten reliable Scale movements", async ({
   page,
 }) => {
   await page.goto("http://127.0.0.1:4173/");
-  await page.locator("#mainTabDollyButton").click();
+  await page.locator("#mainTabToolsButton").click();
+  await expect(page.locator(".movement-btn")).toHaveCount(10);
+  await expect(page.locator("#mainTabDollyButton")).toHaveCount(0);
+  await expect(page.locator("#warpStabilizerButton")).toHaveCount(0);
 
-  for (const id of [
-    "dollyStartScaleSlider",
-    "dollyMidScaleSlider",
-    "dollyEndScaleSlider",
-    "dollyStartXSlider",
-    "dollyMidXSlider",
-    "dollyEndXSlider",
-    "dollyEasingSelect",
-  ]) {
-    await expect(page.locator(`#${id}`)).toBeVisible();
-  }
+  const modes = await page
+    .locator(".movement-btn")
+    .evaluateAll((buttons) =>
+      buttons.map((button) => button.getAttribute("data-mode")),
+    );
+  expect(new Set(modes).size).toBe(10);
 
-  await page.locator("#dollyIntensitySlider").fill("100");
-  await page.locator("#dollyMidScaleSlider").fill("140");
-  await page.locator("#dollyMidXSlider").fill("60");
-  await page.locator("#dollyEasingSelect").selectOption("linear");
-
-  const keyframes = await page
-    .locator("#dollyFlatScene")
-    .getAttribute("data-dolly-keyframes");
-  expect(keyframes).not.toBeNull();
-  const parsed = JSON.parse(keyframes ?? "{}");
-  expect(parsed.easing).toBe("linear");
-  expect(parsed.scaleKeys.map((key: { value: number }) => key.value)).toEqual([
-    100, 140, 108,
-  ]);
-  expect(parsed.positionKeys[1].value[0]).toBe(60);
-
-  await page.locator("#confirmDollyZoomButton").click();
+  await page.locator('.movement-btn[data-mode="punch_out"]').click();
+  await expect(page.locator("#selectedMomentLabel")).toHaveText(
+    "Beat Punch-Out",
+  );
+  await expect(page.locator("#previewSubject")).toHaveClass(
+    /animate-punch-out/,
+  );
+  await page.locator("#gimbalZoomButton").click();
   await expect(page.locator("#status")).toContainText(
-    "Applied Dolly-Style Motion",
+    "Applied gimbal zoom keyframes",
   );
 });
 
@@ -167,12 +198,12 @@ test("panel remains usable at supported dock sizes", async ({ page }) => {
   ]) {
     await page.setViewportSize(viewport);
     await page.goto("http://127.0.0.1:4173/");
-    await page.locator("#mainTabDollyButton").click();
+    await page.locator("#mainTabToolsButton").click();
     const dimensions = await page.evaluate(() => ({
       clientWidth: document.documentElement.clientWidth,
       scrollWidth: document.documentElement.scrollWidth,
     }));
     expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
-    await expect(page.locator("#confirmDollyZoomButton")).toBeVisible();
+    await expect(page.locator("#gimbalZoomButton")).toBeVisible();
   }
 });

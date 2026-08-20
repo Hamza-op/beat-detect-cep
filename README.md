@@ -1,6 +1,6 @@
 ﻿# AutoCut Studio
 
-Version: `1.1.1`
+Version: `1.2.0`
 
 AutoCut Studio is a Windows-first Adobe Premiere Pro tool for beat-grid edit markers, automated timeline helpers, and native color-correction work. The beat analyzer is tuned for Hindi, Urdu, and Punjabi wedding edits where useful cut points often come from dhol/tabla hits, claps, drops, and strong rhythmic sections.
 
@@ -14,15 +14,16 @@ The extension is a vanilla CEP panel backed by a bundled Rust analyzer. The edit
 - Marker target:
   - `Sequence Markers`
   - `Clip Markers`
-- One unified beat-to-marker path with no density profiles or selection strategies
+- One unified detector with a `5%` to `100%` post-detection beat-selection control
+- Exact-count, strength-aware selection distributed across the complete detected grid
 - Local tempo tracking so gradual tempo changes do not force the whole song onto one fixed grid
 - Rhythmic decoding that can preserve a soft or implied beat inside an active passage
 - Quiet-section gating so long breakdowns are not filled with invented markers
 - Automatic major-hit selection that keeps locally prominent real beats without a per-minute quota
 - Global `-500 ms` to `+500 ms` marker placement offset with `1 ms` precision and a `0 ms` default
 - One beat-marker color with a blank display name and an exact internal ownership signature
-- Native AutoCutStudio color correction that samples the current playhead frame, uses confidence-aware scene statistics, and applies one fixed 8/16/32-bpc grade across the selected clip
-- One-by-one Warp Stabilizer queue for selected video clips
+- Native AutoCutStudio color correction that samples the current playhead frame and creates a conservative 80% starting grade; Auto Amount and all manual controls remain editable in Premiere Effect Controls
+- Ten focused Scale-keyframe movements with automatic clip-duration tuning
 - Remove only signed AutoCut Studio markers from the selected target/range
 - Diagnostics button for CEP, Premiere selection, marker API, and analyzer checks
 - Browser preview mode by opening `index.html` without Premiere
@@ -217,8 +218,9 @@ Set-Content -LiteralPath "$outDir\o-rangrez-beats.txt" -Value $lines -Encoding U
 2. Select one timeline clip with linked source media.
 3. Choose `Sequence Markers` or `Clip Markers`.
 4. Click `Analyze Track`.
-5. Optionally adjust `Marker Timing Offset`: negative values move every marker earlier and positive values move every marker later.
-6. Click `Apply Markers to Timeline`.
+5. Optionally adjust `Beat Selection`. At `50%`, exactly half of the detected grid is retained: one locally strong, near-centre hit from each equal source window.
+6. Optionally adjust `Marker Timing Offset`: negative values move every marker earlier and positive values move every marker later.
+7. Click `Apply Markers to Timeline`.
 
 To clean generated markers, keep the same marker target selected and click:
 
@@ -231,11 +233,13 @@ An exact `AutoCutStudio Beat Marker v1` comment signature identifies ownership,
 so Remove Markers does not infer ownership from color or blank fields and will
 not delete unrelated user markers.
 
-## Warp Stabilizer Queue
+## Scale Movements
 
-Select multiple video clips and click `Apply Warp Stabilizer`. AutoCut Studio applies the effect to one selected clip, waits for Premiere's video-effect analysis state to report complete, then moves to the next selected clip.
-
-This uses Premiere's QE DOM to apply the named video effect and `Sequence.isDoneAnalyzingForVideoEffects()` to wait between clips. If a Premiere version does not expose either API, the panel reports the failure instead of continuing blindly.
+The Tools tab contains ten Scale-only keyframe movements: Slow Push-In, Slow
+Pull-Out, Micro Drift, Breathing Hold, Hold Then Reveal, Overshoot Settle, Beat
+Punch-In, Beat Punch-Out, Double Pulse, and Snap Back. AutoCut Studio applies
+them through a dedicated Premiere Transform component and records ownership so
+Clear Zoom does not touch unrelated Motion or Transform keyframes.
 
 ## Detection Notes
 
@@ -269,13 +273,18 @@ song-relative strength floor, and be the strongest nearby beat. There is no
 marker-per-minute target, cadence window, or exact count: a song or section
 with many genuine major hits can produce many markers, while a soft section
 can produce very few. Every selected timestamp comes directly from the
-decoded beat grid. There are no density controls or alternate detection
-profiles exposed to the editor. The optional global timing offset is a
-post-detection placement calibration: it shifts every selected marker by the
-same `-500 ms` to `+500 ms` amount without changing detection, beat strength,
-or marker count. At `0 ms`, marker placement is identical to the analyzer
-output. Premiere still snaps each result to a valid video frame and skips any
-shifted marker that lands outside the selected clip range.
+decoded beat grid. There are no alternate detection profiles. The Beat
+Selection slider operates only after detection: it divides the ordered grid
+into equal windows and retains one locally strong, near-centre hit from each
+window. This produces the exact requested percentage while preserving coverage
+through the song instead of taking only its loudest section. At `100%`, the
+analyzer output is unchanged.
+
+The optional global timing offset is also post-detection. It shifts every
+selected marker by the same `-500 ms` to `+500 ms` amount without changing
+detection or beat strength. At `0 ms`, marker placement is identical to the
+analyzer output. Premiere still snaps each result to a valid video frame and
+skips any shifted marker outside the selected clip range.
 
 ## Logs
 

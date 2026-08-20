@@ -57,14 +57,6 @@
     transform: scale(1.03);
   }
 }
-@keyframes acs-swell {
-  from {
-    transform: scale(1);
-  }
-  to {
-    transform: scale(1.1);
-  }
-}
 @keyframes acs-punch-in {
   from {
     transform: scale(1);
@@ -73,16 +65,12 @@
     transform: scale(1.18);
   }
 }
-@keyframes acs-triple-hit {
-  0%,
-  100% {
+@keyframes acs-punch-out {
+  from {
+    transform: scale(1.16);
+  }
+  to {
     transform: scale(1);
-  }
-  33% {
-    transform: scale(1.15);
-  }
-  66% {
-    transform: scale(1.04);
   }
 }
 @keyframes acs-snap-back {
@@ -131,17 +119,13 @@
 .preview-subject.animate-settle-in {
   animation: acs-settle-in 2s ease-in-out infinite alternate;
 }
-.movement-btn[data-mode="swell"].is-active,
-.preview-subject.animate-swell {
-  animation: acs-swell 3s ease-in-out infinite alternate;
-}
 .movement-btn[data-mode="punch_in"].is-active,
 .preview-subject.animate-punch-in {
   animation: acs-punch-in 900ms ease-in-out infinite alternate;
 }
-.movement-btn[data-mode="triple_hit"].is-active,
-.preview-subject.animate-triple-hit {
-  animation: acs-triple-hit 1.2s ease-in-out infinite;
+.movement-btn[data-mode="punch_out"].is-active,
+.preview-subject.animate-punch-out {
+  animation: acs-punch-out 900ms ease-in-out infinite alternate;
 }
 .movement-btn[data-mode="snap_back"].is-active,
 .preview-subject.animate-snap-back {
@@ -155,8 +139,8 @@
 .keyframe-track {
   position: relative;
   min-height: 28px;
-  border-top: 1px solid var(--acs-border);
-  border-bottom: 1px solid var(--acs-border);
+  border-top: 1px solid var(--rim);
+  border-bottom: 1px solid var(--rim);
 }
 .keyframe-track::before,
 .keyframe-track::after {
@@ -165,7 +149,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--acs-accent);
+  background: var(--amber);
   box-shadow: 0 0 0 2px rgba(255, 184, 76, 0.2);
   top: 50%;
   transform: translate(-50%, -50%);
@@ -190,7 +174,17 @@
 .key-line {
   position: absolute;
   height: 2px;
-  background: linear-gradient(90deg, var(--acs-accent), #76e4ff);
+  background: linear-gradient(90deg, var(--amber), var(--sky));
   transform-origin: left center;
   top: 50%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
 }

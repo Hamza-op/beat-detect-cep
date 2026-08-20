@@ -46,7 +46,7 @@
             <h1>AUTOCUT&nbsp;<em>STUDIO</em></h1>
           </div>
         </div>
-        <span class="version-tag"><span class="vt-mark">●</span>v1.1.1</span>
+        <span class="version-tag"><span class="vt-mark">●</span>v1.2.0</span>
       </header>
 
       <!-- ── Status ──────────────────────────────────── -->
@@ -91,15 +91,6 @@
           aria-selected="false"
         >
           <span>Tools</span>
-        </button>
-        <button
-          type="button"
-          id="mainTabDollyButton"
-          class="main-tab-btn"
-          aria-controls="mainTabDolly"
-          aria-selected="false"
-        >
-          <span>Dolly-Style Motion</span>
         </button>
         <button
           type="button"
@@ -193,6 +184,42 @@
               <p id="markerTimingOffsetHint" class="marker-timing-note">
                 Shifts every detected marker. Detection and strongest-hit
                 selection stay unchanged.
+              </p>
+            </div>
+
+            <!-- Distributed beat selection -->
+            <div class="marker-selection-control">
+              <div class="control-head">
+                <label class="section-subtitle" for="beatSelectionSlider"
+                  >Beat Selection</label
+                >
+                <output
+                  id="beatSelectionLabel"
+                  class="value-highlight"
+                  for="beatSelectionSlider"
+                  aria-live="polite"
+                  >100%</output
+                >
+              </div>
+              <div class="slider-wrapper">
+                <input
+                  id="beatSelectionSlider"
+                  type="range"
+                  min="5"
+                  max="100"
+                  value="100"
+                  step="5"
+                  aria-describedby="beatSelectionHint"
+                />
+              </div>
+              <div class="slider-labels" aria-hidden="true">
+                <span>5%</span>
+                <span>50%</span>
+                <span>100%</span>
+              </div>
+              <p id="beatSelectionHint" class="marker-selection-note">
+                <span id="beatSelectionSummary">Uses every detected beat.</span>
+                Selection stays evenly spread and favors stronger nearby hits.
               </p>
             </div>
 
@@ -344,13 +371,15 @@
               </div>
               <p class="engine-desc">
                 Select one video clip, park the playhead on the frame to grade
-                from, then apply a native correction.
+                from, then create a conservative starting grade. Refine Auto
+                Amount, Temperature, Exposure, Contrast, and the other controls
+                in Premiere Effect Controls.
               </p>
             </div>
 
             <div class="lcd-screen color-auto-readout grid-span-full">
-              <div class="lcd-value">AUTO</div>
-              <div class="lcd-label">one selected clip · playhead frame</div>
+              <div class="lcd-value">START</div>
+              <div class="lcd-label">editable base grade · playhead frame</div>
             </div>
 
             <button
@@ -377,8 +406,8 @@
                   d="M12 22a10 10 0 1 1 10-10c0 2-1.5 3-3.5 3H17a2 2 0 0 0-2 2v1.5c0 2-1 3.5-3 3.5Z"
                 />
               </svg>
-              <span class="full-label">Auto Color Selected Clip</span>
-              <span class="short-label">Auto Color</span>
+              <span class="full-label">Create Editable Starting Grade</span>
+              <span class="short-label">Starting Grade</span>
             </button>
 
             <button
@@ -443,7 +472,6 @@
           <div class="card-body tools-grid">
             <div class="zoom-smart-panel grid-span-full">
               <div class="zoom-control-stack">
-                <!-- Hidden native select (synced by JS) -->
                 <select
                   id="zoomMode"
                   class="visually-hidden-select"
@@ -456,168 +484,109 @@
                   <option value="breath">Breathing Hold</option>
                   <option value="reveal">Hold Then Reveal</option>
                   <option value="settle_in">Overshoot Settle</option>
-                  <option value="swell">Outro Swell</option>
-                  <option value="crash_in">Crash-In on Cut</option>
-                  <option value="crash_out">Crash-Out on Cut</option>
                   <option value="punch_in">Beat Punch-In</option>
                   <option value="punch_out">Beat Punch-Out</option>
                   <option value="pulse">Double Pulse</option>
                   <option value="snap_back">Snap Back</option>
-                  <option value="triple_hit">Triple Hit</option>
                 </select>
 
-                <!-- Wedding Moments -->
-                <div
-                  class="movement-bank movement-bank-wedding"
-                  role="group"
-                  aria-label="Wedding cinematic presets"
-                >
-                  <span class="movement-bank-label">Wedding Moments</span>
-                  <div class="wedding-preset-grid">
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="reveal"
-                      data-ratio="112"
-                    >
-                      Bridal Reveal
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="smooth_in"
-                      data-ratio="108"
-                    >
-                      Vow Emphasis
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="settle_in"
-                      data-ratio="114"
-                    >
-                      Detail Focus
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="drift"
-                      data-ratio="105"
-                    >
-                      Couple Portrait
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Wedding Beats -->
-                <div
-                  class="movement-bank movement-bank-wedding-beats"
-                  role="group"
-                  aria-label="Wedding hard-beat presets"
-                >
-                  <span class="movement-bank-label">Wedding Beats</span>
-                  <div class="wedding-preset-grid">
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="punch_in"
-                      data-ratio="118"
-                    >
-                      Dance Accent
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="triple_hit"
-                      data-ratio="116"
-                    >
-                      Procession Beat
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="snap_back"
-                      data-ratio="120"
-                    >
-                      Percussion Snap
-                    </button>
-                    <button
-                      type="button"
-                      class="movement-btn wedding-preset"
-                      data-mode="pulse"
-                      data-ratio="112"
-                    >
-                      Rhythm Pulse
-                    </button>
-                  </div>
-                </div>
-
-                <!-- Cinematic Moves -->
                 <div
                   class="movement-bank movement-bank-cinematic"
                   role="group"
-                  aria-label="Cinematic zoom movements"
+                  aria-label="Ten reliable Scale keyframe movements"
                 >
-                  <span class="movement-bank-label">Cinematic Moves</span>
-                  <div class="movement-button-grid">
+                  <span class="movement-bank-label"
+                    >10 Scale Keyframe Movements</span
+                  >
+                  <div class="movement-button-grid motion-preset-grid">
                     <button
                       type="button"
                       class="movement-btn is-active"
                       data-mode="smooth_in"
+                      data-ratio="108"
                     >
-                      Slow Advance
+                      Slow Push-In
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
                       data-mode="smooth_out"
+                      data-ratio="108"
                     >
-                      Elegant Pullback
+                      Slow Pull-Out
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
                       data-mode="drift"
+                      data-ratio="105"
                     >
-                      Subtle Drift
+                      Micro Drift
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
                       data-mode="breath"
+                      data-ratio="106"
                     >
-                      Soft Breathing
+                      Breathing Hold
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
                       data-mode="reveal"
+                      data-ratio="112"
                     >
-                      Grace Reveal
+                      Hold Then Reveal
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
                       data-mode="settle_in"
+                      data-ratio="114"
                     >
-                      Refined Settle
+                      Overshoot Settle
                     </button>
                     <button
                       type="button"
                       class="movement-btn"
-                      data-mode="swell"
+                      data-mode="punch_in"
+                      data-ratio="118"
                     >
-                      Closing Swell
+                      Beat Punch-In
+                    </button>
+                    <button
+                      type="button"
+                      class="movement-btn"
+                      data-mode="punch_out"
+                      data-ratio="116"
+                    >
+                      Beat Punch-Out
+                    </button>
+                    <button
+                      type="button"
+                      class="movement-btn"
+                      data-mode="pulse"
+                      data-ratio="112"
+                    >
+                      Double Pulse
+                    </button>
+                    <button
+                      type="button"
+                      class="movement-btn"
+                      data-mode="snap_back"
+                      data-ratio="120"
+                    >
+                      Snap Back
                     </button>
                   </div>
                 </div>
 
-                <!-- Selected preset readout -->
                 <div class="selected-moment-card">
-                  <span class="movement-bank-label">Selected</span>
-                  <strong id="selectedMomentLabel">Slow Advance</strong>
+                  <span class="movement-bank-label">Selected movement</span>
+                  <strong id="selectedMomentLabel">Slow Push-In</strong>
                   <span id="selectedMomentMeta"
-                    >Clean scale movement across the selected clip</span
+                    >Clean Scale keyframes across the selected clip.</span
                   >
                 </div>
               </div>
@@ -692,7 +661,11 @@
             </div>
 
             <!-- Action buttons -->
-            <button id="gimbalZoomButton" class="btn-tool" type="button">
+            <button
+              id="gimbalZoomButton"
+              class="btn-tool grid-span-full"
+              type="button"
+            >
               <svg
                 class="btn-icon-svg"
                 width="11"
@@ -708,33 +681,6 @@
               </svg>
               <span class="full-label">Apply Movement</span>
               <span class="short-label">Apply</span>
-            </button>
-
-            <button id="warpStabilizerButton" class="btn-tool" type="button">
-              <svg
-                class="btn-icon-svg"
-                width="11"
-                height="11"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <path d="M12 6v12M6 12h12" />
-              </svg>
-              <span class="full-label">Stabilizer</span>
-              <span class="short-label">Stab</span>
-            </button>
-            <button
-              id="cancelWarpQueueButton"
-              class="btn-tool btn-tool-danger"
-              type="button"
-              hidden
-            >
-              Cancel Queue
             </button>
 
             <button
@@ -767,301 +713,7 @@
       </div>
 
       <!-- ══════════════════════════════════════════════
-           TAB 4 — Dolly
-      ══════════════════════════════════════════════════ -->
-      <div
-        id="mainTabDolly"
-        class="main-tab-panel"
-        role="tabpanel"
-        aria-labelledby="mainTabDollyButton"
-        hidden
-      >
-        <section
-          class="panel-card dolly-card animate-fade-in"
-          style="animation-delay: 0.14s"
-          aria-label="Dolly-Style Motion"
-        >
-          <div class="card-header">
-            <div class="header-indicator tint-dolly"></div>
-            <h2>Dolly-Style Motion</h2>
-            <svg
-              class="chevron-icon"
-              width="10"
-              height="10"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="3"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </div>
-
-          <div class="card-body">
-            <!-- ── Cinematic preview monitor ── -->
-            <div
-              class="dolly-monitor"
-              aria-label="DOLLY-STYLE MOTION live preview"
-            >
-              <!-- A single flat scene: background and subject always move together. -->
-              <div class="dolly-flat-scene" id="dollyFlatScene">
-                <div class="dolly-bg-layer">
-                  <div class="dolly-bg-scene">
-                    <div class="dolly-depth-line dl1"></div>
-                    <div class="dolly-depth-line dl2"></div>
-                    <div class="dolly-depth-line dl3"></div>
-                    <div class="dolly-depth-line dl4"></div>
-                    <div class="dolly-horizon"></div>
-                  </div>
-                </div>
-                <div class="dolly-subject-layer">
-                  <div class="dolly-person">
-                    <div class="dolly-person-head"></div>
-                    <div class="dolly-person-body"></div>
-                    <div class="dolly-person-ring"></div>
-                  </div>
-                </div>
-              </div>
-              <!-- Overlays -->
-              <div class="dolly-overlay-grid"></div>
-              <div class="dolly-thirds-h"></div>
-              <div class="dolly-thirds-v"></div>
-              <!-- HUD -->
-              <div class="dolly-hud-tl">
-                <span class="dolly-rec-dot"></span>
-                <span id="dollyHudStart">START 100%</span>
-              </div>
-              <div class="dolly-hud-tr" id="dollyHudEnd">END 105%</div>
-              <div class="dolly-hud-bl" id="dollyHudMid">MID 112%</div>
-              <div class="dolly-hud-br" id="dollyHudIntensity">INT 65%</div>
-              <!-- Animated scan line -->
-              <div class="dolly-scan-line"></div>
-              <!-- Corner brackets -->
-              <div class="dolly-corner dc-tl"></div>
-              <div class="dolly-corner dc-tr"></div>
-              <div class="dolly-corner dc-bl"></div>
-              <div class="dolly-corner dc-br"></div>
-            </div>
-
-            <!-- ── Mode badges ── -->
-            <div class="dolly-mode-row">
-              <span class="field-label">Frame Match</span>
-              <strong id="dollyFrameLabel" class="dolly-mode-badge"
-                >Auto Frame</strong
-              >
-            </div>
-
-            <!-- ── Explicit keyframes for one flat clip ── -->
-            <div class="dolly-param-grid">
-              <div class="dolly-param-card dolly-param-start">
-                <div class="dolly-param-header">
-                  <span class="dolly-param-dot dot-amber"></span>
-                  <span class="dolly-param-title">Start scale</span>
-                  <strong id="dollyStartScaleLabel" class="dolly-param-value"
-                    >100%</strong
-                  >
-                </div>
-                <div class="slider-wrapper">
-                  <input
-                    id="dollyStartScaleSlider"
-                    type="range"
-                    min="100"
-                    max="180"
-                    value="100"
-                    step="1"
-                  />
-                </div>
-                <div class="dolly-xy-row">
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">Start X</span>
-                    <span id="dollyStartXLabel" class="dolly-xy-value"
-                      >50%</span
-                    >
-                    <input
-                      id="dollyStartXSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="50"
-                      step="1"
-                    />
-                  </div>
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">Start Y</span>
-                    <span id="dollyStartYLabel" class="dolly-xy-value"
-                      >50%</span
-                    >
-                    <input
-                      id="dollyStartYSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="50"
-                      step="1"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="dolly-param-card dolly-param-mid">
-                <div class="dolly-param-header">
-                  <span class="dolly-param-dot dot-coral"></span>
-                  <span class="dolly-param-title">Midpoint scale</span>
-                  <strong id="dollyMidScaleLabel" class="dolly-param-value"
-                    >118%</strong
-                  >
-                </div>
-                <div class="slider-wrapper">
-                  <input
-                    id="dollyMidScaleSlider"
-                    type="range"
-                    min="100"
-                    max="180"
-                    value="118"
-                    step="1"
-                  />
-                </div>
-                <div class="dolly-xy-row">
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">Mid X</span>
-                    <span id="dollyMidXLabel" class="dolly-xy-value">52%</span>
-                    <input
-                      id="dollyMidXSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="52"
-                      step="1"
-                    />
-                  </div>
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">Mid Y</span>
-                    <span id="dollyMidYLabel" class="dolly-xy-value">48%</span>
-                    <input
-                      id="dollyMidYSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="48"
-                      step="1"
-                    />
-                  </div>
-                </div>
-              </div>
-
-              <div class="dolly-param-card dolly-param-end">
-                <div class="dolly-param-header">
-                  <span class="dolly-param-dot dot-teal"></span>
-                  <span class="dolly-param-title">End scale</span>
-                  <strong id="dollyEndScaleLabel" class="dolly-param-value"
-                    >108%</strong
-                  >
-                </div>
-                <div class="slider-wrapper">
-                  <input
-                    id="dollyEndScaleSlider"
-                    type="range"
-                    min="100"
-                    max="180"
-                    value="108"
-                    step="1"
-                  />
-                </div>
-                <div class="dolly-xy-row">
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">End X</span>
-                    <span id="dollyEndXLabel" class="dolly-xy-value">50%</span>
-                    <input
-                      id="dollyEndXSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="50"
-                      step="1"
-                    />
-                  </div>
-                  <div class="dolly-xy-field">
-                    <span class="dolly-xy-label">End Y</span>
-                    <span id="dollyEndYLabel" class="dolly-xy-value">50%</span>
-                    <input
-                      id="dollyEndYSlider"
-                      type="range"
-                      min="0"
-                      max="100"
-                      value="50"
-                      step="1"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- ── Sensitivity ── -->
-            <div class="dolly-sensitivity-row">
-              <div class="dolly-sens-head">
-                <span class="section-subtitle">Motion intensity</span>
-                <strong id="dollyIntensityLabel" class="value-highlight"
-                  >65%</strong
-                >
-              </div>
-              <div class="slider-wrapper">
-                <input
-                  id="dollyIntensitySlider"
-                  type="range"
-                  min="0"
-                  max="100"
-                  value="65"
-                  step="1"
-                />
-              </div>
-              <div class="slider-labels">
-                <span>Subtle</span>
-                <span>Dramatic</span>
-              </div>
-              <label class="dolly-easing-row" for="dollyEasingSelect">
-                <span class="section-subtitle">Easing preset</span>
-                <select id="dollyEasingSelect">
-                  <option value="bezier" selected>Smooth Bezier</option>
-                  <option value="linear">Linear</option>
-                  <option value="ease_in">Ease In</option>
-                  <option value="ease_out">Ease Out</option>
-                  <option value="ease_in_out">Ease In / Out</option>
-                </select>
-              </label>
-            </div>
-
-            <!-- ── Apply button ── -->
-            <button
-              id="confirmDollyZoomButton"
-              class="dolly-apply-btn"
-              type="button"
-            >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path d="M5 12h14" />
-                <path d="M12 5l7 7-7 7" />
-              </svg>
-              <span class="full-label">Apply DOLLY-STYLE MOTION to Clip</span>
-              <span class="short-label">Apply</span>
-            </button>
-
-            <!-- Legacy hidden refs for JS compat -->
-          </div>
-        </section>
-      </div>
-
-      <!-- ══════════════════════════════════════════════
-           TAB 5 — Diagnostics
+           TAB 4 — Diagnostics
       ══════════════════════════════════════════════════ -->
       <div
         id="mainTabDiagnostics"

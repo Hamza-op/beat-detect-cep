@@ -2,13 +2,12 @@
   "use strict";
 
   var cs = new CSInterface();
-  var APP_VERSION = "1.1.1";
+  var APP_VERSION = "1.2.0";
   var state = {
     allEvents: [],
     markerEvents: [],
     clip: null,
     isBusy: false,
-    warpCancelRequested: false,
   };
 
   var dom = {
@@ -17,10 +16,7 @@
     applyButton: document.getElementById("applyButton"),
     removeButton: document.getElementById("removeButton"),
     gimbalZoomButton: document.getElementById("gimbalZoomButton"),
-    confirmDollyZoomButton: document.getElementById("confirmDollyZoomButton"),
     clearZoomButton: document.getElementById("clearZoomButton"),
-    warpStabilizerButton: document.getElementById("warpStabilizerButton"),
-    cancelWarpQueueButton: document.getElementById("cancelWarpQueueButton"),
     autoColorButton: document.getElementById("autoColorButton"),
     resetColorButton: document.getElementById("resetColorButton"),
     status: document.getElementById("status"),
@@ -34,48 +30,22 @@
     markerTimingOffsetLabel: document.getElementById(
       "markerTimingOffsetLabel",
     ),
+    beatSelectionSlider: document.getElementById("beatSelectionSlider"),
+    beatSelectionLabel: document.getElementById("beatSelectionLabel"),
+    beatSelectionSummary: document.getElementById("beatSelectionSummary"),
     zoomSlider: document.getElementById("zoomSlider"),
     zoomLabel: document.getElementById("zoomLabel"),
     autoZoomRatio: document.getElementById("autoZoomRatio"),
     clearLogsButton: document.getElementById("clearLogsButton"),
-    dollyStartScaleSlider: document.getElementById("dollyStartScaleSlider"),
-    dollyMidScaleSlider: document.getElementById("dollyMidScaleSlider"),
-    dollyEndScaleSlider: document.getElementById("dollyEndScaleSlider"),
-    dollyIntensitySlider: document.getElementById("dollyIntensitySlider"),
-    dollyStartXSlider: document.getElementById("dollyStartXSlider"),
-    dollyStartYSlider: document.getElementById("dollyStartYSlider"),
-    dollyMidXSlider: document.getElementById("dollyMidXSlider"),
-    dollyMidYSlider: document.getElementById("dollyMidYSlider"),
-    dollyEndXSlider: document.getElementById("dollyEndXSlider"),
-    dollyEndYSlider: document.getElementById("dollyEndYSlider"),
-    dollyEasingSelect: document.getElementById("dollyEasingSelect"),
-    dollyStartScaleLabel: document.getElementById("dollyStartScaleLabel"),
-    dollyMidScaleLabel: document.getElementById("dollyMidScaleLabel"),
-    dollyEndScaleLabel: document.getElementById("dollyEndScaleLabel"),
-    dollyIntensityLabel: document.getElementById("dollyIntensityLabel"),
-    dollyStartXLabel: document.getElementById("dollyStartXLabel"),
-    dollyStartYLabel: document.getElementById("dollyStartYLabel"),
-    dollyMidXLabel: document.getElementById("dollyMidXLabel"),
-    dollyMidYLabel: document.getElementById("dollyMidYLabel"),
-    dollyEndXLabel: document.getElementById("dollyEndXLabel"),
-    dollyEndYLabel: document.getElementById("dollyEndYLabel"),
-    dollyFrameLabel: document.getElementById("dollyFrameLabel"),
-    dollyHudStart: document.getElementById("dollyHudStart"),
-    dollyHudMid: document.getElementById("dollyHudMid"),
-    dollyHudEnd: document.getElementById("dollyHudEnd"),
-    dollyHudIntensity: document.getElementById("dollyHudIntensity"),
-    dollyFlatScene: document.getElementById("dollyFlatScene"),
     mainTabMarkersButton: document.getElementById("mainTabMarkersButton"),
     mainTabColorButton: document.getElementById("mainTabColorButton"),
     mainTabToolsButton: document.getElementById("mainTabToolsButton"),
-    mainTabDollyButton: document.getElementById("mainTabDollyButton"),
     mainTabDiagnosticsButton: document.getElementById(
       "mainTabDiagnosticsButton",
     ),
     mainTabMarkers: document.getElementById("mainTabMarkers"),
     mainTabColor: document.getElementById("mainTabColor"),
     mainTabTools: document.getElementById("mainTabTools"),
-    mainTabDolly: document.getElementById("mainTabDolly"),
     mainTabDiagnostics: document.getElementById("mainTabDiagnostics"),
   };
 
@@ -89,15 +59,14 @@
     dom.diagnosticsButton.disabled = isBusy;
     dom.removeButton.disabled = isBusy;
     if (dom.gimbalZoomButton) dom.gimbalZoomButton.disabled = isBusy;
-    if (dom.confirmDollyZoomButton)
-      dom.confirmDollyZoomButton.disabled = isBusy;
     if (dom.clearZoomButton) dom.clearZoomButton.disabled = isBusy;
-    if (dom.warpStabilizerButton) dom.warpStabilizerButton.disabled = isBusy;
     if (dom.autoColorButton) dom.autoColorButton.disabled = isBusy;
     if (dom.resetColorButton) dom.resetColorButton.disabled = isBusy;
     if (dom.clearLogsButton) dom.clearLogsButton.disabled = isBusy;
     if (dom.markerTimingOffsetSlider)
       dom.markerTimingOffsetSlider.disabled = isBusy;
+    if (dom.beatSelectionSlider)
+      dom.beatSelectionSlider.disabled = isBusy;
     dom.applyButton.disabled = isBusy || state.markerEvents.length === 0;
   }
 
@@ -525,17 +494,48 @@
 
   function updateCounterUI() {
     dom.filteredCount.textContent = String(state.markerEvents.length);
-    dom.totalCount.textContent = "detected beat markers";
+    dom.totalCount.textContent =
+      "of " + state.allEvents.length + " detected beat markers";
     dom.applyButton.disabled = state.isBusy || state.markerEvents.length === 0;
   }
 
+  function beatSelectionPercentage() {
+    if (!dom.beatSelectionSlider) return 100;
+    var percentage = Number(dom.beatSelectionSlider.value);
+    if (!isFinite(percentage)) return 100;
+    return Math.max(5, Math.min(100, Math.round(percentage)));
+  }
+
+  function updateBeatSelectionUI() {
+    var percentage = beatSelectionPercentage();
+    if (dom.beatSelectionLabel) {
+      dom.beatSelectionLabel.textContent = percentage + "%";
+    }
+    if (dom.beatSelectionSummary) {
+      dom.beatSelectionSummary.textContent = state.allEvents.length
+        ? "Keeps " +
+          state.markerEvents.length +
+          " of " +
+          state.allEvents.length +
+          " detected beats. "
+        : percentage === 100
+          ? "Uses every detected beat. "
+          : "Will keep " + percentage + "% of detected beats. ";
+    }
+  }
+
   function filterEvents() {
-    // The Rust analyzer already returns the final major-hit marker set. Keep
-    // the panel as a pass-through so markers are never filtered twice.
-    state.markerEvents = state.allEvents.slice().sort(function (a, b) {
+    var ordered = state.allEvents.slice().sort(function (a, b) {
       return a.time - b.time;
     });
+    var core = window.AutoCutBeatDistribution;
+    if (!core || typeof core.select !== "function") {
+      state.markerEvents = ordered;
+    } else {
+      state.markerEvents = core.select(ordered, beatSelectionPercentage());
+    }
     updateCounterUI();
+    updateBeatSelectionUI();
   }
 
   function sanitizeEvents(events) {
@@ -656,9 +656,11 @@
             analyzerEvents.length +
             "; keeping " +
             state.markerEvents.length +
-            " " +
+            " evenly distributed " +
             getBeatWorkflowLabel() +
-            " markers in the selected cut using Rust analyzer.",
+            " markers at " +
+            beatSelectionPercentage() +
+            "% selection in the selected cut using Rust analyzer.",
           false,
           false,
           true,
@@ -968,147 +970,6 @@
       });
   }
 
-  function readSliderNumber(element, fallback) {
-    var value = element ? Number(element.value) : fallback;
-    return isFinite(value) ? value : fallback;
-  }
-
-  function computeDollyKeyframes(values) {
-    var core = window.AutoCutDollyCore;
-    if (!core || typeof core.compute !== "function") {
-      throw new Error("Dolly keyframe definitions are unavailable.");
-    }
-    return core.compute(values);
-  }
-
-  function readDollyValues() {
-    return {
-      startScale: readSliderNumber(dom.dollyStartScaleSlider, 100),
-      midScale: readSliderNumber(dom.dollyMidScaleSlider, 118),
-      endScale: readSliderNumber(dom.dollyEndScaleSlider, 108),
-      intensity: readSliderNumber(dom.dollyIntensitySlider, 65),
-      startX: readSliderNumber(dom.dollyStartXSlider, 50),
-      startY: readSliderNumber(dom.dollyStartYSlider, 50),
-      midX: readSliderNumber(dom.dollyMidXSlider, 52),
-      midY: readSliderNumber(dom.dollyMidYSlider, 48),
-      endX: readSliderNumber(dom.dollyEndXSlider, 50),
-      endY: readSliderNumber(dom.dollyEndYSlider, 50),
-      easing: dom.dollyEasingSelect
-        ? String(dom.dollyEasingSelect.value || "bezier")
-        : "bezier",
-    };
-  }
-
-  function getDollyPayload() {
-    var values = readDollyValues();
-    var computed = computeDollyKeyframes(values);
-    return {
-      zoom: values.endScale,
-      style: "dolly_zoom",
-      autoRatio: false,
-      dolly: {
-        startScale: values.startScale,
-        midScale: values.midScale,
-        endScale: values.endScale,
-        intensity: values.intensity,
-        startX: values.startX,
-        startY: values.startY,
-        midX: values.midX,
-        midY: values.midY,
-        endX: values.endX,
-        endY: values.endY,
-        easing: computed.easing,
-        scaleKeys: computed.scaleKeys,
-        positionKeys: computed.positionKeys,
-      },
-    };
-  }
-
-  function applyDollyFrameInfo(info, isFallback) {
-    var width = Number(info && info.width) || 1920;
-    var height = Number(info && info.height) || 1080;
-    if (dom.dollyFrameLabel) {
-      dom.dollyFrameLabel.textContent = isFallback
-        ? "Frame unknown"
-        : Math.round(width) + "x" + Math.round(height);
-    }
-  }
-
-  function detectDollyFrame() {
-    if (isBrowserPreview()) {
-      applyDollyFrameInfo({ width: 1920, height: 1080 });
-      return Promise.resolve();
-    }
-    return cepEval("AutoCutStudio.getDollyFrameInfo()")
-      .then(function (result) {
-        applyDollyFrameInfo(result);
-      })
-      .catch(function (error) {
-        appendLog(
-          "DOLLY FRAME DETECT FAILED: " +
-            (error && error.message ? error.message : String(error)),
-        );
-        applyDollyFrameInfo({ width: 1920, height: 1080 }, true);
-        setStatus(
-          "Could not detect sequence frame for Dolly preview. Showing a neutral guide; applied motion still uses Premiere sequence data when available.",
-          true,
-        );
-      });
-  }
-
-  function applyDollyZoom() {
-    if (state.isBusy) {
-      return;
-    }
-
-    setBusy(true);
-    var payload = getDollyPayload();
-    setStatus(
-      "Applying Dolly-Style Motion from " +
-        payload.dolly.startScale +
-        "% through " +
-        payload.dolly.midScale +
-        "% to " +
-        payload.dolly.endScale +
-        "% at intensity " +
-        payload.dolly.intensity +
-        "% with " +
-        payload.dolly.easing.replace(/_/g, " ") +
-        " easing...",
-    );
-
-    cepEval(
-      "AutoCutStudio.applyGimbalZoom(" +
-        JSON.stringify(JSON.stringify(payload)) +
-        ")",
-    )
-      .then(function (result) {
-        var skipped = Number(result.skipped) || 0;
-        var details =
-          result.errors && result.errors.length
-            ? " Details: " + result.errors.join(" | ")
-            : "";
-        setStatus(
-          "Applied Dolly-Style Motion to " +
-            result.applied +
-            " clips" +
-            (skipped ? "; skipped " + skipped : "") +
-            "." +
-            details,
-          false,
-          false,
-          true,
-        );
-      })
-      .catch(function (error) {
-        appendLog(error && error.stack ? error.stack : String(error));
-        setStatus(error.message, true);
-      })
-      .then(function () {
-        setBusy(false);
-      });
-  }
-
   function clearGimbalZoom() {
     if (state.isBusy) {
       return;
@@ -1198,14 +1059,18 @@
             ? " from playhead frame " +
               formatSeconds(Number(result.captureFrameSeconds))
             : "";
+        var autoAmount = Number(result.autoAmount) || 80;
         setStatus(
-          "Auto color applied to " +
+          "Editable starting grade applied to " +
             result.applied +
             " selected clip" +
             (result.applied === 1 ? "" : "s") +
             capture +
             " using " +
             engine +
+            " at " +
+            autoAmount +
+            "% Auto Amount. Refine it in Effect Controls" +
             (skipped ? "; skipped " + skipped : "") +
             "." +
             csInfo +
@@ -1267,199 +1132,6 @@
   function sleep(ms) {
     return new Promise(function (resolve) {
       setTimeout(resolve, ms);
-    });
-  }
-
-  function waitForVideoEffectAnalysis(label) {
-    var started = Date.now();
-    var timeoutMs = 20 * 60 * 1000;
-
-    return sleep(1200).then(function poll() {
-      return cepEval("AutoCutStudio.isVideoEffectAnalysisDone()")
-        .then(function (result) {
-          if (result.done) {
-            return result;
-          }
-          if (Date.now() - started > timeoutMs) {
-            throw new Error(
-              "Timed out waiting for Warp Stabilizer analysis on " +
-                label +
-                ".",
-            );
-          }
-          setStatus(
-            "Waiting for Warp Stabilizer analysis: " + label + "...",
-            false,
-            true,
-          );
-          return sleep(2500).then(poll);
-        })
-        .catch(function (error) {
-          var message = error && error.message ? error.message : String(error);
-          if (
-            message.indexOf("video-effect analysis status") >= 0 ||
-            message.indexOf("ANALYSIS_STATUS_UNAVAILABLE") >= 0
-          ) {
-            throw new Error(
-              "Premiere cannot report Warp Stabilizer analysis status; queue stopped before the next clip.",
-            );
-          }
-          throw error;
-        });
-    });
-  }
-
-  function applyWarpStabilizerQueue() {
-    if (state.isBusy) {
-      return;
-    }
-
-    setBusy(true);
-    if (dom.cancelWarpQueueButton) dom.cancelWarpQueueButton.hidden = false;
-    setStatus(
-      "Reading selected video clips for Warp Stabilizer...",
-      false,
-      true,
-    );
-    var applied = 0;
-    var skipped = 0;
-    var failed = 0;
-    var unprocessed = 0;
-
-    cepEval("AutoCutStudio.listWarpSelection()")
-      .then(function (result) {
-        var frozen = result.clips || [];
-        var total = frozen.length;
-        if (total < 1) {
-          throw new Error(
-            "Select at least one video clip in the active sequence.",
-          );
-        }
-
-        var stoppedReason = "";
-
-        function applyNext(index) {
-          if (state.warpCancelRequested) {
-            state.warpCancelRequested = false;
-            unprocessed = total - index;
-            return Promise.resolve();
-          }
-          if (index >= total) {
-            setStatus(
-              "Warp Stabilizer queue complete: applied " +
-                applied +
-                ", skipped " +
-                skipped +
-                ", failed " +
-                failed +
-                ", unprocessed " +
-                unprocessed +
-                ".",
-              false,
-              false,
-              true,
-            );
-            return Promise.resolve();
-          }
-
-          setStatus(
-            "Applying Warp Stabilizer to clip " +
-              (index + 1) +
-              " of " +
-              total +
-              "...",
-            false,
-            true,
-          );
-          var payload = { identity: frozen[index].identity };
-          function applyWithRetry(attempt) {
-            return cepEval(
-              "AutoCutStudio.applyWarpStabilizerToSelectedClip(" +
-                JSON.stringify(JSON.stringify(payload)) +
-                ")",
-            ).catch(function (error) {
-              if (attempt >= 3) throw error;
-              return sleep(250 * attempt).then(function () {
-                return applyWithRetry(attempt + 1);
-              });
-            });
-          }
-          return applyWithRetry(1)
-            .then(function (applyResult) {
-              var name =
-                applyResult.name || frozen[index].name || "clip " + (index + 1);
-              if (applyResult.skipped) {
-                skipped++;
-                setStatus(
-                  "Skipping " + name + ": " + applyResult.reason,
-                  false,
-                  true,
-                );
-                return sleep(300).then(function () {
-                  return applyNext(index + 1);
-                });
-              }
-
-              applied++;
-              setStatus(
-                "Warp Stabilizer applied to " +
-                  name +
-                  ". Waiting for analysis before next clip...",
-                false,
-                true,
-              );
-              return waitForVideoEffectAnalysis(name).then(function () {
-                return applyNext(index + 1);
-              });
-            })
-            .catch(function (error) {
-              failed++;
-              unprocessed = total - index - 1;
-              stoppedReason =
-                error && error.message ? error.message : String(error);
-              throw error;
-            });
-        }
-
-        return applyNext(0);
-      })
-      .catch(function (error) {
-        if (
-          error &&
-          error.message &&
-          error.message.indexOf("analysis status") >= 0
-        ) {
-          appendLog("WARP QUEUE STOPPED: " + error.message);
-        }
-        appendLog(error && error.stack ? error.stack : String(error));
-        setStatus(
-          (error.message || String(error)) +
-            " Applied: " +
-            applied +
-            ", skipped: " +
-            skipped +
-            ", failed: " +
-            failed +
-            ", unprocessed: " +
-            unprocessed +
-            ".",
-          true,
-        );
-      })
-      .then(function () {
-        if (dom.cancelWarpQueueButton) dom.cancelWarpQueueButton.hidden = true;
-        setBusy(false);
-      });
-  }
-
-  if (dom.cancelWarpQueueButton) {
-    dom.cancelWarpQueueButton.addEventListener("click", function () {
-      state.warpCancelRequested = true;
-      setStatus(
-        "Warp Stabilizer queue will stop before the next clip.",
-        false,
-        true,
-      );
     });
   }
 
@@ -1607,11 +1279,6 @@
         panel: dom.mainTabTools,
       },
       {
-        name: "dolly",
-        button: dom.mainTabDollyButton,
-        panel: dom.mainTabDolly,
-      },
-      {
         name: "diagnostics",
         button: dom.mainTabDiagnosticsButton,
         panel: dom.mainTabDiagnostics,
@@ -1644,15 +1311,8 @@
   dom.removeButton.addEventListener("click", removeMarkers);
   if (dom.gimbalZoomButton)
     dom.gimbalZoomButton.addEventListener("click", applyGimbalZoom);
-  if (dom.confirmDollyZoomButton)
-    dom.confirmDollyZoomButton.addEventListener("click", applyDollyZoom);
   if (dom.clearZoomButton)
     dom.clearZoomButton.addEventListener("click", clearGimbalZoom);
-  if (dom.warpStabilizerButton)
-    dom.warpStabilizerButton.addEventListener(
-      "click",
-      applyWarpStabilizerQueue,
-    );
   if (dom.autoColorButton)
     dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
   if (dom.resetColorButton)
@@ -1663,6 +1323,12 @@
       updateMarkerTimingOffsetLabel,
     );
     updateMarkerTimingOffsetLabel();
+  }
+  if (dom.beatSelectionSlider) {
+    dom.beatSelectionSlider.addEventListener("input", function () {
+      filterEvents();
+    });
+    updateBeatSelectionUI();
   }
   if (dom.zoomSlider) {
     dom.zoomSlider.addEventListener("input", function () {
@@ -1692,30 +1358,22 @@
     breath: 106,
     reveal: 112,
     settle_in: 114,
-    swell: 110,
-    crash_in: 126,
-    crash_out: 124,
     punch_in: 118,
     punch_out: 116,
     pulse: 112,
     snap_back: 120,
-    triple_hit: 116,
   };
   var previewNames = {
-    smooth_in: "Slow Advance",
-    smooth_out: "Elegant Pullback",
-    drift: "Subtle Drift",
-    breath: "Soft Breathing",
-    reveal: "Grace Reveal",
-    settle_in: "Refined Settle",
-    swell: "Closing Swell",
-    crash_in: "Impact Advance",
-    crash_out: "Impact Release",
-    punch_in: "Dance Accent",
-    punch_out: "Beat Release",
-    pulse: "Rhythm Pulse",
-    snap_back: "Percussion Snap",
-    triple_hit: "Procession Beat",
+    smooth_in: "Slow Push-In",
+    smooth_out: "Slow Pull-Out",
+    drift: "Micro Drift",
+    breath: "Breathing Hold",
+    reveal: "Hold Then Reveal",
+    settle_in: "Overshoot Settle",
+    punch_in: "Beat Punch-In",
+    punch_out: "Beat Punch-Out",
+    pulse: "Double Pulse",
+    snap_back: "Snap Back",
   };
   var movementDescriptions = {
     smooth_in:
@@ -1726,14 +1384,10 @@
     breath: "Soft organic movement that gently returns to neutral.",
     reveal: "Held emphasis followed by a graceful reveal.",
     settle_in: "Refined push with a controlled settle for detail emphasis.",
-    swell:
-      "Quiet start with a closing lift for transitions and emotional exits.",
     punch_in: "Strong beat accent for dance entries and energetic cuts.",
     punch_out: "Fast release after a strong visual or music hit.",
     pulse: "Controlled rhythmic pulse for claps and dance beats.",
     snap_back: "Sharp percussion accent that quickly returns to neutral.",
-    triple_hit:
-      "Three rhythmic accents for procession, dhol, and dance sections.",
   };
 
   function setZoomRatio(value, keepAuto) {
@@ -1832,21 +1486,6 @@
         [55, soft],
         [100, ratio],
       ],
-      swell: [
-        [0, 100],
-        [45, 100],
-        [100, ratio],
-      ],
-      crash_in: [
-        [0, 100],
-        [72, 100],
-        [100, ratio],
-      ],
-      crash_out: [
-        [0, ratio],
-        [24, 100],
-        [100, 100],
-      ],
       punch_in: [
         [0, 100],
         [8, ratio],
@@ -1869,14 +1508,6 @@
         [0, 100],
         [10, ratio],
         [30, 100],
-        [100, 100],
-      ],
-      triple_hit: [
-        [0, 100],
-        [15, ratio],
-        [31, 100],
-        [47, soft],
-        [63, 100],
         [100, 100],
       ],
     };
@@ -1930,123 +1561,6 @@
         Math.round(points[points.length - 1][1]) + "% end";
   }
 
-  var dollyPreviewAnimation = null;
-
-  function dollyCssEasing(easing) {
-    if (easing === "linear") return "linear";
-    if (easing === "ease_in") return "ease-in";
-    if (easing === "ease_out") return "ease-out";
-    if (easing === "ease_in_out") return "ease-in-out";
-    return "cubic-bezier(0.4, 0, 0.2, 1)";
-  }
-
-  function dollyPreviewTransform(scaleKey, positionKey) {
-    var x = positionKey.value[0] - 50;
-    var y = positionKey.value[1] - 50;
-    return (
-      "translate(" +
-      x.toFixed(2) +
-      "%, " +
-      y.toFixed(2) +
-      "%) scale(" +
-      (scaleKey.value / 100).toFixed(4) +
-      ")"
-    );
-  }
-
-  function updateDollyPanel() {
-    var values = readDollyValues();
-    var computed = computeDollyKeyframes(values);
-    var labels = [
-      [dom.dollyStartScaleLabel, values.startScale],
-      [dom.dollyMidScaleLabel, values.midScale],
-      [dom.dollyEndScaleLabel, values.endScale],
-      [dom.dollyIntensityLabel, values.intensity],
-      [dom.dollyStartXLabel, values.startX],
-      [dom.dollyStartYLabel, values.startY],
-      [dom.dollyMidXLabel, values.midX],
-      [dom.dollyMidYLabel, values.midY],
-      [dom.dollyEndXLabel, values.endX],
-      [dom.dollyEndYLabel, values.endY],
-    ];
-    for (var labelIndex = 0; labelIndex < labels.length; labelIndex++) {
-      if (labels[labelIndex][0]) {
-        labels[labelIndex][0].textContent = labels[labelIndex][1] + "%";
-      }
-    }
-
-    if (dom.dollyHudStart) {
-      dom.dollyHudStart.textContent =
-        "START " + Math.round(computed.scaleKeys[0].value) + "%";
-    }
-    if (dom.dollyHudMid) {
-      dom.dollyHudMid.textContent =
-        "MID " + Math.round(computed.scaleKeys[1].value) + "%";
-    }
-    if (dom.dollyHudEnd) {
-      dom.dollyHudEnd.textContent =
-        "END " + Math.round(computed.scaleKeys[2].value) + "%";
-    }
-    if (dom.dollyHudIntensity) {
-      dom.dollyHudIntensity.textContent = "INT " + values.intensity + "%";
-    }
-
-    if (dom.dollyFlatScene) {
-      var previewFrames = [];
-      for (var keyIndex = 0; keyIndex < computed.scaleKeys.length; keyIndex++) {
-        previewFrames.push({
-          offset: computed.scaleKeys[keyIndex].ratio,
-          transform: dollyPreviewTransform(
-            computed.scaleKeys[keyIndex],
-            computed.positionKeys[keyIndex],
-          ),
-        });
-      }
-      if (dollyPreviewAnimation && dollyPreviewAnimation.cancel) {
-        dollyPreviewAnimation.cancel();
-      }
-      if (dom.dollyFlatScene.animate) {
-        dollyPreviewAnimation = dom.dollyFlatScene.animate(previewFrames, {
-          duration: 2800,
-          iterations: Infinity,
-          direction: "alternate",
-          easing: dollyCssEasing(computed.easing),
-        });
-      } else {
-        dom.dollyFlatScene.style.transform = previewFrames[1].transform;
-      }
-      dom.dollyFlatScene.setAttribute(
-        "data-dolly-keyframes",
-        JSON.stringify(computed),
-      );
-    }
-  }
-
-  var dollySliders = [
-    dom.dollyStartScaleSlider,
-    dom.dollyMidScaleSlider,
-    dom.dollyEndScaleSlider,
-    dom.dollyIntensitySlider,
-    dom.dollyStartXSlider,
-    dom.dollyStartYSlider,
-    dom.dollyMidXSlider,
-    dom.dollyMidYSlider,
-    dom.dollyEndXSlider,
-    dom.dollyEndYSlider,
-  ];
-  for (var ds = 0; ds < dollySliders.length; ds++) {
-    if (dollySliders[ds]) {
-      dollySliders[ds].addEventListener("input", function () {
-        updateDollyPanel();
-      });
-    }
-  }
-  if (dom.dollyEasingSelect) {
-    dom.dollyEasingSelect.addEventListener("change", updateDollyPanel);
-  }
-  detectDollyFrame();
-  updateDollyPanel();
-
   if (zoomModeSelect && previewSubject) {
     zoomModeSelect.addEventListener("change", function () {
       selectZoomMode(zoomModeSelect.value);
@@ -2058,12 +1572,10 @@
 
   for (var mb = 0; mb < movementButtons.length; mb++) {
     movementButtons[mb].addEventListener("click", function () {
-      var isWeddingPreset =
-        this.classList && this.classList.contains("wedding-preset");
       selectZoomMode(
         this.getAttribute("data-mode"),
         false,
-        isWeddingPreset ? this.textContent : "",
+        String(this.textContent || "").trim(),
       );
       var ratio = this.getAttribute("data-ratio");
       if (ratio) {
@@ -2109,25 +1621,9 @@
       activateMainTab("tools");
     });
   }
-  if (dom.mainTabDollyButton) {
-    dom.mainTabDollyButton.addEventListener("click", function () {
-      activateMainTab("dolly");
-      detectDollyFrame();
-    });
-  }
   if (dom.mainTabDiagnosticsButton) {
     dom.mainTabDiagnosticsButton.addEventListener("click", function () {
       activateMainTab("diagnostics");
-    });
-  }
-  // Initialize collapsible card headers for Adobe Spectrum smart folders
-  var headers = document.querySelectorAll(".card-header");
-  for (var h = 0; h < headers.length; h++) {
-    headers[h].addEventListener("click", function () {
-      var card = this.parentElement;
-      if (card && card.classList.contains("panel-card")) {
-        card.classList.toggle("is-collapsed");
-      }
     });
   }
   var githubLink = document.getElementById("githubLink");

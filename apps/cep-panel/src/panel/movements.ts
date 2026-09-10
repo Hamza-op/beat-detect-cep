@@ -30,10 +30,7 @@ export type MovementId =
  * positionPercent: 0–100.
  * scalePercent: Premiere Scale percentage.
  */
-export type MovementKeyframe = [
-  positionPercent: number,
-  scalePercent: number
-];
+export type MovementKeyframe = [positionPercent: number, scalePercent: number];
 
 export interface MovementPreset {
   readonly id: MovementId;
@@ -92,7 +89,7 @@ export const MOVEMENT_SCALE_FACTORS = Object.freeze({
   soft: 0.45,
   drift: 0.3,
   breath: 0.22,
-  overshoot: 1.18
+  overshoot: 1.18,
 });
 
 type ScaleLevel =
@@ -103,10 +100,7 @@ type ScaleLevel =
   | "breath"
   | "overshoot";
 
-type PatternPoint = readonly [
-  positionPercent: number,
-  level: ScaleLevel
-];
+type PatternPoint = readonly [positionPercent: number, level: ScaleLevel];
 
 interface PresetDefinition {
   readonly id: MovementId;
@@ -144,7 +138,7 @@ export function clampZoomRatio(ratio: number): number {
   return clamp(
     assertFiniteNumber(ratio, "Zoom ratio"),
     MIN_ZOOM_RATIO,
-    MAX_ZOOM_RATIO
+    MAX_ZOOM_RATIO,
   );
 }
 
@@ -157,21 +151,24 @@ function scaleForLevel(level: ScaleLevel, ratio: number): number {
       return ratio;
 
     case "soft":
-      return NEUTRAL_SCALE +
-        (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.soft;
+      return (
+        NEUTRAL_SCALE + (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.soft
+      );
 
     case "drift":
-      return NEUTRAL_SCALE +
-        (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.drift;
+      return (
+        NEUTRAL_SCALE + (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.drift
+      );
 
     case "breath":
-      return NEUTRAL_SCALE +
-        (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.breath;
+      return (
+        NEUTRAL_SCALE + (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.breath
+      );
 
     case "overshoot":
       return clampZoomRatio(
         NEUTRAL_SCALE +
-        (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.overshoot
+          (ratio - NEUTRAL_SCALE) * MOVEMENT_SCALE_FACTORS.overshoot,
       );
 
     default:
@@ -187,7 +184,7 @@ function definePreset(definition: PresetDefinition): MovementPreset {
     definition.autoRatio > MAX_ZOOM_RATIO
   ) {
     throw new RangeError(
-      `Preset "${definition.id}" has an out-of-range Auto Ratio.`
+      `Preset "${definition.id}" has an out-of-range Auto Ratio.`,
     );
   }
 
@@ -201,14 +198,10 @@ function definePreset(definition: PresetDefinition): MovementPreset {
     definition.pattern.map((point): PatternPoint => {
       const position = assertFiniteNumber(point[0], "Keyframe position");
 
-      if (
-        position < 0 ||
-        position > 100 ||
-        position <= previousPosition
-      ) {
+      if (position < 0 || position > 100 || position <= previousPosition) {
         throw new Error(
           `Preset "${definition.id}" requires strictly increasing ` +
-          "keyframe positions within 0–100."
+            "keyframe positions within 0–100.",
         );
       }
 
@@ -217,18 +210,13 @@ function definePreset(definition: PresetDefinition): MovementPreset {
       // Validate scale-level definitions at module initialization.
       scaleForLevel(point[1], definition.autoRatio);
 
-      return Object.freeze(
-        [position, point[1]] as [number, ScaleLevel]
-      );
-    })
+      return Object.freeze([position, point[1]] as [number, ScaleLevel]);
+    }),
   );
 
-  if (
-    pattern[0][0] !== 0 ||
-    pattern[pattern.length - 1][0] !== 100
-  ) {
+  if (pattern[0][0] !== 0 || pattern[pattern.length - 1][0] !== 100) {
     throw new Error(
-      `Preset "${definition.id}" must start at 0 and end at 100.`
+      `Preset "${definition.id}" must start at 0 and end at 100.`,
     );
   }
 
@@ -245,10 +233,10 @@ function definePreset(definition: PresetDefinition): MovementPreset {
       return pattern.map(
         (point): MovementKeyframe => [
           point[0],
-          scaleForLevel(point[1], target)
-        ]
+          scaleForLevel(point[1], target),
+        ],
       );
-    }
+    },
   });
 }
 
@@ -262,8 +250,8 @@ export const MOVEMENT_PRESETS: readonly MovementPreset[] = Object.freeze([
     isFast: false,
     pattern: [
       [0, "neutral"],
-      [100, "target"]
-    ]
+      [100, "target"],
+    ],
   }),
 
   definePreset({
@@ -275,100 +263,93 @@ export const MOVEMENT_PRESETS: readonly MovementPreset[] = Object.freeze([
     isFast: false,
     pattern: [
       [0, "target"],
-      [100, "neutral"]
-    ]
+      [100, "neutral"],
+    ],
   }),
 
   definePreset({
     id: "drift",
     name: "Micro Drift",
-    description:
-      "Subtle motion for couple portraits and calm beauty shots.",
+    description: "Subtle motion for couple portraits and calm beauty shots.",
     autoRatio: 105,
     isFast: false,
     pattern: [
       [0, "neutral"],
-      [100, "drift"]
-    ]
+      [100, "drift"],
+    ],
   }),
 
   definePreset({
     id: "breath",
     name: "Breathing Hold",
-    description:
-      "Soft organic movement that gently returns to neutral.",
+    description: "Soft organic movement that gently returns to neutral.",
     autoRatio: 106,
     isFast: false,
     pattern: [
       [0, "neutral"],
       [50, "breath"],
-      [100, "neutral"]
-    ]
+      [100, "neutral"],
+    ],
   }),
 
   definePreset({
     id: "reveal",
     name: "Hold Then Reveal",
-    description:
-      "Held emphasis followed by a graceful reveal.",
+    description: "Held emphasis followed by a graceful reveal.",
     autoRatio: 112,
     isFast: false,
     pattern: [
       [0, "target"],
       [62, "target"],
-      [100, "neutral"]
-    ]
+      [100, "neutral"],
+    ],
   }),
 
   definePreset({
     id: "settle_in",
     name: "Overshoot Settle",
-    description:
-      "Refined push with a controlled settle for detail emphasis.",
+    description: "Refined push with a controlled settle for detail emphasis.",
     autoRatio: 114,
     isFast: false,
     pattern: [
       [0, "neutral"],
       [22, "overshoot"],
       [55, "soft"],
-      [100, "target"]
-    ]
+      [100, "target"],
+    ],
   }),
 
   definePreset({
     id: "punch_in",
     name: "Beat Punch-In",
-    description:
-      "Strong beat accent for dance entries and energetic cuts.",
+    description: "Strong beat accent for dance entries and energetic cuts.",
     autoRatio: 118,
     isFast: true,
     pattern: [
       [0, "neutral"],
       [8, "target"],
       [28, "soft"],
-      [100, "soft"]
-    ]
+      [100, "soft"],
+    ],
   }),
 
   definePreset({
     id: "punch_out",
     name: "Beat Punch-Out",
-    description:
-      "Fast release after a strong visual or music hit.",
+    description: "Fast release after a strong visual or music hit.",
     autoRatio: 116,
     isFast: true,
     pattern: [
       [0, "target"],
       [10, "neutral"],
-      [100, "neutral"]
-    ]
+      [100, "neutral"],
+    ],
   }),
 
   definePreset({
     id: "pulse",
     name: "Double Pulse",
-    description:
-      "Controlled rhythmic pulse for claps and dance beats.",
+    description: "Controlled rhythmic pulse for claps and dance beats.",
     autoRatio: 112,
     isFast: true,
     pattern: [
@@ -376,24 +357,23 @@ export const MOVEMENT_PRESETS: readonly MovementPreset[] = Object.freeze([
       [18, "target"],
       [38, "neutral"],
       [62, "soft"],
-      [100, "neutral"]
-    ]
+      [100, "neutral"],
+    ],
   }),
 
   definePreset({
     id: "snap_back",
     name: "Snap Back",
-    description:
-      "Sharp percussion accent that quickly returns to neutral.",
+    description: "Sharp percussion accent that quickly returns to neutral.",
     autoRatio: 120,
     isFast: true,
     pattern: [
       [0, "neutral"],
       [10, "target"],
       [30, "neutral"],
-      [100, "neutral"]
-    ]
-  })
+      [100, "neutral"],
+    ],
+  }),
 ]);
 
 const presetLookup: { [id: string]: MovementPreset | undefined } =
@@ -410,7 +390,7 @@ for (const preset of MOVEMENT_PRESETS) {
 Object.freeze(presetLookup);
 
 export const MOVEMENT_IDS: readonly MovementId[] = Object.freeze(
-  MOVEMENT_PRESETS.map((preset) => preset.id)
+  MOVEMENT_PRESETS.map((preset) => preset.id),
 );
 
 /** Exact, case-sensitive ID validation. */
@@ -441,10 +421,7 @@ export function requirePreset(id: string): MovementPreset {
  * Duration-based intensity multiplier matching the host.
  * The returned multiplier applies to zoom above neutral, not to total Scale.
  */
-export function durationZoomScale(
-  id: string,
-  durationSeconds: number
-): number {
+export function durationZoomScale(id: string, durationSeconds: number): number {
   const preset = requirePreset(id);
   const duration = assertDuration(durationSeconds);
   const fast = preset.isFast;
@@ -470,7 +447,7 @@ export function durationZoomScale(
  */
 export function resolveZoomTarget(
   id: string,
-  options: MovementOptions = {}
+  options: MovementOptions = {},
 ): number {
   const preset = requirePreset(id);
 
@@ -486,28 +463,29 @@ export function resolveZoomTarget(
   }
 
   // Validate a supplied manual target even when Auto Ratio ignores it.
-  const manualRatio = options.zoom === undefined
-    ? DEFAULT_ZOOM_RATIO
-    : clampZoomRatio(options.zoom);
+  const manualRatio =
+    options.zoom === undefined
+      ? DEFAULT_ZOOM_RATIO
+      : clampZoomRatio(options.zoom);
 
   if (options.autoRatio === false) {
     return manualRatio;
   }
 
-  const multiplier = options.durationSeconds === undefined
-    ? 1
-    : durationZoomScale(id, options.durationSeconds);
+  const multiplier =
+    options.durationSeconds === undefined
+      ? 1
+      : durationZoomScale(id, options.durationSeconds);
 
   return clampZoomRatio(
-    NEUTRAL_SCALE +
-    (preset.autoRatio - NEUTRAL_SCALE) * multiplier
+    NEUTRAL_SCALE + (preset.autoRatio - NEUTRAL_SCALE) * multiplier,
   );
 }
 
 /** Resolve both the target ratio and a fresh normalized keyframe pattern. */
 export function resolveMovement(
   id: string,
-  options: MovementOptions = {}
+  options: MovementOptions = {},
 ): ResolvedMovement {
   const preset = requirePreset(id);
   const targetRatio = resolveZoomTarget(id, options);
@@ -516,6 +494,6 @@ export function resolveMovement(
     preset,
     autoRatio: options.autoRatio !== false,
     targetRatio,
-    keyframes: preset.keyframePattern(targetRatio)
+    keyframes: preset.keyframePattern(targetRatio),
   };
 }

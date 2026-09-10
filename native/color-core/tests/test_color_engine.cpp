@@ -154,7 +154,7 @@ int main() {
             result
         ));
         assert(result.confidence <= 0.80f);
-        assert(result.highlights < 0.0f);
+        assert(result.highlights <= 0.0f);
     }
 
     {

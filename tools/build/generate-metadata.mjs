@@ -24,33 +24,8 @@ await writeFile(
   path.join(root, "apps/cep-panel/src/panel/version.ts"),
   versionModule,
 );
-const panelIndexPath = path.join(root, "apps/cep-panel/src/index.html");
-const panelIndex = await readFile(panelIndexPath, "utf8");
-await writeFile(
-  panelIndexPath,
-  panelIndex.replace(/v\d+\.\d+\.\d+/g, `v${product.version}`),
-);
-const legacyPanelPath = path.join(
-  root,
-  "apps/cep-panel/src/panel/legacy-main.js",
-);
-const legacyPanel = await readFile(legacyPanelPath, "utf8");
-await writeFile(
-  legacyPanelPath,
-  legacyPanel.replace(
-    /var APP_VERSION = "[^"]+"/,
-    `var APP_VERSION = "${product.version}"`,
-  ),
-);
-const legacyHostPath = path.join(root, "apps/cep-panel/src/host/legacy.jsx");
-const legacyHost = await readFile(legacyHostPath, "utf8");
-await writeFile(
-  legacyHostPath,
-  legacyHost.replace(
-    /var AUTOCUT_EXTENSION_VERSION = "[^"]+"/,
-    `var AUTOCUT_EXTENSION_VERSION = "${product.version}"`,
-  ),
-);
+// Source-file version stamps (index.html, legacy-main.js, legacy.jsx) are
+// applied to output copies by panel.mjs, not to tracked source files.
 const manifestPath = path.join(root, "CSXS/manifest.xml");
 const manifest = (await readFile(manifestPath, "utf8"))
   .replace(

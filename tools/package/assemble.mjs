@@ -2,13 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PAYLOAD_ALLOWLIST, REQUIRED_FILES } from "../shared/allowlist.mjs";
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
 );
 const payload = path.join(root, "dist", "com.autocutstudio.panel");
-const allowed =
-  /^(CSXS\/manifest\.xml|META-INF\/.+|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt)$/;
+const allowed = PAYLOAD_ALLOWLIST;
 async function walk(dir, relative = "") {
   const entries = await readdir(dir, { withFileTypes: true });
   const out = [];
@@ -28,15 +28,7 @@ if (rejected.length)
   throw new Error(
     `Payload contains non-allowlisted files:\n${rejected.join("\n")}`,
   );
-const required = [
-  "CSXS/manifest.xml",
-  "index.html",
-  "js/main.js",
-  "jsx/host.jsx",
-  "bin/beat_analyzer.exe",
-  "native/MediaCore/AutoCutColorEngine.aex",
-  "INSTALL.txt",
-];
+const required = REQUIRED_FILES;
 const missing = required.filter((file) => !allFiles.includes(file));
 if (missing.length)
   throw new Error(

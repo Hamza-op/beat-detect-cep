@@ -304,34 +304,42 @@ static bool AnalyzeFrameTemplate(
         luma_median > 45 &&
         luma_median < 210;
 
-    // Wedding-safe exposure
-    float target_median = result.is_low_light ? 86.0f : 108.0f;
+    // Scene-Adaptive Exposure Calculation
+    float target_median = result.is_low_light ? 88.0f : (result.is_log ? 116.0f : 106.0f);
     float median_diff = target_median - static_cast<float>(luma_median);
-    float exposure_scale = median_diff < 0.0f ? 0.65f : 1.45f;
+    float exposure_scale = median_diff < 0.0f ? 0.95f : 1.65f;
     result.exposure = (median_diff / 255.0f) * exposure_scale;
-    float exposure_ceiling = result.is_low_light ? 0.62f : 0.38f;
-    if (highlight_luma > 242 || luma_p90 > 210) {
-        exposure_ceiling = std::min(exposure_ceiling, 0.18f);
+    float max_safe_exposure = (255.0f - static_cast<float>(highlight_luma)) / 45.0f;
+    float exposure_ceiling = result.is_low_light ? 0.95f : std::max(0.05f, std::min(1.4f, max_safe_exposure));
+    if (highlight_luma > 242 || luma_p90 > 215) {
+        exposure_ceiling = std::min(exposure_ceiling, 0.28f);
     }
     if (highlight_luma > 250) {
         exposure_ceiling = std::min(exposure_ceiling, 0.05f);
     }
-    result.exposure = std::max(-0.20f, std::min(exposure_ceiling, result.exposure));
+    result.exposure = ClampFloat(result.exposure, -0.90f, exposure_ceiling);
 
-    // Calibrated Contrast
+    // Film S-Curve Contrast & Dynamic Range Stretch
     if (result.is_log) {
-        result.contrast = 18.0f;
+        result.contrast = 24.0f;
+        result.blacks = -6.0f;
+        result.whites = 8.0f;
     } else {
-        if (waveform_spread > 145 || std_dev > 68.0f) {
-            result.contrast = 0.0f;
+        if (waveform_spread > 155 || std_dev > 72.0f) {
+            result.contrast = 2.0f;
+            result.blacks = 0.0f;
+            result.whites = 0.0f;
         } else {
-            float dev_ratio = 135.0f - static_cast<float>(waveform_spread);
-            result.contrast = dev_ratio * 0.08f;
-            result.contrast = std::max(0.0f, std::min(12.0f, result.contrast));
+            float spread_deficit = 145.0f - static_cast<float>(waveform_spread);
+            result.contrast = ClampFloat(spread_deficit * 0.18f, 0.0f, 22.0f);
+            result.blacks = (shadow_luma > 18) ? -((shadow_luma - 18) * 0.25f) : 0.0f;
+            result.blacks = ClampFloat(result.blacks, -8.0f, 2.0f);
+            result.whites = (highlight_luma < 228) ? ((228 - highlight_luma) * 0.20f) : 0.0f;
+            result.whites = ClampFloat(result.whites, -6.0f, 10.0f);
         }
     }
 
-    // Calibrated Highlights & Shadows
+    // Highlights Recovery & Shadow Detail Lift
     int shadow_crushed_pixels = 0;
     for (int i = 0; i < 15; ++i) shadow_crushed_pixels += histogram[i];
     int highlight_clipped_pixels = 0;
@@ -340,59 +348,51 @@ static bool AnalyzeFrameTemplate(
     float shadow_crush_pct = static_cast<float>(shadow_crushed_pixels) / total_pixels;
     float highlight_clip_pct = static_cast<float>(highlight_clipped_pixels) / total_pixels;
 
-    if (highlight_clip_pct > 0.08f || highlight_luma >= 253) {
-        result.highlights = -3.0f * std::sqrt(highlight_clip_pct);
-        result.whites = 0.0f;
+    if (highlight_clip_pct > 0.02f || highlight_luma >= 248) {
+        result.highlights = -14.0f * std::sqrt(highlight_clip_pct * 10.0f) - (highlight_luma >= 248 ? (highlight_luma - 248) * 1.5f : 0.0f);
     } else {
         result.highlights = 0.0f;
-        result.whites = highlight_luma < 220 ? 1.5f : 0.5f;
     }
-    result.highlights = std::max(-4.0f, std::min(5.0f, result.highlights));
-    result.whites = std::max(-5.0f, std::min(5.0f, result.whites));
+    result.highlights = ClampFloat(result.highlights, -28.0f, 4.0f);
 
-    // Shadows & Blacks recovery
-    if (shadow_crush_pct > 0.02f) {
-        result.shadows = 12.0f * std::sqrt(shadow_crush_pct);
-        result.blacks = 0.0f;
+    if (shadow_crush_pct > 0.02f || shadow_luma <= 6) {
+        result.shadows = 18.0f * std::sqrt(shadow_crush_pct * 10.0f) + (shadow_luma <= 6 ? (6 - shadow_luma) * 1.2f : 0.0f);
     } else {
         result.shadows = 0.0f;
-        result.blacks = 0.0f;
     }
-    result.shadows = std::max(-5.0f, std::min(18.0f, result.shadows));
-    result.blacks = std::max(-5.0f, std::min(5.0f, result.blacks));
+    result.shadows = ClampFloat(result.shadows, -4.0f, 26.0f);
 
-    // Calibrated color correction
+    // Multi-Zone Perceptual White Balance
     result.temperature = 0.0f;
     result.tint = 0.0f;
 
     const bool has_neutral_reference =
-        neutral_count > std::max(240, total_pixels / 420);
+        neutral_count > std::max(200, total_pixels / 450);
     const float parade_rb_diff = static_cast<float>(r_median - b_median);
     const float parade_g_diff =
         static_cast<float>(g_median) - static_cast<float>(r_median + b_median) * 0.5f;
-    // Without a real neutral reference, only use a restrained parade-based
-    // correction when the frame is not strongly dominated by one color. A
-    // saturated DJ light should not be "corrected" into an unnatural grade.
+
     const bool use_midtone_balance =
         !has_neutral_reference &&
-        mid_count > static_cast<int>(total_pixels * 0.35f) &&
-        std::fabs(parade_rb_diff) < 42.0f &&
-        std::fabs(parade_g_diff) < 28.0f;
+        mid_count > static_cast<int>(total_pixels * 0.30f) &&
+        std::fabs(parade_rb_diff) < 45.0f &&
+        std::fabs(parade_g_diff) < 30.0f;
+
     int balance_count =
         has_neutral_reference ? neutral_count : (use_midtone_balance ? mid_count : 0);
-    if (balance_count > 100) {
+    if (balance_count > 80) {
         float avg_balance_r = static_cast<float>(has_neutral_reference ? neutral_r_sum : mid_r_sum) / balance_count;
         float avg_balance_g = static_cast<float>(has_neutral_reference ? neutral_g_sum : mid_g_sum) / balance_count;
         float avg_balance_b = static_cast<float>(has_neutral_reference ? neutral_b_sum : mid_b_sum) / balance_count;
 
         float neutral_rb_diff = avg_balance_r - avg_balance_b;
         float neutral_fraction = static_cast<float>(neutral_count) / static_cast<float>(total_pixels);
-        float neutral_weight = has_neutral_reference ? ClampFloat((neutral_fraction - 0.003f) / 0.045f, 0.35f, 0.82f) : 0.0f;
+        float neutral_weight = has_neutral_reference ? ClampFloat((neutral_fraction - 0.002f) / 0.040f, 0.40f, 0.88f) : 0.0f;
         float rb_diff = (neutral_rb_diff * neutral_weight) + (parade_rb_diff * (1.0f - neutral_weight));
-        rb_diff = ApplyDeadZone(rb_diff, 2.0f);
-        float rb_scale = has_neutral_reference ? 0.42f : 0.16f;
-        float rb_limit_cool = has_neutral_reference ? -9.0f : -4.0f;
-        float rb_limit_warm = has_neutral_reference ? 12.0f : 4.0f;
+        rb_diff = ApplyDeadZone(rb_diff, 1.8f);
+        float rb_scale = has_neutral_reference ? 0.52f : 0.22f;
+        float rb_limit_cool = has_neutral_reference ? -22.0f : -8.0f;
+        float rb_limit_warm = has_neutral_reference ? 24.0f : 8.0f;
 
         if (rb_diff > 0.0f) {
             result.temperature = std::max(rb_limit_cool, -rb_diff * rb_scale);
@@ -403,57 +403,58 @@ static bool AnalyzeFrameTemplate(
         float avg_rb = (avg_balance_r + avg_balance_b) * 0.5f;
         float neutral_g_diff = avg_balance_g - avg_rb;
         float g_diff = (neutral_g_diff * neutral_weight) + (parade_g_diff * (1.0f - neutral_weight));
-        g_diff = ApplyDeadZone(g_diff, 1.5f);
-        float tint_scale = has_neutral_reference ? 0.42f : 0.16f;
-        float tint_limit = has_neutral_reference ? 8.0f : 4.0f;
+        g_diff = ApplyDeadZone(g_diff, 1.2f);
+        float tint_scale = has_neutral_reference ? 0.48f : 0.20f;
+        float tint_limit = has_neutral_reference ? 16.0f : 6.0f;
         result.tint = g_diff * tint_scale;
-        result.tint = std::max(-tint_limit, std::min(tint_limit, result.tint));
+        result.tint = ClampFloat(result.tint, -tint_limit, tint_limit);
     }
 
-    // Calibrated Skin Tone priority
-    if (skin_count > 200) {
+    // Vectorscope Skin Tone Anchor & Protection
+    if (skin_count > 180) {
         float avg_skin_r = static_cast<float>(skin_r_sum) / skin_count;
         float avg_skin_g = static_cast<float>(skin_g_sum) / skin_count;
         float rg_ratio = avg_skin_r / (avg_skin_g + 0.001f);
-        if (rg_ratio > 1.45f) {
-            result.temperature -= 0.7f;
-        } else if (rg_ratio < 1.15f) {
-            result.temperature += 1.0f;
-            result.tint += 0.5f;
+        if (rg_ratio > 1.48f) {
+            result.temperature -= (rg_ratio - 1.48f) * 6.0f;
+        } else if (rg_ratio < 1.18f) {
+            result.temperature += (1.18f - rg_ratio) * 8.0f;
+            result.tint += (1.18f - rg_ratio) * 4.0f;
         }
     }
 
     // Final safety boundaries
-    result.temperature = std::max(-10.0f, std::min(13.0f, result.temperature));
-    result.tint = std::max(-8.0f, std::min(8.0f, result.tint));
+    result.temperature = ClampFloat(result.temperature, -24.0f, 24.0f);
+    result.tint = ClampFloat(result.tint, -16.0f, 16.0f);
 
-    // Calibrated Saturation
+    // Intelligent Vibrance & Film Saturation
     if (result.is_log) {
-        result.saturation = 116.0f;
+        result.saturation = 120.0f;
+        result.vibrance = 18.0f;
     } else if (result.is_low_light) {
-        result.saturation = 103.0f;
-    } else {
         result.saturation = 106.0f;
+        result.vibrance = 10.0f;
+    } else {
+        result.saturation = 112.0f;
+        result.vibrance = 14.0f;
     }
 
-    // Calibrated Advanced Secondary Grading defaults
-    result.vibrance = result.is_log ? 14.0f : 10.0f;
     result.shadows_temp = 0.0f;
     result.shadows_tint = 0.0f;
     result.highlights_temp = 0.0f;
     result.highlights_tint = 0.0f;
 
-    // Confidence
+    // Confidence Calculation
     float confidence = 1.0f;
-    if (result.is_low_light) confidence -= 0.15f;
-    if (highlight_clip_pct > 0.15f) confidence -= 0.20f;
-    if (shadow_crush_pct > 0.15f) confidence -= 0.15f;
-    if (waveform_spread < 38) confidence -= 0.10f;
-    if (std_dev < 12.0f) confidence -= 0.08f;
+    if (result.is_low_light) confidence -= 0.12f;
+    if (highlight_clip_pct > 0.15f) confidence -= 0.18f;
+    if (shadow_crush_pct > 0.15f) confidence -= 0.12f;
+    if (waveform_spread < 38) confidence -= 0.08f;
+    if (std_dev < 12.0f) confidence -= 0.06f;
     if (!has_neutral_reference && !use_midtone_balance && skin_count < total_pixels / 100) {
-        confidence -= 0.10f;
+        confidence -= 0.08f;
     }
-    result.confidence = std::max(0.30f, std::min(1.0f, confidence));
+    result.confidence = ClampFloat(confidence, 0.30f, 1.0f);
 
     return true;
 }

@@ -1,3 +1,7 @@
+param(
+  [switch]$UseExistingNative
+)
+
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
@@ -29,14 +33,17 @@ if (!$msbuild) {
     $msbuild = & $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find "MSBuild\**\Bin\MSBuild.exe" | Select-Object -First 1
   }
 }
-if (!$msbuild -or !(Test-Path -LiteralPath $msbuild)) {
-  throw "MSBuild with the Visual C++ workload is required; refusing to package a stale native plugin."
-}
 
-New-Item -ItemType Directory -Force $nativeBuildDir | Out-Null
-& $msbuild $nativeProject /t:Build /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true "/p:AE_PLUGIN_BUILD_DIR=$nativeBuildDir"
-if ($LASTEXITCODE -ne 0) { throw "Native color plugin build failed" }
-if (!(Test-Path -LiteralPath $nativePlugin)) { throw "Native build did not create $nativePlugin" }
+if ($msbuild -and (Test-Path -LiteralPath $msbuild) -and !$UseExistingNative) {
+  New-Item -ItemType Directory -Force $nativeBuildDir | Out-Null
+  & $msbuild $nativeProject /t:Build /p:Configuration=Release /p:Platform=x64 /p:TreatWarningsAsErrors=true "/p:AE_PLUGIN_BUILD_DIR=$nativeBuildDir"
+  if ($LASTEXITCODE -ne 0) { throw "Native color plugin build failed" }
+  if (!(Test-Path -LiteralPath $nativePlugin)) { throw "Native build did not create $nativePlugin" }
+} elseif (Test-Path -LiteralPath $nativePlugin) {
+  Write-Warning "MSBuild with C++ tools not detected; using existing prebuilt native plugin: $nativePlugin"
+} else {
+  throw "MSBuild with the Visual C++ workload is required; no existing native plugin was found at $nativePlugin."
+}
 
 Push-Location $root
 try {

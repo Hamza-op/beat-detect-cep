@@ -1,4 +1,4 @@
-﻿#include "AutoCutColorEngine.h"
+#include "AutoCutColorEngine.h"
 #include "../color-core/color_engine.h"
 #include <algorithm>
 #include <cmath>
@@ -539,44 +539,43 @@ static void ApplyColorCorrectionUnit(float& r, float& g, float& b, const ColorCo
 
     ClampColorForDepth(r, g, b, preserve_hdr);
 
-    if (params->contrast != 0.0f) {
-        float c_factor = (100.0f + params->contrast) / 100.0f;
-        c_factor = c_factor * c_factor;
-        r = (r - 0.5f) * c_factor + 0.5f;
-        g = (g - 0.5f) * c_factor + 0.5f;
-        b = (b - 0.5f) * c_factor + 0.5f;
-    }
-
+    // Perceptual Luminance Film S-Curve & Tone Mapping
     luma = Rec709Luma(r, g, b);
     display_luma = Clamp01(luma);
+    float target_luma = luma;
 
-    if (params->highlights != 0.0f && display_luma > 0.5f) {
-        const float hi_factor = (display_luma - 0.5f) * 2.0f;
-        const float adj = (params->highlights / 100.0f) * 0.25f * hi_factor;
-        r += adj;
-        g += adj;
-        b += adj;
+    if (params->contrast != 0.0f) {
+        float norm_c = params->contrast / 100.0f;
+        float s_curve = display_luma + norm_c * (display_luma * (1.0f - display_luma) * (display_luma - 0.5f)) * 3.8f;
+        target_luma += (s_curve - display_luma);
     }
 
-    if (params->shadows != 0.0f && display_luma < 0.5f) {
-        const float sh_factor = (0.5f - display_luma) * 2.0f;
-        const float adj = (params->shadows / 100.0f) * 0.25f * sh_factor;
-        r += adj;
-        g += adj;
-        b += adj;
+    if (params->highlights != 0.0f && display_luma > 0.40f) {
+        const float hi_factor = std::pow((display_luma - 0.40f) / 0.60f, 1.3f);
+        target_luma += (params->highlights / 100.0f) * 0.28f * hi_factor;
+    }
+
+    if (params->shadows != 0.0f && display_luma < 0.60f) {
+        const float sh_factor = std::pow((0.60f - display_luma) / 0.60f, 1.3f);
+        target_luma += (params->shadows / 100.0f) * 0.28f * sh_factor;
     }
 
     if (params->whites != 0.0f) {
-        const float wh_adj = (params->whites / 100.0f) * 0.15f * (display_luma * display_luma);
-        r += wh_adj;
-        g += wh_adj;
-        b += wh_adj;
+        target_luma += (params->whites / 100.0f) * 0.18f * (display_luma * display_luma);
     }
     if (params->blacks != 0.0f) {
-        const float bl_adj = (params->blacks / 100.0f) * 0.15f * ((1.0f - display_luma) * (1.0f - display_luma));
-        r += bl_adj;
-        g += bl_adj;
-        b += bl_adj;
+        target_luma += (params->blacks / 100.0f) * 0.18f * ((1.0f - display_luma) * (1.0f - display_luma));
+    }
+
+    if (luma > 0.0001f) {
+        float luma_ratio = std::max(0.0f, target_luma) / luma;
+        r *= luma_ratio;
+        g *= luma_ratio;
+        b *= luma_ratio;
+    } else if (target_luma > 0.0f) {
+        r += target_luma;
+        g += target_luma;
+        b += target_luma;
     }
 
     ClampColorForDepth(r, g, b, preserve_hdr);

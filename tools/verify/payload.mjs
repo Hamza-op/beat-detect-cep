@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PAYLOAD_ALLOWLIST_WITH_MANIFEST } from "../shared/allowlist.mjs";
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../..",
@@ -16,8 +17,7 @@ if (
   typeof manifest.files !== "object"
 )
   throw new Error("Unsupported payload manifest schema");
-const allowed =
-  /^(CSXS\/manifest\.xml|META-INF\/.+|index\.html|css\/.+|js\/.+|jsx\/host\.jsx|assets\/fonts\/.+|bin\/beat_analyzer\.exe|native\/MediaCore\/AutoCutColorEngine\.aex|INSTALL\.txt|payload-manifest\.json)$/;
+const allowed = PAYLOAD_ALLOWLIST_WITH_MANIFEST;
 const actualFiles = [];
 async function walk(dir, relative = "") {
   for (const entry of await readdir(dir, { withFileTypes: true })) {
@@ -30,6 +30,12 @@ await walk(payload);
 for (const file of actualFiles) {
   if (!allowed.test(file))
     throw new Error(`Non-allowlisted payload file: ${file}`);
+  if (
+    file !== "payload-manifest.json" &&
+    !file.startsWith("META-INF/") &&
+    !manifest.files[file]
+  )
+    throw new Error(`Payload file not in manifest: ${file}`);
 }
 for (const [relative, expected] of Object.entries(manifest.files)) {
   if (

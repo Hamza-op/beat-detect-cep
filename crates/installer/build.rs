@@ -10,7 +10,8 @@ fn main() {
         || {
             manifest_dir
                 .parent()
-                .expect("installer crate has a parent directory")
+                .and_then(Path::parent)
+                .expect("installer crate is inside workspace crates directory")
                 .join("dist")
                 .join("com.autocutstudio.panel")
         },
@@ -25,7 +26,9 @@ fn main() {
             let rc_file = manifest_dir.join("src").join("manifest.rc");
             let res_file = out_dir.join("manifest.res");
 
+            let manifest_src = manifest_dir.join("src");
             let status = std::process::Command::new(rc_path)
+                .arg(format!("/I{}", manifest_src.display()))
                 .arg("/fo")
                 .arg(&res_file)
                 .arg(&rc_file)
@@ -35,12 +38,12 @@ fn main() {
                 Ok(status) if status.success() => {
                     println!("cargo:rustc-link-arg={}", res_file.display());
                 }
-                Ok(status) => panic!("rc.exe failed with status {status}"),
-                Err(error) => panic!("could not execute rc.exe: {error}"),
+                Ok(status) => panic!("resource compiler failed with status {status}"),
+                Err(error) => panic!("could not execute resource compiler: {error}"),
             }
         } else {
             panic!(
-                "Windows resource compiler (rc.exe) is required to build AutoCutStudioSetup.exe"
+                "Windows resource compiler (rc.exe / llvm-rc.exe) is required to build AutoCutStudioSetup.exe"
             );
         }
     }
@@ -83,6 +86,17 @@ fn main() {
 }
 
 fn find_rc_exe() -> Option<PathBuf> {
+    if let Some(path_var) = env::var_os("PATH") {
+        for p in env::split_paths(&path_var) {
+            for name in &["rc.exe", "llvm-rc.exe"] {
+                let candidate = p.join(name);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+    }
+
     let search_paths = [
         Path::new("D:\\Windows Kits\\10\\bin"),
         Path::new("C:\\Program Files (x86)\\Windows Kits\\10\\bin"),

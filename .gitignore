@@ -13,6 +13,7 @@ bin/beat_analyzer
 bin/essentia_beats.exe
 bin/essentia_beats
 *.log
+apps/cep-panel/src/panel/version.ts
 artifacts/
 .local-sdks/
 native/MediaCore/**/*.aex

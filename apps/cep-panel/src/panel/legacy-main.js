@@ -1,14 +1,18 @@
+import { MOVEMENT_PRESETS, getPreset } from "./movements.ts";
+import { PRODUCT_VERSION } from "./version.ts";
 (function () {
   "use strict";
 
   var cs = new CSInterface();
-  var APP_VERSION = "1.2.0";
+  var APP_VERSION = PRODUCT_VERSION;
   var state = {
     allEvents: [],
     markerEvents: [],
     clip: null,
     isBusy: false,
+    selectedColorLook: "skin_tone",
   };
+  var selectedColorLook = "skin_tone";
 
   var dom = {
     analyzeButton: document.getElementById("analyzeButton"),
@@ -19,6 +23,10 @@
     clearZoomButton: document.getElementById("clearZoomButton"),
     autoColorButton: document.getElementById("autoColorButton"),
     resetColorButton: document.getElementById("resetColorButton"),
+    colorIntensitySlider: document.getElementById("colorIntensitySlider"),
+    colorIntensityLabel: document.getElementById("colorIntensityLabel"),
+    colorStatusValue: document.getElementById("colorStatusValue"),
+    colorStatusLabel: document.getElementById("colorStatusLabel"),
     status: document.getElementById("status"),
     beatResultsPanel: document.getElementById("beatResultsPanel"),
     filteredCount: document.getElementById("filteredCount"),
@@ -1042,7 +1050,11 @@
         return result.ready ? result : waitForAutoColorEffect();
       })
       .then(function () {
-        return cepEval("AutoCutStudio.autoColorSelectedClips()");
+        var payload = {
+          look: selectedColorLook || "skin_tone",
+          intensity: (Number(dom.colorIntensitySlider ? dom.colorIntensitySlider.value : 100) || 100) / 100
+        };
+        return cepEval("AutoCutStudio.autoColorSelectedClips(" + JSON.stringify(JSON.stringify(payload)) + ")");
       })
       .then(function (result) {
         var engine = result.engine || "AutoCut custom correction";
@@ -1060,17 +1072,29 @@
               formatSeconds(Number(result.captureFrameSeconds))
             : "";
         var autoAmount = Number(result.autoAmount) || 80;
+        var rawLook = result.look || selectedColorLook || "skin_tone";
+        var lookName =
+          rawLook === "wedding_cinema"
+            ? "Wedding Cinema"
+            : rawLook === "skin_tone"
+              ? "Skin Tone & Balance"
+              : rawLook.replace(/_/g, " ");
+        if (dom.colorStatusValue) {
+          dom.colorStatusValue.textContent = lookName.toUpperCase();
+        }
+        if (dom.colorStatusLabel) {
+          dom.colorStatusLabel.textContent = "applied at " + (dom.colorIntensitySlider ? dom.colorIntensitySlider.value : "100") + "% intensity";
+        }
         setStatus(
-          "Editable starting grade applied to " +
+          "Applied " +
+            lookName +
+            " grade to " +
             result.applied +
             " selected clip" +
             (result.applied === 1 ? "" : "s") +
             capture +
             " using " +
             engine +
-            " at " +
-            autoAmount +
-            "% Auto Amount. Refine it in Effect Controls" +
             (skipped ? "; skipped " + skipped : "") +
             "." +
             csInfo +
@@ -1317,6 +1341,29 @@
     dom.autoColorButton.addEventListener("click", autoColorSelectedClips);
   if (dom.resetColorButton)
     dom.resetColorButton.addEventListener("click", resetColorGrade);
+
+  var colorLookButtons = document.querySelectorAll(".color-look-btn");
+  for (var clb = 0; clb < colorLookButtons.length; clb++) {
+    colorLookButtons[clb].addEventListener("click", function () {
+      var look = this.getAttribute("data-look") || "skin_tone";
+      selectedColorLook = look;
+      for (var b = 0; b < colorLookButtons.length; b++) {
+        colorLookButtons[b].classList.toggle("is-active", colorLookButtons[b] === this);
+      }
+      autoColorSelectedClips();
+    });
+  }
+
+  if (dom.colorIntensitySlider) {
+    dom.colorIntensitySlider.addEventListener("input", function () {
+      if (dom.colorIntensityLabel) {
+        dom.colorIntensityLabel.textContent = this.value + "%";
+      }
+    });
+    dom.colorIntensitySlider.addEventListener("change", function () {
+      autoColorSelectedClips();
+    });
+  }
   if (dom.markerTimingOffsetSlider) {
     dom.markerTimingOffsetSlider.addEventListener(
       "input",
@@ -1351,44 +1398,19 @@
   var selectedMomentMeta = document.getElementById("selectedMomentMeta");
   var movementButtons = document.querySelectorAll(".movement-btn");
   var activeMovementLabel = "";
-  var autoRatioByMode = {
-    smooth_in: 108,
-    smooth_out: 108,
-    drift: 105,
-    breath: 106,
-    reveal: 112,
-    settle_in: 114,
-    punch_in: 118,
-    punch_out: 116,
-    pulse: 112,
-    snap_back: 120,
-  };
-  var previewNames = {
-    smooth_in: "Slow Push-In",
-    smooth_out: "Slow Pull-Out",
-    drift: "Micro Drift",
-    breath: "Breathing Hold",
-    reveal: "Hold Then Reveal",
-    settle_in: "Overshoot Settle",
-    punch_in: "Beat Punch-In",
-    punch_out: "Beat Punch-Out",
-    pulse: "Double Pulse",
-    snap_back: "Snap Back",
-  };
-  var movementDescriptions = {
-    smooth_in:
-      "Gradual cinematic emphasis for portraits, vows, and emotional detail shots.",
-    smooth_out:
-      "Elegant release that opens the frame near the end of the shot.",
-    drift: "Subtle motion for couple portraits and calm beauty shots.",
-    breath: "Soft organic movement that gently returns to neutral.",
-    reveal: "Held emphasis followed by a graceful reveal.",
-    settle_in: "Refined push with a controlled settle for detail emphasis.",
-    punch_in: "Strong beat accent for dance entries and energetic cuts.",
-    punch_out: "Fast release after a strong visual or music hit.",
-    pulse: "Controlled rhythmic pulse for claps and dance beats.",
-    snap_back: "Sharp percussion accent that quickly returns to neutral.",
-  };
+  var autoRatioByMode = {};
+  for (var _mi = 0; _mi < MOVEMENT_PRESETS.length; _mi++) {
+    autoRatioByMode[MOVEMENT_PRESETS[_mi].id] = MOVEMENT_PRESETS[_mi].autoRatio;
+  }
+  var previewNames = {};
+  for (var _mn = 0; _mn < MOVEMENT_PRESETS.length; _mn++) {
+    previewNames[MOVEMENT_PRESETS[_mn].id] = MOVEMENT_PRESETS[_mn].name;
+  }
+  var movementDescriptions = {};
+  for (var _md = 0; _md < MOVEMENT_PRESETS.length; _md++) {
+    movementDescriptions[MOVEMENT_PRESETS[_md].id] =
+      MOVEMENT_PRESETS[_md].description;
+  }
 
   function setZoomRatio(value, keepAuto) {
     if (!dom.zoomSlider || !value) return;
@@ -1453,106 +1475,64 @@
   }
 
   function keyframePreviewPoints(mode, ratio) {
-    var soft = Math.round(100 + (ratio - 100) * 0.45);
-    var drift = Math.round(100 + (ratio - 100) * 0.3);
-    var breath = Math.round(100 + (ratio - 100) * 0.22);
-    var over = Math.min(150, Math.round(100 + (ratio - 100) * 1.18));
-    var patterns = {
-      smooth_in: [
-        [0, 100],
-        [100, ratio],
-      ],
-      smooth_out: [
-        [0, ratio],
-        [100, 100],
-      ],
-      drift: [
-        [0, 100],
-        [100, drift],
-      ],
-      breath: [
-        [0, 100],
-        [50, breath],
-        [100, 100],
-      ],
-      reveal: [
-        [0, ratio],
-        [62, ratio],
-        [100, 100],
-      ],
-      settle_in: [
-        [0, 100],
-        [22, over],
-        [55, soft],
-        [100, ratio],
-      ],
-      punch_in: [
-        [0, 100],
-        [8, ratio],
-        [28, soft],
-        [100, soft],
-      ],
-      punch_out: [
-        [0, ratio],
-        [10, 100],
-        [100, 100],
-      ],
-      pulse: [
-        [0, 100],
-        [18, ratio],
-        [38, 100],
-        [62, soft],
-        [100, 100],
-      ],
-      snap_back: [
-        [0, 100],
-        [10, ratio],
-        [30, 100],
-        [100, 100],
-      ],
-    };
-    return patterns[mode] || patterns.smooth_in;
+    var preset = getPreset(mode);
+    if (preset) return preset.keyframePattern(ratio);
+    var fallback = getPreset("smooth_in");
+    return fallback ? fallback.keyframePattern(ratio) : [[0, 100], [100, ratio]];
   }
 
   function renderKeyframePreview(mode, ratio) {
     if (!previewKeyframeTrack) return;
     var points = keyframePreviewPoints(mode, ratio);
-    previewKeyframeTrack.innerHTML = "";
     var minScale = 100;
     var maxScale = Math.max(150, ratio);
+    var svgNs = "http://www.w3.org/2000/svg";
+    var width = 100;
+    var height = 24;
+    var padY = 3;
+    var usableH = height - padY * 2;
 
     function yFor(scale) {
       var normalized = (scale - minScale) / (maxScale - minScale);
-      return 21 - Math.max(0, Math.min(1, normalized)) * 17;
+      return height - padY - Math.max(0, Math.min(1, normalized)) * usableH;
     }
 
+    var svg = document.createElementNS(svgNs, "svg");
+    svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+    svg.setAttribute("preserveAspectRatio", "none");
+    svg.setAttribute("class", "keyframe-svg");
+    svg.style.width = "100%";
+    svg.style.height = height + "px";
+    svg.style.display = "block";
+
+    // Draw connecting lines
     for (var i = 0; i < points.length - 1; i++) {
       var a = points[i];
       var b = points[i + 1];
-      var x1 = a[0];
-      var y1 = yFor(a[1]);
-      var x2 = b[0];
-      var y2 = yFor(b[1]);
-      var dx = x2 - x1;
-      var dy = y2 - y1;
-      var line = document.createElement("span");
-      line.className = "key-line";
-      line.style.left = x1 + "%";
-      line.style.top = y1 + "px";
-      line.style.width = Math.sqrt(dx * dx + dy * dy) + "%";
-      line.style.transform = "rotate(" + Math.atan2(dy, dx) + "rad)";
-      previewKeyframeTrack.appendChild(line);
+      var line = document.createElementNS(svgNs, "line");
+      line.setAttribute("x1", String(a[0]));
+      line.setAttribute("y1", String(yFor(a[1])));
+      line.setAttribute("x2", String(b[0]));
+      line.setAttribute("y2", String(yFor(b[1])));
+      line.setAttribute("stroke", "var(--acs-accent, #ffaa3c)");
+      line.setAttribute("stroke-width", "1.5");
+      line.setAttribute("stroke-linecap", "round");
+      svg.appendChild(line);
     }
 
+    // Draw keyframe nodes
     for (var k = 0; k < points.length; k++) {
-      var point = points[k];
-      var node = document.createElement("span");
-      node.className = "key-node";
-      node.style.left = point[0] + "%";
-      node.style.top = yFor(point[1]) + "px";
-      node.setAttribute("data-scale", Math.round(point[1]) + "%");
-      previewKeyframeTrack.appendChild(node);
+      var pt = points[k];
+      var circle = document.createElementNS(svgNs, "circle");
+      circle.setAttribute("cx", String(pt[0]));
+      circle.setAttribute("cy", String(yFor(pt[1])));
+      circle.setAttribute("r", "2.5");
+      circle.setAttribute("fill", "var(--acs-accent, #ffaa3c)");
+      svg.appendChild(circle);
     }
+
+    previewKeyframeTrack.innerHTML = "";
+    previewKeyframeTrack.appendChild(svg);
 
     if (previewStartLabel)
       previewStartLabel.textContent = Math.round(points[0][1]) + "% start";
@@ -1581,6 +1561,7 @@
       if (ratio) {
         setZoomRatio(ratio, true);
       }
+      applyGimbalZoom();
     });
   }
 
@@ -1596,6 +1577,7 @@
       if (dom.zoomSlider && ratio) {
         setZoomRatio(ratio, Boolean(mode));
       }
+      applyGimbalZoom();
     });
   }
   if (dom.autoZoomRatio) {
@@ -1659,6 +1641,7 @@
           "Premiere host bridge ready: " +
             (info.hostVersion || "unknown version"),
         );
+        cepEval("AutoCutStudio.cleanMotionLedger()").catch(function () {});
       },
       function (error) {
         setStatus(error.message || String(error), "error");

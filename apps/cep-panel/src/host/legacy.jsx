@@ -357,16 +357,107 @@ if (!JSON.parse) {
     return String(value || "").toLowerCase();
   }
 
+  function isUniformScaleProperty(prop) {
+    if (!prop) return false;
+    var matchName = normalizedName(prop.matchName);
+    var displayName = normalizedName(prop.displayName);
+    if (
+      matchName === "adbe transform-0003" ||
+      matchName === "adbe uniform scale" ||
+      matchName === "uniform scale" ||
+      matchName.indexOf("uniform") >= 0
+    ) {
+      return true;
+    }
+    if (
+      displayName === "uniform scale" ||
+      displayName === "uniform" ||
+      (displayName.indexOf("uniform") >= 0 && displayName.indexOf("scale") >= 0) ||
+      displayName.indexOf("uniform") >= 0 ||
+      displayName.indexOf("einheitliche") >= 0 ||
+      displayName.indexOf("uniforme") >= 0 ||
+      displayName.indexOf("等比") >= 0 ||
+      displayName.indexOf("固定") >= 0
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   function isScaleProperty(prop) {
-    var matchName = normalizedName(prop && prop.matchName);
-    var displayName = normalizedName(prop && prop.displayName);
-    return displayName === "scale" || matchName.indexOf("scale") >= 0;
+    if (!prop) return false;
+    if (isUniformScaleProperty(prop)) {
+      return false;
+    }
+    var matchName = normalizedName(prop.matchName);
+    var displayName = normalizedName(prop.displayName);
+
+    if (
+      matchName === "adbe transform-0004" ||
+      matchName === "adbe scale" ||
+      matchName === "scale" ||
+      matchName === "scale height" ||
+      matchName === "scale_height"
+    ) {
+      return true;
+    }
+
+    if (
+      displayName === "scale" ||
+      displayName === "scale height" ||
+      displayName === "scale (height)" ||
+      displayName === "height"
+    ) {
+      return true;
+    }
+
+    if (
+      (displayName.indexOf("scale") >= 0 || matchName.indexOf("scale") >= 0) &&
+      displayName.indexOf("width") < 0 &&
+      matchName.indexOf("width") < 0
+    ) {
+      return true;
+    }
+
+    if (
+      displayName.indexOf("skalierungshöhe") >= 0 ||
+      (displayName.indexOf("skalierung") >= 0 && displayName.indexOf("breite") < 0) ||
+      displayName.indexOf("hauteur d'échelle") >= 0 ||
+      (displayName.indexOf("échelle") >= 0 && displayName.indexOf("largeur") < 0) ||
+      displayName.indexOf("altura de escala") >= 0 ||
+      (displayName.indexOf("escala") >= 0 && displayName.indexOf("anchura") < 0) ||
+      displayName.indexOf("高度缩放") >= 0 ||
+      (displayName.indexOf("缩放") >= 0 && displayName.indexOf("宽度") < 0) ||
+      displayName.indexOf("高さの拡大縮小") >= 0 ||
+      (displayName.indexOf("拡大縮小") >= 0 && displayName.indexOf("幅") < 0)
+    ) {
+      return true;
+    }
+
+    return false;
   }
 
   function isPositionProperty(prop) {
-    var matchName = normalizedName(prop && prop.matchName);
-    var displayName = normalizedName(prop && prop.displayName);
-    return displayName === "position" || matchName.indexOf("position") >= 0;
+    if (!prop) return false;
+    var matchName = normalizedName(prop.matchName);
+    var displayName = normalizedName(prop.displayName);
+    if (
+      matchName === "adbe transform-0002" ||
+      matchName === "adbe position" ||
+      matchName === "position"
+    ) {
+      return true;
+    }
+    if (
+      displayName === "position" ||
+      matchName.indexOf("position") >= 0 ||
+      displayName.indexOf("position") >= 0 ||
+      displayName.indexOf("posición") >= 0 ||
+      displayName.indexOf("位置") >= 0
+    ) {
+      return true;
+    }
+    return false;
   }
 
   function findScalePropertyOnComponent(component) {
@@ -377,6 +468,54 @@ if (!JSON.parse) {
       var prop = component.properties[p];
       if (isScaleProperty(prop)) {
         return prop;
+      }
+    }
+    var cName = normalizedName(
+      (component && component.displayName) ||
+        (component && component.matchName) ||
+        ""
+    );
+    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 4) {
+      var candidateTransform = component.properties[3];
+      if (
+        candidateTransform &&
+        !isUniformScaleProperty(candidateTransform) &&
+        !isPositionProperty(candidateTransform)
+      ) {
+        return candidateTransform;
+      }
+    } else if (cName.indexOf("motion") >= 0 && component.properties.numItems >= 2) {
+      var candidateMotion = component.properties[1];
+      if (
+        candidateMotion &&
+        !isUniformScaleProperty(candidateMotion) &&
+        !isPositionProperty(candidateMotion)
+      ) {
+        return candidateMotion;
+      }
+    }
+    return null;
+  }
+
+  function findUniformScalePropertyOnComponent(component) {
+    if (!component || !component.properties) {
+      return null;
+    }
+    for (var p = 0; p < component.properties.numItems; p++) {
+      var prop = component.properties[p];
+      if (isUniformScaleProperty(prop)) {
+        return prop;
+      }
+    }
+    var cName = normalizedName(
+      (component && component.displayName) ||
+        (component && component.matchName) ||
+        ""
+    );
+    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 3) {
+      var candidate = component.properties[2];
+      if (candidate && isUniformScaleProperty(candidate)) {
+        return candidate;
       }
     }
     return null;
@@ -391,6 +530,58 @@ if (!JSON.parse) {
       if (isPositionProperty(prop)) {
         return prop;
       }
+    }
+    var cName = normalizedName(
+      (component && component.displayName) ||
+        (component && component.matchName) ||
+        ""
+    );
+    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 2) {
+      var candidate = component.properties[1];
+      if (candidate && isPositionProperty(candidate)) {
+        return candidate;
+      }
+    } else if (cName.indexOf("motion") >= 0 && component.properties.numItems >= 1) {
+      var candidateMotion = component.properties[0];
+      if (candidateMotion && isPositionProperty(candidateMotion)) {
+        return candidateMotion;
+      }
+    }
+    return null;
+  }
+
+  function isShutterAngleProperty(prop) {
+    if (!prop) return false;
+    var matchName = normalizedName(prop.matchName);
+    var displayName = normalizedName(prop.displayName);
+    if (matchName === "adbe transform-0011") return true;
+    if (displayName.indexOf("shutter angle") >= 0 || (displayName.indexOf("shutter") >= 0 && displayName.indexOf("angle") >= 0)) return true;
+    return false;
+  }
+
+  function isUseCompShutterProperty(prop) {
+    if (!prop) return false;
+    var matchName = normalizedName(prop.matchName);
+    var displayName = normalizedName(prop.displayName);
+    if (matchName === "adbe transform-0010") return true;
+    if (displayName.indexOf("composition") >= 0 && displayName.indexOf("shutter") >= 0) return true;
+    return false;
+  }
+
+  function findShutterAnglePropertyOnComponent(component) {
+    if (!component || !component.properties) return null;
+    for (var p = 0; p < component.properties.numItems; p++) {
+      var prop = component.properties[p];
+      if (isShutterAngleProperty(prop)) return prop;
+    }
+    return null;
+  }
+
+  function findUseCompShutterPropertyOnComponent(component) {
+    if (!component || !component.properties) return null;
+    for (var p = 0; p < component.properties.numItems; p++) {
+      var prop = component.properties[p];
+      if (isUseCompShutterProperty(prop)) return prop;
     }
     return null;
   }
@@ -444,6 +635,13 @@ if (!JSON.parse) {
         requireHostSuccess(prop.removeKey(keyTime), "Remove keyframe");
       }
     }
+  }
+
+  function prop_removeKey_safe(prop, keyTime) {
+    if (!prop || !prop.removeKey) return;
+    try {
+      prop.removeKey(keyTime);
+    } catch (_) {}
   }
 
   function setScaleKey(prop, seconds, value, interpolationType) {
@@ -513,6 +711,7 @@ if (!JSON.parse) {
 
   function setScaleKeys(prop, keys, interpolationType, frameDuration) {
     var important = importantKeyframes(keys, frameDuration);
+    var writtenTimes = [];
     for (var i = 0; i < important.length; i++) {
       setScaleKey(
         prop,
@@ -520,7 +719,9 @@ if (!JSON.parse) {
         important[i][1],
         interpolationType
       );
+      writtenTimes.push(important[i][0]);
     }
+    return writtenTimes;
   }
 
   function boundedZoom(value) {
@@ -733,7 +934,13 @@ if (!JSON.parse) {
 
   function getAutoCutTransformEffect() {
     return getVideoEffectByNames(
-      ["Transform"],
+      [
+        "Transform",
+        "ADBE Transform",
+        "AE.ADBE Transform",
+        "Transformation",
+        "Transformieren"
+      ],
       "Premiere Transform"
     );
   }
@@ -745,7 +952,10 @@ if (!JSON.parse) {
       name.indexOf("com.autocutstudio.transform") >= 0 ||
       display === "autocutstudio transform" ||
       name === "adbe transform" ||
-      display === "transform"
+      display === "transform" ||
+      name.indexOf("adbe transform") >= 0 ||
+      name.indexOf("transform") >= 0 ||
+      display.indexOf("transform") >= 0
     );
   }
 
@@ -807,7 +1017,7 @@ if (!JSON.parse) {
     }
   }
 
-  function persistMotionLedger(ref, component, preset) {
+  function persistMotionLedger(ref, component, preset, scaleKeyTimes) {
     try {
       var info = getClipInfo(ref.clip);
       var componentIndex = -1;
@@ -843,7 +1053,7 @@ if (!JSON.parse) {
           normalizedName(component && component.matchName) || "adbe transform",
         componentIndex: componentIndex,
         preset: preset || "",
-        generatedScaleKeys: [],
+        generatedScaleKeys: scaleKeyTimes || [],
         generatedPositionKeys: []
       };
       var next = [];
@@ -861,6 +1071,10 @@ if (!JSON.parse) {
         next.push(records[r]);
       }
       next.push(record);
+      // Cap ledger to 500 most recent records to prevent unbounded growth
+      if (next.length > 500) {
+        next = next.slice(next.length - 500);
+      }
       writeMotionLedger(next);
     } catch (_) {}
   }
@@ -893,6 +1107,26 @@ if (!JSON.parse) {
     return !!persistedMotionRecord(ref);
   }
 
+  function deleteMotionLedgerForRef(ref) {
+    try {
+      var info = getClipInfo(ref.clip);
+      var records = readMotionLedger();
+      var next = [];
+      for (var r = 0; r < records.length; r++) {
+        if (
+          records[r].projectItemNodeId === info.projectItemNodeId &&
+          records[r].sequenceId === info.sequenceId
+        ) {
+          continue;
+        }
+        next.push(records[r]);
+      }
+      if (next.length !== records.length) {
+        writeMotionLedger(next);
+      }
+    } catch (_) {}
+  }
+
   function hasAutoCutTransformOwnership(component, ref) {
     try {
       var ownership = component && component.__autocutstudioOwnership;
@@ -918,6 +1152,7 @@ if (!JSON.parse) {
     if (!clip || !clip.components) {
       return null;
     }
+    // 1. Exact ownership check (in-memory, rarely survives across calls)
     for (var i = 0; i < clip.components.numItems; i++) {
       var candidate = clip.components[i];
       if (
@@ -927,6 +1162,7 @@ if (!JSON.parse) {
         return candidate;
       }
     }
+    // 2. Ledger lookup (disk-persisted, fails if clip was moved/trimmed)
     var record = persistedMotionRecord(ref);
     if (record) {
       var index = Number(record.componentIndex);
@@ -939,7 +1175,16 @@ if (!JSON.parse) {
         return clip.components[index];
       }
     }
-    return null;
+    // 3. Fallback: find the LAST Transform component on the clip.
+    //    We are the only code that adds Transform effects; the built-in
+    //    Motion effect is not matched by isAutoCutTransformComponent.
+    var lastTransform = null;
+    for (var f = 0; f < clip.components.numItems; f++) {
+      if (isAutoCutTransformComponent(clip.components[f])) {
+        lastTransform = clip.components[f];
+      }
+    }
+    return lastTransform;
   }
 
   function ensureAutoCutTransformComponent(ref) {
@@ -1141,7 +1386,7 @@ if (!JSON.parse) {
     return missing;
   }
 
-  function setAutoCutCaptureControls(component, token, localSeconds) {
+  function setAutoCutCaptureControls(component, token, localSeconds, autoAmount) {
     var tokenSet = setLumetriProperty(
       component,
       ["frame capture token", "capture token"],
@@ -1152,10 +1397,12 @@ if (!JSON.parse) {
       ["frame capture seconds", "capture seconds"],
       localSeconds
     );
+    var targetAmount =
+      typeof autoAmount === "number" ? autoAmount : 80.0;
     var amountSet = setLumetriProperty(
       component,
       ["auto amount"],
-      80.0
+      targetAmount
     );
     return tokenSet && secondsSet && amountSet;
   }
@@ -1697,6 +1944,32 @@ if (!JSON.parse) {
 
         try {
           var transform = ensureAutoCutTransformComponent(ref);
+          var uniformScaleProp = findUniformScalePropertyOnComponent(transform);
+          if (uniformScaleProp && uniformScaleProp.setValue) {
+            try {
+              uniformScaleProp.setValue(1, 1);
+            } catch (_) {
+              try {
+                uniformScaleProp.setValue(true, 1);
+              } catch (_) {}
+            }
+          }
+          var useCompShutterProp = findUseCompShutterPropertyOnComponent(transform);
+          if (useCompShutterProp && useCompShutterProp.setValue) {
+            try {
+              useCompShutterProp.setValue(0, 1);
+            } catch (_) {
+              try {
+                useCompShutterProp.setValue(false, 1);
+              } catch (_) {}
+            }
+          }
+          var shutterAngleProp = findShutterAnglePropertyOnComponent(transform);
+          if (shutterAngleProp && shutterAngleProp.setValue) {
+            try {
+              shutterAngleProp.setValue(180, 1);
+            } catch (_) {}
+          }
           var prop = findScalePropertyOnComponent(transform);
           if (!prop) {
             skipped++;
@@ -1740,31 +2013,7 @@ if (!JSON.parse) {
             }
           } catch (_) {}
 
-          var endTime = Math.max(
-            inTime + 0.001,
-            rawOutTime - Math.min(frameDuration, duration * 0.25)
-          );
-          var safeEndTime = endTime;
-          var punchWindow = Math.min(0.22, duration * 0.2);
-          var pulseWindow = Math.min(0.42, duration * 0.45);
-          var midTime = timeAt(inTime, safeEndTime - inTime, 0.5);
-          var beatSettle = clampTime(inTime + punchWindow, inTime, safeEndTime);
-          var pulseA = clampTime(
-            inTime + pulseWindow * 0.28,
-            inTime,
-            safeEndTime
-          );
-          var pulseB = clampTime(
-            inTime + pulseWindow * 0.58,
-            inTime,
-            safeEndTime
-          );
-          var pulseC = clampTime(inTime + pulseWindow, inTime, safeEndTime);
-          var snapReturn = clampTime(
-            inTime + Math.min(0.28, duration * 0.28),
-            inTime,
-            safeEndTime
-          );
+          var safeEndTime = rawOutTime;
           var softTarget = 100.0 + (zoomTarget - 100.0) * 0.45;
           var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3;
           var breathTarget = 100.0 + (zoomTarget - 100.0) * 0.22;
@@ -1773,79 +2022,86 @@ if (!JSON.parse) {
           );
           removeKeysInRange(prop, inTime, rawOutTime);
 
+          var writtenKeyTimes;
           if (zoomStyle === "smooth_out") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, zoomTarget],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "punch_in") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
-              [
-                clampTime(inTime + frameDuration, inTime, safeEndTime),
-                zoomTarget
-              ],
-              [beatSettle, softTarget],
+              [timeAt(inTime, duration, 0.08), zoomTarget],
+              [timeAt(inTime, duration, 0.28), softTarget],
               [safeEndTime, softTarget]
             ], undefined, frameDuration);
           } else if (zoomStyle === "punch_out") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, zoomTarget],
-              [clampTime(inTime + frameDuration, inTime, safeEndTime), 100.0],
+              [timeAt(inTime, duration, 0.10), 100.0],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "pulse") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
-              [pulseA, zoomTarget],
-              [pulseB, 100.0],
-              [pulseC, softTarget],
+              [timeAt(inTime, duration, 0.18), zoomTarget],
+              [timeAt(inTime, duration, 0.38), 100.0],
+              [timeAt(inTime, duration, 0.62), softTarget],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "snap_back") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
-              [
-                clampTime(inTime + frameDuration, inTime, safeEndTime),
-                zoomTarget
-              ],
-              [snapReturn, 100.0],
+              [timeAt(inTime, duration, 0.10), zoomTarget],
+              [timeAt(inTime, duration, 0.30), 100.0],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "breath") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
-              [midTime, breathTarget],
+              [timeAt(inTime, duration, 0.5), breathTarget],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "reveal") {
-            var revealStart = timeAt(inTime, safeEndTime - inTime, 0.62);
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, zoomTarget],
-              [revealStart, zoomTarget],
+              [timeAt(inTime, duration, 0.62), zoomTarget],
               [safeEndTime, 100.0]
             ], undefined, frameDuration);
           } else if (zoomStyle === "settle_in") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
-              [timeAt(inTime, safeEndTime - inTime, 0.22), overshootTarget],
-              [timeAt(inTime, safeEndTime - inTime, 0.55), softTarget],
+              [timeAt(inTime, duration, 0.22), overshootTarget],
+              [timeAt(inTime, duration, 0.55), softTarget],
               [safeEndTime, zoomTarget]
             ], undefined, frameDuration);
           } else if (zoomStyle === "drift") {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
               [safeEndTime, driftTarget]
             ], undefined, frameDuration);
           } else {
-            setScaleKeys(prop, [
+            writtenKeyTimes = setScaleKeys(prop, [
               [inTime, 100.0],
               [safeEndTime, zoomTarget]
             ], undefined, frameDuration);
           }
 
+          // Verify at least 2 keyframes were actually written
+          if (writtenKeyTimes && writtenKeyTimes.length >= 2) {
+            var verifyKeys = prop.getKeys ? prop.getKeys() : null;
+            if (verifyKeys && verifyKeys.length < 2) {
+              errors.push(
+                name +
+                  ": Warning — only " +
+                  verifyKeys.length +
+                  " keyframe(s) detected after write"
+              );
+            }
+          }
+
           markAutoCutTransformOwnership(transform, ref, zoomStyle);
-          persistMotionLedger(ref, transform, zoomStyle);
+          persistMotionLedger(ref, transform, zoomStyle, writtenKeyTimes);
           appliedCount++;
         } catch (err) {
           skipped++;
@@ -1913,14 +2169,36 @@ if (!JSON.parse) {
           var scale = findScalePropertyOnComponent(transform);
           var position = findPositionPropertyOnComponent(transform);
           var range = clipTimelineRange(clip);
+          var record = persistedMotionRecord(ref);
+          var surgicalScale =
+            record &&
+            record.generatedScaleKeys &&
+            record.generatedScaleKeys.length > 0;
           if (scale) {
-            resetAnimatedProperty(
-              scale,
-              range.start,
-              range.end,
-              100.0,
-              "Scale"
-            );
+            if (surgicalScale) {
+              // Surgically remove only the keyframes we wrote
+              for (var sk = 0; sk < record.generatedScaleKeys.length; sk++) {
+                var keySeconds = Number(record.generatedScaleKeys[sk]);
+                if (isFinite(keySeconds)) {
+                  try {
+                    var keyTime = timeFromSeconds(keySeconds);
+                    prop_removeKey_safe(scale, keyTime);
+                  } catch (_) {}
+                }
+              }
+              setKeyframingEnabled(scale, false, "Scale");
+              if (scale.setValue) {
+                try { scale.setValue(100.0, 1); } catch (_) {}
+              }
+            } else {
+              resetAnimatedProperty(
+                scale,
+                range.start,
+                range.end,
+                100.0,
+                "Scale"
+              );
+            }
           }
           if (position) {
             var neutralPosition = positionValueForProperty(
@@ -1937,6 +2215,14 @@ if (!JSON.parse) {
             );
           }
           if (scale || position) {
+            // Fully remove the Transform effect from the clip
+            removeEffectViaQE(ref, [
+              "Transform",
+              "ADBE Transform",
+              "Transformieren",
+              "Transformation"
+            ]);
+            deleteMotionLedgerForRef(ref);
             cleared++;
           } else {
             skipped++;
@@ -1955,6 +2241,61 @@ if (!JSON.parse) {
       }
 
       return ok({ cleared: cleared, skipped: skipped, errors: errors });
+    } catch (error) {
+      return fail(error.message || String(error));
+    }
+  };
+
+  AutoCutStudio.cleanMotionLedger = function () {
+    try {
+      var records = readMotionLedger();
+      if (!records.length) {
+        return ok({ removed: 0, remaining: 0 });
+      }
+
+      // Collect valid sequence IDs from the current project
+      var validSequenceIds = {};
+      try {
+        if (app.project && app.project.sequences) {
+          for (var s = 0; s < app.project.sequences.numSequences; s++) {
+            var seq = app.project.sequences[s];
+            if (seq && seq.sequenceID) {
+              validSequenceIds[String(seq.sequenceID)] = true;
+            }
+          }
+        }
+      } catch (_) {}
+
+      var hasSequenceCheck = false;
+      for (var key in validSequenceIds) {
+        if (validSequenceIds.hasOwnProperty(key)) {
+          hasSequenceCheck = true;
+          break;
+        }
+      }
+
+      var next = [];
+      for (var r = 0; r < records.length; r++) {
+        var rec = records[r];
+        // Remove entries whose sequence no longer exists
+        if (
+          hasSequenceCheck &&
+          rec.sequenceId &&
+          !validSequenceIds[String(rec.sequenceId)]
+        ) {
+          continue;
+        }
+        next.push(rec);
+      }
+
+      // Cap to 500 most recent records
+      if (next.length > 500) {
+        next = next.slice(next.length - 500);
+      }
+
+      var removed = records.length - next.length;
+      writeMotionLedger(next);
+      return ok({ removed: removed, remaining: next.length });
     } catch (error) {
       return fail(error.message || String(error));
     }
@@ -2014,7 +2355,39 @@ if (!JSON.parse) {
     };
   }
 
-  function applyNativeAutoColor(ref, captureFrameSeconds, captureToken) {
+  function getLookModifiers(look, intensity) {
+    intensity = Math.max(0.2, Math.min(2.0, Number(intensity) || 1.0));
+    var defaults = defaultAutoCutColorValues();
+    if (look === "wedding_cinema" || look === "cinematic_warm") {
+      // Cinematic Wedding Preset: rich warm film glow, creamy skin, gentle shadow lift
+      defaults.temperature = Math.round(14 * intensity);
+      defaults.tint = Math.round(3 * intensity);
+      defaults.contrast = Math.round(12 * intensity);
+      defaults.highlights = Math.round(-6 * intensity);
+      defaults.shadows = Math.round(8 * intensity);
+      defaults.whites = Math.round(5 * intensity);
+      defaults.blacks = Math.round(-4 * intensity);
+      defaults.saturation = Math.round(100 + 10 * intensity);
+      defaults.vibrance = Math.round(15 * intensity);
+      defaults.highlights_temp = Math.round(12 * intensity);
+      defaults.shadows_temp = Math.round(-4 * intensity);
+      defaults.shadows_tint = Math.round(-6 * intensity);
+    } else {
+      // Skin Tone & Balance (default): natural skin balance, clean highlights, true color tone
+      defaults.contrast = Math.round(8 * intensity);
+      defaults.highlights = Math.round(-4 * intensity);
+      defaults.shadows = Math.round(4 * intensity);
+      defaults.whites = Math.round(2 * intensity);
+      defaults.blacks = Math.round(-2 * intensity);
+      defaults.vibrance = Math.round(10 * intensity);
+      defaults.saturation = Math.round(100 + 4 * intensity);
+      defaults.highlights_temp = Math.round(2 * intensity);
+      defaults.shadows_tint = Math.round(-2 * intensity);
+    }
+    return defaults;
+  }
+
+  function applyNativeAutoColor(ref, captureFrameSeconds, captureToken, options) {
     var component = ensureAutoCutColorComponent(ref);
 
     if (!component) {
@@ -2042,6 +2415,15 @@ if (!JSON.parse) {
       );
     }
 
+    if (options && options.look) {
+      try {
+        var mods = getLookModifiers(options.look, options.intensity);
+        applyAutoCutColorValues(component, mods);
+      } catch (modErr) {
+        warnings.push("Look preset: " + (modErr.message || String(modErr)));
+      }
+    }
+
     var colorInfo = getClipColorScience(ref.clip);
 
     return {
@@ -2053,6 +2435,7 @@ if (!JSON.parse) {
       missing: missing,
       warnings: warnings,
       autoAmount: 80,
+      look: (options && options.look) || "skin_tone",
       captureFrameSeconds: captureFrameSeconds,
       captureLocalSeconds: captureLocalSeconds,
       colorSpace: colorInfo.colorSpace,
@@ -2060,8 +2443,15 @@ if (!JSON.parse) {
     };
   }
 
-  AutoCutStudio.autoColorSelectedClips = function () {
+  AutoCutStudio.autoColorSelectedClips = function (payloadJson) {
     try {
+      var options = {};
+      if (payloadJson) {
+        try {
+          options = typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
+        } catch (_) {}
+      }
+
       var seq = app.project.activeSequence;
       if (!seq) {
         throw new Error("No active sequence is open.");
@@ -2091,7 +2481,8 @@ if (!JSON.parse) {
           var clipResult = applyNativeAutoColor(
             ref,
             playheadSeconds,
-            captureToken
+            captureToken,
+            options
           );
           clips.push(clipResult);
           if (clipResult.warnings && clipResult.warnings.length) {
@@ -2120,6 +2511,7 @@ if (!JSON.parse) {
         engine: clips[0].engine,
         usedNativeAuto: true,
         autoAmount: clips[0].autoAmount,
+        look: clips[0].look,
         name: applied === 1 ? clips[0].name : applied + " selected clips",
         captureFrameSeconds: playheadSeconds,
         colorScience:
@@ -2167,12 +2559,13 @@ if (!JSON.parse) {
 
       // Try to remove effects by iterating QE clip's effects
       if (qeClip.numComponents) {
+        var numComp = typeof qeClip.numComponents === "function" ? qeClip.numComponents() : qeClip.numComponents;
         var removed = false;
-        for (var c = qeClip.numComponents() - 1; c >= 0; c--) {
+        for (var c = numComp - 1; c >= 0; c--) {
           try {
             var comp = qeClip.getComponentAt(c);
             if (comp) {
-              var compName = (comp.name || "").toLowerCase();
+              var compName = (comp.name || comp.displayName || comp.matchName || "").toLowerCase();
               for (var n = 0; n < effectNames.length; n++) {
                 if (compName.indexOf(effectNames[n].toLowerCase()) >= 0) {
                   qeClip.removeComponentAt(c);
@@ -2207,42 +2600,77 @@ if (!JSON.parse) {
       var reset = 0;
       var skipped = 0;
       var errors = [];
+      var effectTargetNames = [
+        "AutoCutStudio Color Engine",
+        "com.autocutstudio.color.engine",
+        "AutoCut Color Engine",
+        "AutoCutStudioColorEngine",
+        "AutoCutColorEngine",
+        "Color Engine"
+      ];
 
       for (var i = 0; i < refs.length; i++) {
         var ref = refs[i];
         try {
           var appliedToThisClip = false;
 
-          // 1. Try to find and reset AutoCut Color Engine via ExtendScript
+          // 1. Try full QE removal first (completely removes from Effect Controls)
+          var qeRemoved = removeEffectViaQE(ref, effectTargetNames);
+          if (qeRemoved) {
+            appliedToThisClip = true;
+          }
+
+          // 2. Also find via ExtendScript and thoroughly zero out all properties & disable
           var autocutComponent = findAutoCutColorComponent(ref.clip);
           if (autocutComponent) {
             try {
               autocutComponent.enabled = false;
             } catch (_) {}
             try {
-              setAutoCutCaptureControls(autocutComponent, 0, 0);
+              setAutoCutCaptureControls(autocutComponent, 0, 0, 0.0);
               setLumetriProperty(
                 autocutComponent,
                 ["analysis confidence", "confidence"],
                 0.0
               );
+              setLumetriProperty(
+                autocutComponent,
+                ["auto trigger"],
+                0.0
+              );
+              setLumetriProperty(
+                autocutComponent,
+                ["auto amount"],
+                0.0
+              );
               applyAutoCutColorValues(autocutComponent, defaults);
             } catch (_) {}
-            appliedToThisClip = true;
-          } else {
-            // AutoCut component not found via ExtendScript - try removing via QE DOM
-            var qeRemoved = removeEffectViaQE(ref, [
-              "AutoCutStudio Color Engine",
-              "com.autocutstudio.color.engine",
-              "AutoCut Color Engine"
-            ]);
-            if (qeRemoved) {
-              appliedToThisClip = true;
-            }
-          }
 
-          // Reset is intentionally scoped to the exact AutoCutStudio instance.
-          // Lumetri and unrelated user effects are never disabled or rewritten.
+            // Zero out any remaining properties on the component
+            try {
+              if (autocutComponent.properties) {
+                for (var p = 0; p < autocutComponent.properties.numItems; p++) {
+                  var prop = autocutComponent.properties[p];
+                  if (prop && prop.setValue) {
+                    var pName = (prop.displayName || prop.matchName || "").toLowerCase();
+                    if (pName.indexOf("saturation") >= 0) {
+                      try { prop.setValue(100.0, 1); } catch (_) {}
+                    } else if (pName.indexOf("confidence") >= 0 || pName.indexOf("amount") >= 0 || pName.indexOf("token") >= 0 || pName.indexOf("second") >= 0 || pName.indexOf("trigger") >= 0) {
+                      try { prop.setValue(0.0, 1); } catch (_) {}
+                    } else {
+                      try { prop.setValue(0.0, 1); } catch (_) {}
+                    }
+                  }
+                }
+              }
+            } catch (_) {}
+
+            // Try QE removal again if it wasn't removed yet
+            if (!qeRemoved) {
+              qeRemoved = removeEffectViaQE(ref, effectTargetNames);
+            }
+            appliedToThisClip = true;
+          }
 
           if (appliedToThisClip) {
             reset++;

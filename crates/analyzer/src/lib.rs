@@ -66,7 +66,6 @@ pub fn run() -> Result<(), Box<dyn Error>> {
     )?;
 
     let mut events = detect_events(&analysis_samples, sample_rate);
-    events = select_major_hit_markers(events);
     if analysis_offset > 0.0 {
         for event in &mut events {
             event.time = round_to_millis(event.time + analysis_offset);
@@ -352,6 +351,7 @@ pub fn detect_events(samples: &[f32], sample_rate: u32) -> Vec<Event> {
     detect_beat_grid_events(samples, sample_rate, &frames)
 }
 
+#[cfg(test)]
 fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
     if events.len() < 3 {
         return events;
@@ -431,6 +431,7 @@ fn select_major_hit_markers(mut events: Vec<Event>) -> Vec<Event> {
     selected
 }
 
+#[cfg(test)]
 fn marker_peak_radius(events: &[Event]) -> f64 {
     // The decoded event grid already expresses the song's pulse. Suppress
     // only competing events inside the same beat, not valid accents in the

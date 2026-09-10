@@ -1,811 +1,1754 @@
 var AutoCutStudio = AutoCutStudio || {};
 
-// ExtendScript JSON polyfill
-var JSON = JSON || {};
-if (!JSON.parse) {
-  JSON.parse = function (text) {
-    try {
-      return eval("(" + text + ")");
-    } catch (e) {
-      throw new Error("JSON parsing failed: " + e.message);
-    }
-  };
-}
-
 (function () {
+  /*
+   * AutoCutStudio Premiere Pro ExtendScript bridge.
+   *
+   * Safety notes:
+   * - ES3-compatible; no external JSON dependency.
+   * - QE is used only to add effects, never to remove effects by name.
+   * - Existing user-created Transform effects are never adopted.
+   * - Destructive motion operations require current-session ownership.
+   *   Disk ledger records alone do not authorize changes to an effect.
+   * - Clear Zoom removes generated Scale keys, not the Transform component.
+   * - Project-item markers are source markers shared by media instances.
+   * - Motion keyframes use source-media time. Retimed/reversed clips are
+   *   rejected conservatively rather than guessed.
+   *
+   * Verify QE and effect-property behavior on supported Premiere versions.
+   */
+
   var TICKS_PER_SECOND = 254016000000;
   var AUTOCUT_EXTENSION_VERSION = "1.2.0";
+  var BRIDGE_VERSION = 1;
+  var LEDGER_SCHEMA_VERSION = 2;
+  var MAX_LEDGER_RECORDS = 500;
+  var MAX_JSON_LENGTH = 4194304;
+  var MAX_JSON_DEPTH = 64;
+  var MAX_MARKER_EVENTS = 10000;
+  var TIME_EPSILON = 0.000001;
+  var VALUE_EPSILON = 0.0001;
 
-  function esc(value) {
-    return String(value)
-      .replace(/\\/g, "\\\\")
-      .replace(/"/g, '\\"')
-      .replace(/\r/g, "\\r")
-      .replace(/\n/g, "\\n")
-      .replace(/\t/g, "\\t");
+  var SESSION_ID =
+    String(new Date().getTime()) +
+    "-" +
+    String(Math.floor(Math.random() * 1000000000));
+
+  var MARKER_PREFIX = "AutoCutStudio Beat Marker v2\n";
+  var LEGACY_MARKER_SIGNATURE = "AutoCutStudio Beat Marker v1";
+
+  var motionOwners = [];
+  var pendingEffects = {};
+  var lastCaptureToken = 0;
+
+  var hasOwn = Object.prototype.hasOwnProperty;
+  var objectToString = Object.prototype.toString;
+
+  function owns(object, key) {
+    return hasOwn.call(object, key);
   }
 
-  function jsonString(value) {
-    if (value === null || value === undefined) {
-      return "null";
-    }
-    if (typeof value === "number" || typeof value === "boolean") {
-      return String(value);
-    }
-    // Handle dates if any
-    if (value instanceof Date) {
-      return '"' + value.toISOString() + '"';
-    }
-    return '"' + esc(value) + '"';
+  function isArray(value) {
+    return objectToString.call(value) === "[object Array]";
   }
 
-  function stringify(value) {
-    var i;
-    var parts = [];
+  function errorMessage(error) {
+    return error && error.message ? String(error.message) : String(error);
+  }
 
-    if (value === null || value === undefined) {
-      return "null";
+  function normalizedName(value) {
+    return String(value || "")
+      .toLowerCase()
+      .replace(/^\s+|\s+$/g, "");
+  }
+
+  function canonicalName(value) {
+    return normalizedName(value).replace(/[_\s]+/g, " ");
+  }
+
+  function finiteNumber(value, label) {
+    if (typeof value !== "number" && typeof value !== "string") {
+      throw new Error(label + " must be a finite number.");
     }
-    if (
-      typeof value === "string" ||
-      typeof value === "number" ||
-      typeof value === "boolean"
-    ) {
-      return jsonString(value);
+
+    if (typeof value === "string" && !value.replace(/\s/g, "").length) {
+      throw new Error(label + " must be a finite number.");
     }
-    if (value instanceof Array) {
-      for (i = 0; i < value.length; i++) {
-        parts.push(stringify(value[i]));
+
+    var number = Number(value);
+
+    if (!isFinite(number)) {
+      throw new Error(label + " must be a finite number.");
+    }
+
+    return number;
+  }
+
+  function optionalNumber(value, fallback, label) {
+    return value === undefined
+      ? fallback
+      : finiteNumber(value, label);
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(maximum, value));
+  }
+
+  function sameNumber(a, b, tolerance) {
+    var first = Number(a);
+    var second = Number(b);
+
+    return (
+      isFinite(first) &&
+      isFinite(second) &&
+      Math.abs(first - second) <= tolerance
+    );
+  }
+
+  function safeRead(object, property, fallback) {
+    try {
+      var value = object && object[property];
+      return value === undefined || value === null ? fallback : value;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  /*
+   * Local strict JSON codec.
+   * Does not trust or modify an existing global JSON implementation.
+   */
+  var Codec = (function () {
+    function parse(text) {
+      if (typeof text !== "string") {
+        throw new Error("JSON input must be a string.");
       }
-      return "[" + parts.join(",") + "]";
-    }
-    for (var key in value) {
-      if (value.hasOwnProperty(key)) {
-        parts.push(jsonString(key) + ":" + stringify(value[key]));
+
+      if (text.length > MAX_JSON_LENGTH) {
+        throw new Error("JSON payload is too large.");
       }
+
+      var index = 0;
+      var length = text.length;
+
+      function invalid(message) {
+        throw new Error(
+          "Invalid JSON at character " + index + ": " + message
+        );
+      }
+
+      function whitespace() {
+        while (index < length && /[ \t\r\n]/.test(text.charAt(index))) {
+          index++;
+        }
+      }
+
+      function readString() {
+        var result = "";
+        var character;
+        var escape;
+        var hex;
+
+        if (text.charAt(index++) !== '"') {
+          invalid("Expected a string.");
+        }
+
+        while (index < length) {
+          character = text.charAt(index++);
+
+          if (character === '"') {
+            return result;
+          }
+
+          if (character === "\\") {
+            if (index >= length) {
+              invalid("Incomplete escape sequence.");
+            }
+
+            escape = text.charAt(index++);
+
+            if (escape === '"' || escape === "\\" || escape === "/") {
+              result += escape;
+            } else if (escape === "b") {
+              result += "\b";
+            } else if (escape === "f") {
+              result += "\f";
+            } else if (escape === "n") {
+              result += "\n";
+            } else if (escape === "r") {
+              result += "\r";
+            } else if (escape === "t") {
+              result += "\t";
+            } else if (escape === "u") {
+              hex = text.substr(index, 4);
+
+              if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
+                invalid("Invalid Unicode escape.");
+              }
+
+              result += String.fromCharCode(parseInt(hex, 16));
+              index += 4;
+            } else {
+              invalid("Unsupported escape sequence.");
+            }
+          } else {
+            if (character.charCodeAt(0) < 32) {
+              invalid("Unescaped control character.");
+            }
+
+            result += character;
+          }
+        }
+
+        invalid("Unterminated string.");
+      }
+
+      function readValue(depth) {
+        if (depth > MAX_JSON_DEPTH) {
+          invalid("Maximum nesting depth exceeded.");
+        }
+
+        whitespace();
+
+        var character = text.charAt(index);
+        var value;
+        var key;
+        var match;
+
+        if (character === '"') {
+          return readString();
+        }
+
+        if (character === "{") {
+          index++;
+          value = {};
+          whitespace();
+
+          if (text.charAt(index) === "}") {
+            index++;
+            return value;
+          }
+
+          while (index < length) {
+            whitespace();
+
+            if (text.charAt(index) !== '"') {
+              invalid("Expected an object key.");
+            }
+
+            key = readString();
+
+            if (
+              key === "__proto__" ||
+              key === "constructor" ||
+              key === "prototype"
+            ) {
+              invalid("Reserved object key.");
+            }
+
+            if (owns(value, key)) {
+              invalid("Duplicate object key.");
+            }
+
+            whitespace();
+
+            if (text.charAt(index++) !== ":") {
+              invalid("Expected ':'.");
+            }
+
+            value[key] = readValue(depth + 1);
+            whitespace();
+            character = text.charAt(index++);
+
+            if (character === "}") {
+              return value;
+            }
+
+            if (character !== ",") {
+              invalid("Expected ',' or '}'.");
+            }
+          }
+
+          invalid("Unterminated object.");
+        }
+
+        if (character === "[") {
+          index++;
+          value = [];
+          whitespace();
+
+          if (text.charAt(index) === "]") {
+            index++;
+            return value;
+          }
+
+          while (index < length) {
+            value.push(readValue(depth + 1));
+            whitespace();
+            character = text.charAt(index++);
+
+            if (character === "]") {
+              return value;
+            }
+
+            if (character !== ",") {
+              invalid("Expected ',' or ']'.");
+            }
+          }
+
+          invalid("Unterminated array.");
+        }
+
+        if (text.substr(index, 4) === "true") {
+          index += 4;
+          return true;
+        }
+
+        if (text.substr(index, 5) === "false") {
+          index += 5;
+          return false;
+        }
+
+        if (text.substr(index, 4) === "null") {
+          index += 4;
+          return null;
+        }
+
+        match = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/.exec(
+          text.substring(index)
+        );
+
+        if (match) {
+          index += match[0].length;
+          value = Number(match[0]);
+
+          if (!isFinite(value)) {
+            invalid("Number is outside the supported range.");
+          }
+
+          return value;
+        }
+
+        invalid("Unexpected token.");
+      }
+
+      var result = readValue(0);
+      whitespace();
+
+      if (index !== length) {
+        invalid("Unexpected trailing content.");
+      }
+
+      return result;
     }
-    return "{" + parts.join(",") + "}";
-  }
+
+    function quote(value) {
+      return '"' + String(value).replace(
+        /["\\\x00-\x1f\u2028\u2029]/g,
+        function (character) {
+          var escapes = {
+            '"': '\\"',
+            "\\": "\\\\",
+            "\b": "\\b",
+            "\f": "\\f",
+            "\n": "\\n",
+            "\r": "\\r",
+            "\t": "\\t"
+          };
+
+          if (owns(escapes, character)) {
+            return escapes[character];
+          }
+
+          var hex = character.charCodeAt(0).toString(16);
+          return "\\u" + ("0000" + hex).slice(-4);
+        }
+      ) + '"';
+    }
+
+    function stringify(value) {
+      var ancestors = [];
+
+      function encode(item, depth) {
+        if (depth > MAX_JSON_DEPTH) {
+          throw new Error("JSON serialization depth exceeded.");
+        }
+
+        if (item === null) {
+          return "null";
+        }
+
+        var type = typeof item;
+        var parts = [];
+        var i;
+        var key;
+        var encoded;
+
+        if (type === "string") {
+          return quote(item);
+        }
+
+        if (type === "number") {
+          return isFinite(item) ? String(item) : "null";
+        }
+
+        if (type === "boolean") {
+          return item ? "true" : "false";
+        }
+
+        if (type === "undefined" || type === "function") {
+          return undefined;
+        }
+
+        if (type !== "object") {
+          throw new Error("Unsupported JSON value.");
+        }
+
+        for (i = 0; i < ancestors.length; i++) {
+          if (ancestors[i] === item) {
+            throw new Error("Cannot serialize a circular object.");
+          }
+        }
+
+        ancestors.push(item);
+
+        if (isArray(item)) {
+          for (i = 0; i < item.length; i++) {
+            encoded = encode(item[i], depth + 1);
+            parts.push(encoded === undefined ? "null" : encoded);
+          }
+
+          ancestors.pop();
+          return "[" + parts.join(",") + "]";
+        }
+
+        for (key in item) {
+          if (owns(item, key)) {
+            encoded = encode(item[key], depth + 1);
+
+            if (encoded !== undefined) {
+              parts.push(quote(key) + ":" + encoded);
+            }
+          }
+        }
+
+        ancestors.pop();
+        return "{" + parts.join(",") + "}";
+      }
+
+      return encode(value, 0);
+    }
+
+    return {
+      parse: parse,
+      stringify: stringify
+    };
+  })();
 
   function ok(payload) {
-    payload.ok = true;
-    return stringify(payload);
+    var response = { ok: true };
+
+    if (payload) {
+      for (var key in payload) {
+        if (owns(payload, key) && key !== "ok") {
+          response[key] = payload[key];
+        }
+      }
+    }
+
+    return Codec.stringify(response);
   }
 
-  function fail(message) {
-    return stringify({ ok: false, error: message });
+  function fail(error) {
+    return Codec.stringify({
+      ok: false,
+      error: errorMessage(error)
+    });
   }
 
-  function parseJson(text) {
-    try {
-      return JSON.parse(text);
-    } catch (e) {
-      throw new Error("JSON parsing failed in scripting host: " + e.message);
+  function expose(name, handler) {
+    AutoCutStudio[name] = function (payloadJson) {
+      try {
+        return ok(handler(payloadJson) || {});
+      } catch (error) {
+        return fail(error);
+      }
+    };
+  }
+
+  function parsePayload(text, allowEmpty) {
+    if (
+      allowEmpty &&
+      (text === undefined || text === null || text === "")
+    ) {
+      return {};
+    }
+
+    var payload = Codec.parse(text);
+
+    if (!payload || typeof payload !== "object" || isArray(payload)) {
+      throw new Error("Expected a JSON object payload.");
+    }
+
+    return payload;
+  }
+
+  function requireActiveSequence() {
+    if (typeof app === "undefined" || !app.project) {
+      throw new Error("No Premiere project is available.");
+    }
+
+    var sequence = app.project.activeSequence;
+
+    if (!sequence) {
+      throw new Error("No active sequence is open.");
+    }
+
+    return sequence;
+  }
+
+  function requireHostSuccess(result, operation) {
+    /*
+     * Use only for documented ComponentParam-style status returns.
+     * QE and marker APIs may use different return conventions.
+     */
+    if (
+      result === false ||
+      (typeof result === "number" && result !== 0)
+    ) {
+      throw new Error(
+        operation + " failed in Premiere (code " + result + ")."
+      );
     }
   }
-
-  AutoCutStudio.hostInfo = function () {
-    try {
-      return ok({
-        bridgeVersion: 1,
-        extensionVersion: AUTOCUT_EXTENSION_VERSION,
-        hostName: app && app.name ? String(app.name) : "Premiere Pro",
-        hostVersion: app && app.version ? String(app.version) : "unknown",
-        projectAvailable: Boolean(app && app.project)
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
 
   function timeToSeconds(time) {
-    if (!time) {
-      return 0;
+    if (time === null || time === undefined) {
+      throw new Error("Premiere returned an unavailable time value.");
     }
+
+    var seconds;
+
+    if (typeof time === "number" || typeof time === "string") {
+      return finiteNumber(time, "Time");
+    }
+
     if (time.seconds !== undefined) {
-      return Number(time.seconds);
+      seconds = Number(time.seconds);
+
+      if (isFinite(seconds)) {
+        return seconds;
+      }
     }
+
     if (time.ticks !== undefined) {
-      return Number(time.ticks) / TICKS_PER_SECOND;
+      seconds = Number(time.ticks) / TICKS_PER_SECOND;
+
+      if (isFinite(seconds)) {
+        return seconds;
+      }
     }
-    return Number(time) || 0;
+
+    throw new Error("Premiere returned an invalid time value.");
+  }
+
+  function tryTimeToSeconds(time) {
+    try {
+      return timeToSeconds(time);
+    } catch (_) {
+      return NaN;
+    }
   }
 
   function timeFromSeconds(seconds) {
-    var safeSeconds = Math.max(0, Number(seconds) || 0);
+    var value = finiteNumber(seconds, "Time");
     var time = new Time();
-    var ticks = Math.round(safeSeconds * TICKS_PER_SECOND);
-    time.ticks = String(ticks);
+
+    /*
+     * Let Premiere perform seconds-to-ticks conversion.
+     * Avoid constructing large integer tick strings with JS arithmetic.
+     */
+    time.seconds = value;
     return time;
   }
 
+  function activeFrameDuration(seq) {
+    try {
+      var timebase = Number(seq.timebase);
+
+      if (isFinite(timebase) && timebase > 0) {
+        return timebase / TICKS_PER_SECOND;
+      }
+    } catch (_) { }
+
+    try {
+      var settings = seq.getSettings ? seq.getSettings() : null;
+      var duration = settings && settings.videoFrameRate
+        ? timeToSeconds(settings.videoFrameRate)
+        : NaN;
+
+      if (isFinite(duration) && duration > 0) {
+        return duration;
+      }
+    } catch (_) { }
+
+    throw new Error("Could not determine the sequence frame duration.");
+  }
+
+  function sequencePlayheadSeconds(seq) {
+    if (!seq.getPlayerPosition) {
+      throw new Error("Premiere did not expose the playhead position.");
+    }
+
+    return timeToSeconds(seq.getPlayerPosition());
+  }
+
   function clipName(clip, index) {
-    return (
-      (clip && (clip.name || (clip.projectItem && clip.projectItem.name))) ||
-      "clip " + (index + 1)
+    return String(
+      safeRead(clip, "name", "") ||
+      safeRead(safeRead(clip, "projectItem", null), "name", "") ||
+      "Clip " + (index + 1)
     );
   }
 
-  function sameTrackItem(a, b) {
+  function projectKey() {
+    var project = app.project;
+    var path = String(safeRead(project, "path", ""));
+    var documentId = String(safeRead(project, "documentID", ""));
+
+    if (path) {
+      return "path:" + path;
+    }
+
+    return documentId
+      ? "document:" + documentId
+      : "unsaved:" + SESSION_ID;
+  }
+
+  function sequenceKey(seq) {
+    var id = safeRead(seq, "sequenceID", "");
+
+    if (id !== "") {
+      return String(id);
+    }
+
+    return "name:" + String(safeRead(seq, "name", ""));
+  }
+
+  function projectItemId(clip) {
+    var item = safeRead(clip, "projectItem", null);
+    return String(
+      safeRead(item, "nodeId", "") ||
+      safeRead(item, "treePath", "")
+    );
+  }
+
+  function trackItemId(clip) {
+    return String(safeRead(clip, "nodeId", ""));
+  }
+
+  function mediaType(clip) {
+    return normalizedName(safeRead(clip, "mediaType", ""));
+  }
+
+  function clipTimelineRange(clip) {
+    var start = timeToSeconds(clip.start);
+    var end = timeToSeconds(clip.end);
+
+    if (end <= start) {
+      throw new Error("Clip has an invalid timeline range.");
+    }
+
+    return {
+      start: start,
+      end: end,
+      duration: end - start
+    };
+  }
+
+  function clipIdentity(clip, seq) {
+    return [
+      projectKey(),
+      sequenceKey(seq),
+      trackItemId(clip),
+      projectItemId(clip),
+      timeToSeconds(clip.start).toFixed(9),
+      timeToSeconds(clip.end).toFixed(9),
+      timeToSeconds(clip.inPoint).toFixed(9),
+      timeToSeconds(clip.outPoint).toFixed(9),
+      mediaType(clip)
+    ].join("|");
+  }
+
+  function samePhysicalTrackItem(a, b) {
     if (!a || !b) {
       return false;
     }
+
     if (a === b) {
       return true;
     }
-    return (
-      a.projectItem &&
-      b.projectItem &&
-      (a.projectItem === b.projectItem ||
-        (a.projectItem.nodeId &&
-          b.projectItem.nodeId &&
-          String(a.projectItem.nodeId) === String(b.projectItem.nodeId))) &&
-      timeToSeconds(a.start) === timeToSeconds(b.start) &&
-      timeToSeconds(a.end) === timeToSeconds(b.end)
-    );
+
+    var firstId = trackItemId(a);
+    var secondId = trackItemId(b);
+
+    return !!firstId && !!secondId && firstId === secondId;
   }
 
-  function isTrackItemSelected(clip, selectedItems) {
-    if (clip && clip.isSelected) {
-      try {
-        var isSel =
-          typeof clip.isSelected === "function"
-            ? clip.isSelected()
-            : clip.isSelected;
-        if (isSel) {
-          return true;
+  function selectionFlag(clip) {
+    try {
+      var selected = clip.isSelected;
+
+      if (typeof selected === "function") {
+        return { available: true, selected: !!clip.isSelected() };
+      }
+
+      if (typeof selected === "boolean" || typeof selected === "number") {
+        return { available: true, selected: !!selected };
+      }
+
+      // ExtendScript host methods do not always report "function".
+      if (selected) {
+        return { available: true, selected: !!clip.isSelected() };
+      }
+    } catch (_) { }
+
+    return { available: false, selected: false };
+  }
+
+  function getSelectionItems(seq) {
+    var items = [];
+
+    try {
+      var selection = seq.getSelection ? seq.getSelection() : null;
+
+      if (selection) {
+        for (var i = 0; i < selection.length; i++) {
+          if (selection[i]) {
+            items.push(selection[i]);
+          }
         }
-      } catch (_) {}
+      }
+    } catch (_) { }
+
+    return items;
+  }
+
+  function selectedByReference(clip, selectedItems) {
+    var state = selectionFlag(clip);
+
+    if (state.available) {
+      return state.selected;
     }
-    if (!selectedItems) {
-      return false;
-    }
+
     for (var i = 0; i < selectedItems.length; i++) {
-      if (sameTrackItem(clip, selectedItems[i])) {
+      if (samePhysicalTrackItem(clip, selectedItems[i])) {
         return true;
       }
     }
+
     return false;
   }
 
-  function getSelectedClip() {
-    var seq = app.project.activeSequence;
-    if (!seq) {
-      throw new Error("No active sequence is open.");
-    }
+  function getSelectedClipRefs(seq, videoOnly) {
+    var result = [];
+    var selection = getSelectionItems(seq);
+    var groups = videoOnly
+      ? [{ tracks: seq.videoTracks, type: "video" }]
+      : [
+        { tracks: seq.audioTracks, type: "audio" },
+        { tracks: seq.videoTracks, type: "video" }
+      ];
 
-    var selection = seq.getSelection ? seq.getSelection() : null;
-    if (!selection || selection.length < 1) {
-      var fallback = scanSelectedClip(seq);
-      if (fallback) {
-        return fallback;
-      }
-      throw new Error(
-        "Select one audio or linked clip in the active sequence first."
-      );
-    }
-
-    for (var i = 0; i < selection.length; i++) {
-      if (selection[i] && selection[i].projectItem) {
-        return selection[i];
-      }
-    }
-
-    throw new Error("The current selection has no linked project media.");
-  }
-
-  function getExactlyOneSelectedClip() {
-    var seq = app.project.activeSequence;
-    if (!seq) {
-      throw new Error("No active sequence is open.");
-    }
-
-    var selection = seq.getSelection ? seq.getSelection() : null;
-    var selected = [];
-    if (selection && selection.length) {
-      for (var i = 0; i < selection.length; i++) {
-        if (selection[i] && selection[i].projectItem) {
-          selected.push(selection[i]);
-        }
-      }
-    } else {
-      var fallback = scanSelectedClip(seq);
-      if (fallback) {
-        selected.push(fallback);
-      }
-    }
-
-    // Premiere returns linked audio and video TrackItems separately. Treat
-    // matching project item + timeline range as one logical clip.
-    var logical = [];
-    for (var l = 0; l < selected.length; l++) {
-      var candidate = selected[l];
-      var found = false;
-      for (var m = 0; m < logical.length; m++) {
-        if (sameTrackItem(candidate, logical[m])) {
-          found = true;
-          break;
-        }
-      }
-      if (!found) {
-        logical.push(candidate);
-      }
-    }
-
-    if (logical.length !== 1) {
-      throw new Error(
-        logical.length < 1
-          ? "Select one audio or linked clip in the active sequence first."
-          : "Select exactly one clip for beat analysis and marker apply."
-      );
-    }
-    return logical[0];
-  }
-
-  function scanSelectedClip(seq) {
-    var groups = [seq.audioTracks, seq.videoTracks];
     for (var g = 0; g < groups.length; g++) {
-      var tracks = groups[g];
+      var tracks = groups[g].tracks;
+
       if (!tracks) {
         continue;
       }
-      for (var i = 0; i < tracks.numTracks; i++) {
-        var track = tracks[i];
+
+      for (var t = 0; t < tracks.numTracks; t++) {
+        var track = tracks[t];
+
         if (!track || !track.clips) {
           continue;
         }
-        for (var j = 0; j < track.clips.numItems; j++) {
-          var clip = track.clips[j];
-          if (clip && clip.projectItem && clip.isSelected) {
-            try {
-              var isSel =
-                typeof clip.isSelected === "function"
-                  ? clip.isSelected()
-                  : clip.isSelected;
-              if (isSel) {
-                return clip;
-              }
-            } catch (_) {}
+
+        for (var c = 0; c < track.clips.numItems; c++) {
+          var clip = track.clips[c];
+
+          if (!clip || !selectedByReference(clip, selection)) {
+            continue;
           }
-        }
-      }
-    }
-    return null;
-  }
 
-  function getAllSelectedVideoClips(seq) {
-    var selected = [];
-    var selection = seq && seq.getSelection ? seq.getSelection() : null;
-    if (selection && selection.length) {
-      for (var s = 0; s < selection.length; s++) {
-        if (
-          selection[s] &&
-          selection[s].components &&
-          selection[s].mediaType &&
-          String(selection[s].mediaType).toLowerCase() === "video"
-        ) {
-          selected.push(selection[s]);
-        }
-      }
-      if (selected.length) {
-        return selected;
-      }
-    }
-
-    var groups = [seq.videoTracks];
-    for (var g = 0; g < groups.length; g++) {
-      var tracks = groups[g];
-      if (!tracks) continue;
-      for (var i = 0; i < tracks.numTracks; i++) {
-        var track = tracks[i];
-        if (!track || !track.clips) continue;
-        for (var j = 0; j < track.clips.numItems; j++) {
-          var clip = track.clips[j];
-          if (clip && clip.isSelected) {
-            try {
-              var isSel =
-                typeof clip.isSelected === "function"
-                  ? clip.isSelected()
-                  : clip.isSelected;
-              if (isSel) {
-                selected.push(clip);
-              }
-            } catch (_) {}
-          }
-        }
-      }
-    }
-    return selected;
-  }
-
-  function getSelectedVideoClipRefs(seq) {
-    var selected = [];
-    if (!seq || !seq.videoTracks) {
-      return selected;
-    }
-    var selectedItems = seq.getSelection ? seq.getSelection() : null;
-
-    for (var i = 0; i < seq.videoTracks.numTracks; i++) {
-      var track = seq.videoTracks[i];
-      if (!track || !track.clips) {
-        continue;
-      }
-      for (var j = 0; j < track.clips.numItems; j++) {
-        var clip = track.clips[j];
-        if (clip && isTrackItemSelected(clip, selectedItems)) {
-          selected.push({
+          result.push({
             clip: clip,
-            trackIndex: i,
-            clipIndex: j,
-            name: clip.name || "Selected clip",
-            identity: (function () {
-              try {
-                return getClipInfo(clip).identity;
-              } catch (_) {
-                return String(i) + ":" + String(j);
-              }
-            })()
+            trackIndex: t,
+            clipIndex: c,
+            mediaType: groups[g].type,
+            name: clipName(clip, c),
+            identity: clipIdentity(clip, seq),
+            projectKey: projectKey(),
+            sequenceId: sequenceKey(seq)
           });
         }
       }
     }
 
-    return selected;
-  }
-
-  function normalizedName(value) {
-    return String(value || "").toLowerCase();
-  }
-
-  function isUniformScaleProperty(prop) {
-    if (!prop) return false;
-    var matchName = normalizedName(prop.matchName);
-    var displayName = normalizedName(prop.displayName);
-    if (
-      matchName === "adbe transform-0003" ||
-      matchName === "adbe uniform scale" ||
-      matchName === "uniform scale" ||
-      matchName.indexOf("uniform") >= 0
-    ) {
-      return true;
-    }
-    if (
-      displayName === "uniform scale" ||
-      displayName === "uniform" ||
-      (displayName.indexOf("uniform") >= 0 && displayName.indexOf("scale") >= 0) ||
-      displayName.indexOf("uniform") >= 0 ||
-      displayName.indexOf("einheitliche") >= 0 ||
-      displayName.indexOf("uniforme") >= 0 ||
-      displayName.indexOf("等比") >= 0 ||
-      displayName.indexOf("固定") >= 0
-    ) {
-      return true;
-    }
-    return false;
-  }
-
-  function isScaleProperty(prop) {
-    if (!prop) return false;
-    if (isUniformScaleProperty(prop)) {
-      return false;
-    }
-    var matchName = normalizedName(prop.matchName);
-    var displayName = normalizedName(prop.displayName);
-
-    if (
-      matchName === "adbe transform-0004" ||
-      matchName === "adbe scale" ||
-      matchName === "scale" ||
-      matchName === "scale height" ||
-      matchName === "scale_height"
-    ) {
-      return true;
-    }
-
-    if (
-      displayName === "scale" ||
-      displayName === "scale height" ||
-      displayName === "scale (height)" ||
-      displayName === "height"
-    ) {
-      return true;
-    }
-
-    if (
-      (displayName.indexOf("scale") >= 0 || matchName.indexOf("scale") >= 0) &&
-      displayName.indexOf("width") < 0 &&
-      matchName.indexOf("width") < 0
-    ) {
-      return true;
-    }
-
-    if (
-      displayName.indexOf("skalierungshöhe") >= 0 ||
-      (displayName.indexOf("skalierung") >= 0 && displayName.indexOf("breite") < 0) ||
-      displayName.indexOf("hauteur d'échelle") >= 0 ||
-      (displayName.indexOf("échelle") >= 0 && displayName.indexOf("largeur") < 0) ||
-      displayName.indexOf("altura de escala") >= 0 ||
-      (displayName.indexOf("escala") >= 0 && displayName.indexOf("anchura") < 0) ||
-      displayName.indexOf("高度缩放") >= 0 ||
-      (displayName.indexOf("缩放") >= 0 && displayName.indexOf("宽度") < 0) ||
-      displayName.indexOf("高さの拡大縮小") >= 0 ||
-      (displayName.indexOf("拡大縮小") >= 0 && displayName.indexOf("幅") < 0)
-    ) {
-      return true;
-    }
-
-    return false;
-  }
-
-  function isPositionProperty(prop) {
-    if (!prop) return false;
-    var matchName = normalizedName(prop.matchName);
-    var displayName = normalizedName(prop.displayName);
-    if (
-      matchName === "adbe transform-0002" ||
-      matchName === "adbe position" ||
-      matchName === "position"
-    ) {
-      return true;
-    }
-    if (
-      displayName === "position" ||
-      matchName.indexOf("position") >= 0 ||
-      displayName.indexOf("position") >= 0 ||
-      displayName.indexOf("posición") >= 0 ||
-      displayName.indexOf("位置") >= 0
-    ) {
-      return true;
-    }
-    return false;
-  }
-
-  function findScalePropertyOnComponent(component) {
-    if (!component || !component.properties) {
-      return null;
-    }
-    for (var p = 0; p < component.properties.numItems; p++) {
-      var prop = component.properties[p];
-      if (isScaleProperty(prop)) {
-        return prop;
-      }
-    }
-    var cName = normalizedName(
-      (component && component.displayName) ||
-        (component && component.matchName) ||
-        ""
-    );
-    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 4) {
-      var candidateTransform = component.properties[3];
-      if (
-        candidateTransform &&
-        !isUniformScaleProperty(candidateTransform) &&
-        !isPositionProperty(candidateTransform)
-      ) {
-        return candidateTransform;
-      }
-    } else if (cName.indexOf("motion") >= 0 && component.properties.numItems >= 2) {
-      var candidateMotion = component.properties[1];
-      if (
-        candidateMotion &&
-        !isUniformScaleProperty(candidateMotion) &&
-        !isPositionProperty(candidateMotion)
-      ) {
-        return candidateMotion;
-      }
-    }
-    return null;
-  }
-
-  function findUniformScalePropertyOnComponent(component) {
-    if (!component || !component.properties) {
-      return null;
-    }
-    for (var p = 0; p < component.properties.numItems; p++) {
-      var prop = component.properties[p];
-      if (isUniformScaleProperty(prop)) {
-        return prop;
-      }
-    }
-    var cName = normalizedName(
-      (component && component.displayName) ||
-        (component && component.matchName) ||
-        ""
-    );
-    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 3) {
-      var candidate = component.properties[2];
-      if (candidate && isUniformScaleProperty(candidate)) {
-        return candidate;
-      }
-    }
-    return null;
-  }
-
-  function findPositionPropertyOnComponent(component) {
-    if (!component || !component.properties) {
-      return null;
-    }
-    for (var p = 0; p < component.properties.numItems; p++) {
-      var prop = component.properties[p];
-      if (isPositionProperty(prop)) {
-        return prop;
-      }
-    }
-    var cName = normalizedName(
-      (component && component.displayName) ||
-        (component && component.matchName) ||
-        ""
-    );
-    if (cName.indexOf("transform") >= 0 && component.properties.numItems >= 2) {
-      var candidate = component.properties[1];
-      if (candidate && isPositionProperty(candidate)) {
-        return candidate;
-      }
-    } else if (cName.indexOf("motion") >= 0 && component.properties.numItems >= 1) {
-      var candidateMotion = component.properties[0];
-      if (candidateMotion && isPositionProperty(candidateMotion)) {
-        return candidateMotion;
-      }
-    }
-    return null;
-  }
-
-  function isShutterAngleProperty(prop) {
-    if (!prop) return false;
-    var matchName = normalizedName(prop.matchName);
-    var displayName = normalizedName(prop.displayName);
-    if (matchName === "adbe transform-0011") return true;
-    if (displayName.indexOf("shutter angle") >= 0 || (displayName.indexOf("shutter") >= 0 && displayName.indexOf("angle") >= 0)) return true;
-    return false;
-  }
-
-  function isUseCompShutterProperty(prop) {
-    if (!prop) return false;
-    var matchName = normalizedName(prop.matchName);
-    var displayName = normalizedName(prop.displayName);
-    if (matchName === "adbe transform-0010") return true;
-    if (displayName.indexOf("composition") >= 0 && displayName.indexOf("shutter") >= 0) return true;
-    return false;
-  }
-
-  function findShutterAnglePropertyOnComponent(component) {
-    if (!component || !component.properties) return null;
-    for (var p = 0; p < component.properties.numItems; p++) {
-      var prop = component.properties[p];
-      if (isShutterAngleProperty(prop)) return prop;
-    }
-    return null;
-  }
-
-  function findUseCompShutterPropertyOnComponent(component) {
-    if (!component || !component.properties) return null;
-    for (var p = 0; p < component.properties.numItems; p++) {
-      var prop = component.properties[p];
-      if (isUseCompShutterProperty(prop)) return prop;
-    }
-    return null;
-  }
-
-  function requireHostSuccess(result, operation) {
-    if ((typeof result === "number" && result !== 0) || result === false) {
-      throw new Error(operation + " failed in Premiere (code " + result + ").");
-    }
-  }
-
-  function removeKeysInRange(prop, startSeconds, endSeconds) {
-    if (!prop) {
-      return;
-    }
-    var startTime = timeFromSeconds(startSeconds);
-    var endTime = timeFromSeconds(endSeconds);
-    var rangeError = null;
-
-    if (prop.removeKeyRange) {
-      try {
-        var rangeResult = prop.removeKeyRange(startTime, endTime);
-        if (
-          !(
-            (typeof rangeResult === "number" && rangeResult !== 0) ||
-            rangeResult === false
-          )
-        ) {
-          return;
-        }
-        rangeError = new Error(
-          "Remove keyframe range failed in Premiere (code " +
-            rangeResult +
-            ")."
-        );
-      } catch (error) {
-        rangeError = error;
-      }
-    }
-
-    if (!prop.getKeys || !prop.removeKey) {
-      if (rangeError) {
-        throw rangeError;
-      }
-      return;
-    }
-    var keys = prop.getKeys() || [];
-    for (var k = keys.length - 1; k >= 0; k--) {
-      var keyTime = keys[k];
-      var keySeconds = timeToSeconds(keyTime);
-      if (keySeconds >= startSeconds && keySeconds <= endSeconds) {
-        requireHostSuccess(prop.removeKey(keyTime), "Remove keyframe");
-      }
-    }
-  }
-
-  function prop_removeKey_safe(prop, keyTime) {
-    if (!prop || !prop.removeKey) return;
-    try {
-      prop.removeKey(keyTime);
-    } catch (_) {}
-  }
-
-  function setScaleKey(prop, seconds, value, interpolationType) {
-    var time = timeFromSeconds(seconds);
-    var addError = null;
-    try {
-      requireHostSuccess(prop.addKey(time), "Add Scale keyframe");
-    } catch (error) {
-      addError = error;
-    }
-
-    try {
-      requireHostSuccess(
-        prop.setValueAtKey(time, value, 1),
-        "Set Scale keyframe value"
-      );
-    } catch (valueError) {
-      if (addError) {
-        throw new Error(
-          "Could not add Scale keyframe: " +
-            (addError.message || addError) +
-            "; " +
-            (valueError.message || valueError)
-        );
-      }
-      throw valueError;
-    }
-
-    if (prop.setInterpolationTypeAtKey) {
-      requireHostSuccess(
-        prop.setInterpolationTypeAtKey(
-          time,
-          typeof interpolationType === "number" ? interpolationType : 5,
-          1
-        ),
-        "Set Scale keyframe interpolation"
-      );
-    }
-  }
-
-  function clampTime(seconds, startSeconds, endSeconds) {
-    return Math.max(startSeconds, Math.min(endSeconds, seconds));
-  }
-
-  function timeAt(startSeconds, duration, ratio) {
-    return startSeconds + duration * Math.max(0, Math.min(1, ratio));
-  }
-
-  function importantKeyframes(keys, frameDuration) {
-    var sorted = keys.slice(0).sort(function (a, b) {
-      return a[0] - b[0];
-    });
-    var result = [];
-    var minGap = Math.max(0.0005, (Number(frameDuration) || 1 / 30) * 0.5);
-    for (var i = 0; i < sorted.length; i++) {
-      if (
-        result.length &&
-        sorted[i][0] - result[result.length - 1][0] < minGap
-      ) {
-        result[result.length - 1] = sorted[i];
-      } else {
-        result.push(sorted[i]);
-      }
-    }
     return result;
   }
 
-  function setScaleKeys(prop, keys, interpolationType, frameDuration) {
-    var important = importantKeyframes(keys, frameDuration);
-    var writtenTimes = [];
-    for (var i = 0; i < important.length; i++) {
-      setScaleKey(
-        prop,
-        important[i][0],
-        important[i][1],
-        interpolationType
-      );
-      writtenTimes.push(important[i][0]);
-    }
-    return writtenTimes;
+  function getSelectedVideoClipRefs(seq) {
+    return getSelectedClipRefs(seq, true);
   }
 
-  function boundedZoom(value) {
-    return Math.max(101.0, Math.min(150.0, Number(value) || 110.0));
+  function requireSelectedVideoRefs(seq) {
+    var refs = getSelectedVideoClipRefs(seq);
+
+    if (!refs.length) {
+      throw new Error("Select at least one video clip in the active sequence.");
+    }
+
+    return refs;
   }
 
-  function setKeyframingEnabled(prop, enabled, label) {
-    if (!prop || !prop.setTimeVarying) {
-      throw new Error(label + " does not expose keyframing controls.");
-    }
-    requireHostSuccess(
-      prop.setTimeVarying(enabled),
-      (enabled ? "Enable " : "Disable ") + label + " keyframing"
+  function sameLogicalMediaRange(a, b) {
+    return (
+      projectItemId(a) !== "" &&
+      projectItemId(a) === projectItemId(b) &&
+      sameNumber(
+        timeToSeconds(a.start),
+        timeToSeconds(b.start),
+        TIME_EPSILON
+      ) &&
+      sameNumber(
+        timeToSeconds(a.end),
+        timeToSeconds(b.end),
+        TIME_EPSILON
+      ) &&
+      sameNumber(
+        timeToSeconds(a.inPoint),
+        timeToSeconds(b.inPoint),
+        TIME_EPSILON
+      ) &&
+      sameNumber(
+        timeToSeconds(a.outPoint),
+        timeToSeconds(b.outPoint),
+        TIME_EPSILON
+      )
     );
   }
 
-  function resetAnimatedProperty(prop, startSeconds, endSeconds, value, label) {
+  function explicitlyLinked(a, b) {
+    try {
+      if (!a.getLinkedItems) {
+        return false;
+      }
+
+      var linked = a.getLinkedItems();
+
+      if (!linked) {
+        return false;
+      }
+
+      var count = linked.length !== undefined
+        ? linked.length
+        : linked.numItems;
+
+      for (var i = 0; i < count; i++) {
+        if (samePhysicalTrackItem(linked[i], b)) {
+          return true;
+        }
+      }
+    } catch (_) { }
+
+    return false;
+  }
+
+  function getExactlyOneSelectedClip() {
+    var seq = requireActiveSequence();
+    var refs = getSelectedClipRefs(seq, false);
+    var eligible = [];
+    var i;
+
+    for (i = 0; i < refs.length; i++) {
+      if (refs[i].clip.projectItem) {
+        eligible.push(refs[i]);
+      }
+    }
+
+    if (!eligible.length) {
+      throw new Error("Select one audio or linked media clip first.");
+    }
+
+    if (eligible.length === 1) {
+      return eligible[0].clip;
+    }
+
+    var first = eligible[0];
+    var allExplicitlyLinked = true;
+
+    for (i = 1; i < eligible.length; i++) {
+      if (
+        !sameLogicalMediaRange(first.clip, eligible[i].clip) ||
+        !(
+          explicitlyLinked(first.clip, eligible[i].clip) ||
+          explicitlyLinked(eligible[i].clip, first.clip)
+        )
+      ) {
+        allExplicitlyLinked = false;
+        break;
+      }
+    }
+
+    if (allExplicitlyLinked) {
+      return first.clip;
+    }
+
+    /*
+     * Compatibility fallback: exactly one audio + one video item with
+     * identical media/source/timeline ranges. This is a linkage heuristic.
+     * Multiple same-type items are deliberately not collapsed.
+     */
+    if (
+      eligible.length === 2 &&
+      eligible[0].mediaType !== eligible[1].mediaType &&
+      sameLogicalMediaRange(eligible[0].clip, eligible[1].clip)
+    ) {
+      return eligible[0].mediaType === "audio"
+        ? eligible[0].clip
+        : eligible[1].clip;
+    }
+
+    throw new Error(
+      "Select exactly one media clip. If linked multi-channel audio is " +
+      "ambiguous, select only its audio or video TrackItem."
+    );
+  }
+
+  function getMediaPath(projectItem) {
+    if (!projectItem || !projectItem.getMediaPath) {
+      return "";
+    }
+
+    return String(projectItem.getMediaPath() || "");
+  }
+
+  function clipIsReversed(clip) {
+    try {
+      if (clip.isSpeedReversed) {
+        return !!clip.isSpeedReversed();
+      }
+    } catch (_) { }
+
+    try {
+      var item = clip.projectItem;
+      var interpretation = item && item.getFootageInterpretation
+        ? item.getFootageInterpretation()
+        : null;
+
+      return !!(interpretation && interpretation.reverse);
+    } catch (_) { }
+
+    return false;
+  }
+
+  function getClipInfo(clip) {
+    var seq = requireActiveSequence();
+    var mediaPath = getMediaPath(clip.projectItem);
+
+    if (!mediaPath) {
+      throw new Error("Could not read the selected clip's media path.");
+    }
+
+    var range = clipTimelineRange(clip);
+    var inPoint = timeToSeconds(clip.inPoint);
+    var outPoint = timeToSeconds(clip.outPoint);
+    var sourceDuration = outPoint - inPoint;
+
+    if (sourceDuration <= 0) {
+      throw new Error("Selected clip has an invalid source range.");
+    }
+
+    var speed = null;
+
+    try {
+      if (clip.getSpeed) {
+        var reportedSpeed = Number(clip.getSpeed());
+
+        if (isFinite(reportedSpeed)) {
+          speed = reportedSpeed;
+        }
+      }
+    } catch (_) { }
+
+    return {
+      identity: clipIdentity(clip, seq),
+      name: clipName(clip, 0),
+      mediaPath: mediaPath,
+      projectKey: projectKey(),
+      projectItemNodeId: projectItemId(clip),
+      trackItemNodeId: trackItemId(clip),
+      sequenceId: sequenceKey(seq),
+      startSeconds: range.start,
+      endSeconds: range.end,
+      inPointSeconds: inPoint,
+      outPointSeconds: outPoint,
+      sourceDurationSeconds: sourceDuration,
+      timelineDurationSeconds: range.duration,
+      durationSeconds: sourceDuration,
+
+      // Kept for bridge compatibility: timeline seconds per source second.
+      playbackRate: range.duration / sourceDuration,
+
+      speed: speed,
+      reversed: clipIsReversed(clip),
+      variableTimeRemap: !!safeRead(clip, "timeRemappingEnabled", false)
+    };
+  }
+
+  function verifyClipInfo(payload, info) {
+    var identityFields = [
+      "identity",
+      "mediaPath",
+      "projectKey",
+      "projectItemNodeId",
+      "trackItemNodeId",
+      "sequenceId"
+    ];
+
+    for (var i = 0; i < identityFields.length; i++) {
+      var field = identityFields[i];
+
+      if (
+        payload[field] !== undefined &&
+        String(payload[field]) !== String(info[field])
+      ) {
+        throw new Error(
+          "Selection changed after analysis. Re-select the analyzed clip " +
+          "or run analysis again."
+        );
+      }
+    }
+
+    var timeFields = [
+      "startSeconds",
+      "endSeconds",
+      "inPointSeconds",
+      "outPointSeconds"
+    ];
+
+    for (i = 0; i < timeFields.length; i++) {
+      field = timeFields[i];
+
+      if (
+        payload[field] !== undefined &&
+        !sameNumber(
+          finiteNumber(payload[field], field),
+          info[field],
+          0.002
+        )
+      ) {
+        throw new Error(
+          "Selected clip timing changed after analysis. Run analysis again."
+        );
+      }
+    }
+  }
+
+  function assertRefCurrent(ref) {
+    var seq = requireActiveSequence();
+
+    if (
+      ref.projectKey !== projectKey() ||
+      ref.sequenceId !== sequenceKey(seq) ||
+      ref.identity !== clipIdentity(ref.clip, seq)
+    ) {
+      throw new Error("The selected clip changed during the operation.");
+    }
+
+    return seq;
+  }
+
+  function assertPlayheadInsideClip(ref, seconds) {
+    var range = clipTimelineRange(ref.clip);
+
+    if (seconds < range.start || seconds >= range.end) {
+      throw new Error(
+        "Move the playhead over the selected clip before running Auto Color."
+      );
+    }
+  }
+
+  function assertNormalSpeed(clip, seq, operation) {
+    if (clipIsReversed(clip)) {
+      throw new Error(operation + " does not support reversed clips.");
+    }
+
+    if (safeRead(clip, "timeRemappingEnabled", false)) {
+      throw new Error(
+        operation + " does not support variable time-remapped clips."
+      );
+    }
+
+    var range = clipTimelineRange(clip);
+    var sourceDuration =
+      timeToSeconds(clip.outPoint) - timeToSeconds(clip.inPoint);
+    var tolerance = Math.max(TIME_EPSILON, activeFrameDuration(seq) * 0.01);
+
+    if (!sameNumber(sourceDuration, range.duration, tolerance)) {
+      throw new Error(
+        operation + " currently requires a normal-speed clip."
+      );
+    }
+
+    try {
+      if (clip.getSpeed) {
+        var speed = Number(clip.getSpeed());
+
+        if (isFinite(speed) && Math.abs(speed - 1) > 0.000001) {
+          throw new Error(
+            operation + " currently requires a normal-speed clip."
+          );
+        }
+      }
+    } catch (error) {
+      if (
+        errorMessage(error).indexOf("currently requires") >= 0
+      ) {
+        throw error;
+      }
+    }
+  }
+
+  /*
+   * Effect and parameter discovery.
+   */
+
+  function propertyMatches(prop, aliases) {
+    var display = canonicalName(safeRead(prop, "displayName", ""));
+    var match = canonicalName(safeRead(prop, "matchName", ""));
+
+    for (var i = 0; i < aliases.length; i++) {
+      var alias = canonicalName(aliases[i]);
+
+      if (alias && (display === alias || match === alias)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  function collectProperties(container, aliases, depth, found) {
+    if (!container || !container.properties || depth > 8) {
+      return;
+    }
+
+    for (var i = 0; i < container.properties.numItems; i++) {
+      var prop = container.properties[i];
+
+      if (!prop) {
+        continue;
+      }
+
+      if (prop.setValue && propertyMatches(prop, aliases)) {
+        found.push(prop);
+      }
+
+      collectProperties(prop, aliases, depth + 1, found);
+    }
+  }
+
+  function findProperty(container, aliases) {
+    var found = [];
+    collectProperties(container, aliases, 0, found);
+
+    if (found.length > 1) {
+      throw new Error(
+        "Ambiguous effect property: " + aliases.join(" / ")
+      );
+    }
+
+    return found.length ? found[0] : null;
+  }
+
+  function setProperty(component, aliases, value, updateUI) {
+    var prop = findProperty(component, aliases);
+
     if (!prop) {
       return false;
     }
-    removeKeysInRange(prop, startSeconds, endSeconds);
-    setKeyframingEnabled(prop, false, label);
-    if (!prop.setValue) {
-      throw new Error(label + " does not expose a static value control.");
-    }
-    requireHostSuccess(prop.setValue(value, 1), "Reset " + label);
+
+    requireHostSuccess(
+      prop.setValue(
+        finiteNumber(value, aliases[0]),
+        updateUI === false ? 0 : 1
+      ),
+      "Set " + aliases[0]
+    );
+
     return true;
   }
 
-  function getSequenceSize(seq) {
-    var size = { width: 1920.0, height: 1080.0 };
-    try {
-      var settings = seq && seq.getSettings ? seq.getSettings() : null;
-      if (settings) {
-        size.width =
-          Number(settings.videoFrameWidth) ||
-          Number(settings.frameSizeHorizontal) ||
-          size.width;
-        size.height =
-          Number(settings.videoFrameHeight) ||
-          Number(settings.frameSizeVertical) ||
-          size.height;
-      }
-    } catch (_) {}
-    return size;
+  function findScalePropertyOnComponent(component) {
+    return findProperty(component, [
+      "ADBE Scale",
+      "Scale",
+      "Scale Height",
+      "Scale (Height)",
+      "Scale_Height",
+      "Skalierung",
+      "Skalierungshöhe",
+      "Échelle",
+      "Hauteur d'échelle",
+      "Escala",
+      "Altura de escala",
+      "缩放",
+      "高度缩放",
+      "拡大縮小",
+      "高さの拡大縮小"
+    ]);
   }
 
-  function positionPropertyUsesPixels(prop) {
-    try {
-      var value = prop && prop.getValue ? prop.getValue() : null;
-      return (
-        value &&
-        value.length >= 2 &&
-        (Math.abs(Number(value[0])) > 2 || Math.abs(Number(value[1])) > 2)
+  function findUniformScalePropertyOnComponent(component) {
+    return findProperty(component, [
+      "ADBE Uniform Scale",
+      "Uniform Scale",
+      "Uniform",
+      "Einheitliche Skalierung",
+      "Échelle uniforme",
+      "Escala uniforme",
+      "等比缩放"
+    ]);
+  }
+
+  function isTransformComponent(component) {
+    var match = normalizedName(safeRead(component, "matchName", ""));
+    var display = normalizedName(safeRead(component, "displayName", ""));
+
+    var matches = {
+      "adbe transform": true,
+      "ae.adbe transform": true,
+      "ae.adbe geometry2": true,
+      "com.autocutstudio.transform": true
+    };
+
+    var displays = {
+      "transform": true,
+      "transformation": true,
+      "transformieren": true,
+      "autocutstudio transform": true
+    };
+
+    return (
+      (owns(matches, match) && matches[match]) ||
+      (owns(displays, display) && displays[display])
+    );
+  }
+
+  function isAutoCutColorComponent(component) {
+    var match = canonicalName(safeRead(component, "matchName", ""));
+    var display = canonicalName(safeRead(component, "displayName", ""));
+    var names = {
+      "autocutstudio color engine": true,
+      "autocutstudiocolorengine": true,
+      "autocut color engine": true,
+      "autocutcolorengine": true,
+      "com.autocutstudio.color.engine": true
+    };
+
+    return (
+      (owns(names, match) && names[match]) ||
+      (owns(names, display) && names[display])
+    );
+  }
+
+  function findComponents(clip, predicate) {
+    var found = [];
+
+    if (!clip || !clip.components) {
+      return found;
+    }
+
+    for (var i = 0; i < clip.components.numItems; i++) {
+      var component = clip.components[i];
+
+      if (predicate(component)) {
+        found.push(component);
+      }
+    }
+
+    return found;
+  }
+
+  function findAutoCutColorComponent(clip) {
+    var found = findComponents(clip, isAutoCutColorComponent);
+
+    if (found.length > 1) {
+      throw new Error(
+        "Multiple AutoCutStudio Color Engine effects were found. " +
+        "Keep one engine instance before applying Auto Color."
       );
-    } catch (_) {
+    }
+
+    return found.length ? found[0] : null;
+  }
+
+  function enableQEProject() {
+    if (!app.enableQE) {
+      throw new Error("Premiere QE DOM is unavailable.");
+    }
+
+    app.enableQE();
+
+    if (typeof qe === "undefined" || !qe.project) {
+      throw new Error("Premiere QE project API is unavailable.");
+    }
+
+    return qe.project;
+  }
+
+  function getVideoEffectByNames(names, label) {
+    var project = enableQEProject();
+
+    if (!project.getVideoEffectByName) {
+      throw new Error("QE effect lookup is unavailable.");
+    }
+
+    for (var i = 0; i < names.length; i++) {
+      try {
+        var effect = project.getVideoEffectByName(names[i]);
+
+        if (effect) {
+          return effect;
+        }
+      } catch (_) { }
+    }
+
+    throw new Error(
+      "Could not find " + label + " in this Premiere installation."
+    );
+  }
+
+  function resolveQEVideoClip(ref) {
+    var seq = assertRefCurrent(ref);
+    var project = enableQEProject();
+    var qeSeq = project.getActiveSequence();
+
+    if (!qeSeq || !qeSeq.getVideoTrackAt) {
+      throw new Error("QE active sequence is unavailable.");
+    }
+
+    var track = qeSeq.getVideoTrackAt(ref.trackIndex);
+
+    if (!track || !track.getItemAt) {
+      throw new Error("QE video track is unavailable.");
+    }
+
+    var range = clipTimelineRange(ref.clip);
+    var count = Number(track.numItems);
+
+    if (!isFinite(count) || count < 0) {
+      throw new Error("QE track returned an invalid item count.");
+    }
+
+    var tolerance = Math.max(
+      TIME_EPSILON,
+      activeFrameDuration(seq) / 100
+    );
+    var matches = [];
+
+    for (var i = 0; i < count; i++) {
+      var item = track.getItemAt(i);
+
+      if (!item || !item.addVideoEffect) {
+        continue;
+      }
+
+      var start = tryTimeToSeconds(item.start);
+      var end = tryTimeToSeconds(item.end);
+
+      if (
+        sameNumber(start, range.start, tolerance) &&
+        sameNumber(end, range.end, tolerance)
+      ) {
+        matches.push(item);
+      }
+    }
+
+    if (matches.length !== 1) {
+      throw new Error(
+        matches.length
+          ? "QE clip lookup is ambiguous; no effect was changed."
+          : "Could not safely identify the selected clip through QE."
+      );
+    }
+
+    return matches[0];
+  }
+
+  function addVideoEffect(ref, effect) {
+    var qeClip = resolveQEVideoClip(ref);
+    var result = qeClip.addVideoEffect(effect);
+
+    if (result === false) {
+      throw new Error("Premiere rejected the video effect.");
+    }
+  }
+
+  function ensureAutoCutColorComponent(ref) {
+    var existing = findAutoCutColorComponent(ref.clip);
+    var pendingKey = "color:" + ref.identity;
+
+    if (existing) {
+      delete pendingEffects[pendingKey];
+      return existing;
+    }
+
+    if (owns(pendingEffects, pendingKey)) {
+      return null;
+    }
+
+    var effect = getVideoEffectByNames(
+      ["AutoCutStudio Color Engine"],
+      "AutoCutStudio Color Engine"
+    );
+
+    pendingEffects[pendingKey] = true;
+
+    try {
+      addVideoEffect(ref, effect);
+    } catch (error) {
+      // Keep pending state if QE may have partially applied the effect.
+      throw new Error(
+        "Could not confirm Color Engine insertion. Check Effect Controls " +
+        "before retrying. " + errorMessage(error)
+      );
+    }
+
+    existing = findAutoCutColorComponent(ref.clip);
+
+    if (existing) {
+      delete pendingEffects[pendingKey];
+    }
+
+    return existing;
+  }
+
+  /*
+   * Motion ownership is intentionally session-local.
+   * Persistent component indexes are diagnostic metadata, not authority.
+   */
+
+  function componentStillAttached(clip, component) {
+    if (!clip || !clip.components) {
       return false;
     }
-  }
 
-  function positionValueForProperty(prop, normalizedPoint, sequenceSize) {
-    if (!positionPropertyUsesPixels(prop)) {
-      return normalizedPoint;
+    for (var i = 0; i < clip.components.numItems; i++) {
+      if (clip.components[i] === component) {
+        return true;
+      }
     }
-    return [
-      normalizedPoint[0] * sequenceSize.width,
-      normalizedPoint[1] * sequenceSize.height
-    ];
+
+    return false;
   }
 
-  function baseZoomForStyle(style) {
-    var bases = {
-      smooth_in: 108.0,
-      smooth_out: 108.0,
-      drift: 105.0,
-      breath: 106.0,
-      reveal: 112.0,
-      settle_in: 114.0,
-      punch_in: 118.0,
-      punch_out: 116.0,
-      pulse: 112.0,
-      snap_back: 120.0
+  function findMotionOwner(ref) {
+    for (var i = 0; i < motionOwners.length; i++) {
+      var owner = motionOwners[i];
+
+      if (
+        owner.identity === ref.identity &&
+        owner.projectKey === ref.projectKey &&
+        owner.sequenceId === ref.sequenceId &&
+        owner.trackIndex === ref.trackIndex &&
+        componentStillAttached(ref.clip, owner.component)
+      ) {
+        return owner;
+      }
+    }
+
+    return null;
+  }
+
+  function ensureMotionOwner(ref) {
+    var owner = findMotionOwner(ref);
+
+    if (owner) {
+      return owner;
+    }
+
+    var pendingKey = "motion:" + ref.identity;
+
+    if (owns(pendingEffects, pendingKey)) {
+      throw new Error(
+        "A Transform insertion is awaiting confirmation. Check Effect " +
+        "Controls; no additional Transform was added."
+      );
+    }
+
+    var clip = ref.clip;
+    var before = clip.components ? clip.components.numItems : 0;
+    var effect = getVideoEffectByNames(
+      [
+        "Transform",
+        "ADBE Transform",
+        "AE.ADBE Transform",
+        "Transformation",
+        "Transformieren"
+      ],
+      "Premiere Transform"
+    );
+
+    pendingEffects[pendingKey] = true;
+    addVideoEffect(ref, effect);
+
+    if (
+      !clip.components ||
+      clip.components.numItems !== before + 1 ||
+      !isTransformComponent(clip.components[before])
+    ) {
+      throw new Error(
+        "Transform insertion could not be confirmed safely. Check Effect " +
+        "Controls before retrying."
+      );
+    }
+
+    var component = clip.components[before];
+
+    owner = {
+      identity: ref.identity,
+      projectKey: ref.projectKey,
+      sequenceId: ref.sequenceId,
+      trackIndex: ref.trackIndex,
+      component: component,
+      scale: null,
+      baselineScale: null,
+      keys: [],
+      interpolationType: 0,
+      preset: ""
     };
-    return bases[style] || 110.0;
+
+    motionOwners.push(owner);
+    delete pendingEffects[pendingKey];
+
+    return owner;
+  }
+
+  /*
+   * Cross-platform diagnostic ledger.
+   */
+
+  function ensureFolder(folder) {
+    if (folder.exists) {
+      return;
+    }
+
+    var parent = folder.parent;
+
+    if (parent && !parent.exists && parent.fsName !== folder.fsName) {
+      ensureFolder(parent);
+    }
+
+    if (!folder.create() && !folder.exists) {
+      throw new Error("Could not create state directory: " + folder.fsName);
+    }
+  }
+
+  function motionLedgerPath() {
+    var directory = new Folder(
+      Folder.userData.fsName + "/AutoCutStudio/state/v2"
+    );
+
+    ensureFolder(directory);
+    return new File(directory.fsName + "/motion-ledger.json");
+  }
+
+  function readMotionLedger() {
+    var file = motionLedgerPath();
+
+    if (!file.exists) {
+      return [];
+    }
+
+    file.encoding = "UTF-8";
+
+    if (!file.open("r")) {
+      throw new Error("Could not open motion ledger: " + file.error);
+    }
+
+    var text;
+
+    try {
+      text = file.read();
+    } finally {
+      file.close();
+    }
+
+    if (!text.length) {
+      return [];
+    }
+
+    var records = Codec.parse(text);
+
+    if (!isArray(records)) {
+      throw new Error("Motion ledger is not a JSON array.");
+    }
+
+    return records;
+  }
+
+  function writeMotionLedger(records) {
+    var file = motionLedgerPath();
+    var temp = new File(file.fsName + "." + SESSION_ID + ".tmp");
+    var backup = new File(file.fsName + ".bak");
+    var text = Codec.stringify(records);
+
+    temp.encoding = "UTF-8";
+
+    if (!temp.open("w")) {
+      throw new Error("Could not open temporary motion ledger.");
+    }
+
+    try {
+      if (!temp.write(text)) {
+        throw new Error("Could not write temporary motion ledger.");
+      }
+    } finally {
+      temp.close();
+    }
+
+    if (file.exists) {
+      if (backup.exists && !backup.remove()) {
+        temp.remove();
+        throw new Error("Could not replace motion ledger backup.");
+      }
+
+      if (!file.copy(backup.fsName)) {
+        temp.remove();
+        throw new Error("Could not back up motion ledger.");
+      }
+
+      if (!file.remove()) {
+        temp.remove();
+        throw new Error("Could not replace motion ledger.");
+      }
+    }
+
+    if (!temp.rename(file.name)) {
+      if (backup.exists) {
+        backup.copy(file.fsName);
+      }
+
+      temp.remove();
+      throw new Error("Could not commit motion ledger.");
+    }
+
+    if (backup.exists) {
+      backup.remove();
+    }
+  }
+
+  function persistMotionOwner(ref, owner) {
+    var records = readMotionLedger();
+    var next = [];
+    var keyTimes = [];
+    var keyValues = [];
+
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i];
+
+      if (
+        record &&
+        record.projectKey === ref.projectKey &&
+        record.identity === ref.identity &&
+        record.trackIndex === ref.trackIndex &&
+        record.sessionId === SESSION_ID
+      ) {
+        continue;
+      }
+
+      next.push(record);
+    }
+
+    for (i = 0; i < owner.keys.length; i++) {
+      keyTimes.push(owner.keys[i][0]);
+      keyValues.push(owner.keys[i][1]);
+    }
+
+    next.push({
+      schemaVersion: LEDGER_SCHEMA_VERSION,
+      sessionId: SESSION_ID,
+      projectKey: ref.projectKey,
+      identity: ref.identity,
+      sequenceId: ref.sequenceId,
+      projectItemNodeId: projectItemId(ref.clip),
+      trackItemNodeId: trackItemId(ref.clip),
+      trackIndex: ref.trackIndex,
+      preset: owner.preset,
+      generatedScaleKeys: keyTimes,
+      generatedScaleValues: keyValues,
+      updatedAt: new Date().getTime(),
+      ownershipPolicy: "current-session-only"
+    });
+
+    if (next.length > MAX_LEDGER_RECORDS) {
+      next = next.slice(next.length - MAX_LEDGER_RECORDS);
+    }
+
+    writeMotionLedger(next);
+  }
+
+  function deleteMotionLedgerForRef(ref) {
+    var records = readMotionLedger();
+    var next = [];
+
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i];
+
+      if (
+        record &&
+        record.projectKey === ref.projectKey &&
+        record.identity === ref.identity &&
+        record.trackIndex === ref.trackIndex &&
+        record.sessionId === SESSION_ID
+      ) {
+        continue;
+      }
+
+      next.push(record);
+    }
+
+    if (next.length !== records.length) {
+      writeMotionLedger(next);
+    }
+  }
+
+  /*
+   * Scale animation.
+   */
+
+  var ZOOM_BASES = {
+    smooth_in: 108,
+    smooth_out: 108,
+    drift: 105,
+    breath: 106,
+    reveal: 112,
+    settle_in: 114,
+    punch_in: 118,
+    punch_out: 116,
+    pulse: 112,
+    snap_back: 120
+  };
+
+  function boundedZoom(value) {
+    return clamp(finiteNumber(value, "Zoom"), 101, 150);
+  }
+
+  function isSupportedZoomStyle(style) {
+    return owns(ZOOM_BASES, style);
   }
 
   function isFastZoomStyle(style) {
@@ -817,1489 +1760,1130 @@ if (!JSON.parse) {
     );
   }
 
-  function isSupportedZoomStyle(style) {
-    var supported = {
-      smooth_in: true,
-      smooth_out: true,
-      drift: true,
-      breath: true,
-      reveal: true,
-      settle_in: true,
-      punch_in: true,
-      punch_out: true,
-      pulse: true,
-      snap_back: true
-    };
-    return supported[style] === true;
-  }
-
   function durationZoomScale(style, duration) {
-    if (!isFinite(duration) || duration <= 0) {
-      return 1.0;
-    }
-
     var fast = isFastZoomStyle(style);
+
     if (duration < 0.35) return fast ? 0.52 : 0.62;
     if (duration < 0.75) return fast ? 0.72 : 0.78;
     if (duration < 1.25) return fast ? 0.88 : 0.92;
-    if (duration > 12.0) return fast ? 0.82 : 1.28;
-    if (duration > 6.0) return fast ? 0.9 : 1.16;
+    if (duration > 12) return fast ? 0.82 : 1.28;
+    if (duration > 6) return fast ? 0.90 : 1.16;
     if (duration > 3.5) return fast ? 0.96 : 1.08;
-    return 1.0;
+
+    return 1;
   }
 
-  function resolveZoomTarget(payloadZoom, style, duration, autoRatio) {
+  function resolveZoomTarget(zoom, style, duration, autoRatio) {
     if (!autoRatio) {
-      return boundedZoom(payloadZoom);
+      return boundedZoom(zoom);
     }
 
-    var base = baseZoomForStyle(style);
-    var intensity = (base - 100.0) * durationZoomScale(style, duration);
-    return boundedZoom(100.0 + intensity);
-  }
-
-  function getVideoEffectByNames(names, label) {
-    if (!app.enableQE) {
-      throw new Error(
-        "Premiere QE DOM is unavailable; cannot apply " + label + " by script."
-      );
-    }
-    app.enableQE();
-    if (
-      typeof qe === "undefined" ||
-      !qe.project ||
-      !qe.project.getVideoEffectByName
-    ) {
-      throw new Error(
-        "Premiere QE project API is unavailable; cannot find " + label + "."
-      );
-    }
-
-    for (var i = 0; i < names.length; i++) {
-      var effect = qe.project.getVideoEffectByName(names[i]);
-      if (effect) {
-        return effect;
-      }
-    }
-
-    throw new Error(
-      "Could not find " + label + " in this Premiere installation."
+    return boundedZoom(
+      100 +
+      (ZOOM_BASES[style] - 100) * durationZoomScale(style, duration)
     );
   }
 
-  function applyVideoEffectToClipRef(ref, effect) {
-    if (!app.enableQE) {
-      throw new Error("Premiere QE DOM is unavailable.");
-    }
-    app.enableQE();
-    var qeSeq = qe.project.getActiveSequence();
-    if (!qeSeq || !qeSeq.getVideoTrackAt) {
-      throw new Error("Could not access the active sequence through QE DOM.");
+  function buildZoomKeys(style, start, end, zoom) {
+    var duration = end - start;
+
+    if (!isFinite(duration) || duration <= 0) {
+      throw new Error("Clip is too short for a two-keyframe animation.");
     }
 
-    var qeTrack = qeSeq.getVideoTrackAt(ref.trackIndex);
-    if (!qeTrack || !qeTrack.getItemAt) {
-      throw new Error("Could not access selected video track through QE DOM.");
-    }
+    var soft = 100 + (zoom - 100) * 0.45;
+    var drift = 100 + (zoom - 100) * 0.30;
+    var breath = 100 + (zoom - 100) * 0.22;
+    var overshoot = boundedZoom(100 + (zoom - 100) * 1.18);
 
-    // Time-based lookup to avoid index mismatch caused by gaps/transitions in QE DOM
-    var qeClip = null;
-    var targetStart = clipSequenceStartSeconds(ref.clip);
-    var targetEnd = clipSequenceEndSeconds(ref.clip);
-    if (qeTrack.numItems !== undefined) {
-      for (var k = 0; k < qeTrack.numItems; k++) {
-        var item = qeTrack.getItemAt(k);
-        if (item) {
-          var itemStart = timeToSeconds(item.start);
-          var itemEnd = timeToSeconds(item.end);
-          if (
-            Math.abs(itemStart - targetStart) < 0.05 &&
-            Math.abs(itemEnd - targetEnd) < 0.05
-          ) {
-            qeClip = item;
-            break;
-          }
-        }
-      }
-    }
-    if (!qeClip) {
-      qeClip = qeTrack.getItemAt(ref.clipIndex); // fallback to index
-    }
-    if (!qeClip || !qeClip.addVideoEffect) {
-      throw new Error("Could not access selected clip through QE DOM.");
-    }
-
-    qeClip.addVideoEffect(effect);
-  }
-
-  function getAutoCutTransformEffect() {
-    return getVideoEffectByNames(
-      [
-        "Transform",
-        "ADBE Transform",
-        "AE.ADBE Transform",
-        "Transformation",
-        "Transformieren"
+    var presets = {
+      smooth_in: [[0, 100], [1, zoom]],
+      smooth_out: [[0, zoom], [1, 100]],
+      drift: [[0, 100], [1, drift]],
+      breath: [[0, 100], [0.50, breath], [1, 100]],
+      reveal: [[0, zoom], [0.62, zoom], [1, 100]],
+      settle_in: [
+        [0, 100],
+        [0.22, overshoot],
+        [0.55, soft],
+        [1, zoom]
       ],
-      "Premiere Transform"
-    );
-  }
+      punch_in: [
+        [0, 100],
+        [0.08, zoom],
+        [0.28, soft],
+        [1, soft]
+      ],
+      punch_out: [[0, zoom], [0.10, 100], [1, 100]],
+      pulse: [
+        [0, 100],
+        [0.18, zoom],
+        [0.38, 100],
+        [0.62, soft],
+        [1, 100]
+      ],
+      snap_back: [
+        [0, 100],
+        [0.10, zoom],
+        [0.30, 100],
+        [1, 100]
+      ]
+    };
 
-  function isAutoCutTransformComponent(component) {
-    var name = normalizedName((component && component.matchName) || "");
-    var display = normalizedName((component && component.displayName) || "");
-    return (
-      name.indexOf("com.autocutstudio.transform") >= 0 ||
-      display === "autocutstudio transform" ||
-      name === "adbe transform" ||
-      display === "transform" ||
-      name.indexOf("adbe transform") >= 0 ||
-      name.indexOf("transform") >= 0 ||
-      display.indexOf("transform") >= 0
-    );
-  }
-
-  function markAutoCutTransformOwnership(component, ref, preset) {
-    try {
-      var info = getClipInfo(ref.clip);
-      component.__autocutstudioOwnership = {
-        schemaVersion: 1,
-        identity: info.identity,
-        projectItemNodeId: info.projectItemNodeId,
-        sequenceId: info.sequenceId,
-        inPointSeconds: info.inPointSeconds,
-        outPointSeconds: info.outPointSeconds,
-        preset: preset || ""
-      };
-    } catch (_) {}
-  }
-
-  function motionLedgerPath() {
-    try {
-      var appData = $.getenv("APPDATA");
-      if (!appData) return null;
-      var directory = new Folder(appData + "/AutoCutStudio/state/v1");
-      if (!directory.exists) directory.create();
-      return new File(directory.fsName + "/motion-ledger.json");
-    } catch (_) {
-      return null;
+    if (!owns(presets, style)) {
+      throw new Error("Unsupported Scale movement: " + style);
     }
+
+    var preset = presets[style];
+    var result = [];
+
+    for (var i = 0; i < preset.length; i++) {
+      result.push([
+        start + duration * preset[i][0],
+        preset[i][1]
+      ]);
+    }
+
+    return result;
   }
 
-  function readMotionLedger() {
-    var file = motionLedgerPath();
-    if (!file || !file.exists) return [];
-    try {
-      file.open("r");
-      var text = file.read();
-      file.close();
-      var parsed = text ? JSON.parse(text) : [];
-      return parsed instanceof Array ? parsed : [];
-    } catch (_) {
-      try {
-        file.close();
-      } catch (_) {}
+  function frameAlignKeys(keys, start, end, frameDuration) {
+    var result = [];
+    var lastFrame = Math.round((end - start) / frameDuration);
+
+    for (var i = 0; i < keys.length; i++) {
+      var frameIndex = clamp(
+        Math.round((keys[i][0] - start) / frameDuration),
+        0,
+        lastFrame
+      );
+
+      var key = [
+        start + frameIndex * frameDuration,
+        keys[i][1]
+      ];
+
+      if (
+        result.length &&
+        sameNumber(
+          result[result.length - 1][0],
+          key[0],
+          TIME_EPSILON
+        )
+      ) {
+        // Keep the first endpoint if a very short clip collapses keys.
+        if (frameIndex !== 0) {
+          result[result.length - 1] = key;
+        }
+      } else {
+        result.push(key);
+      }
+    }
+
+    if (result.length < 2) {
+      throw new Error("Clip is too short for two distinct animation frames.");
+    }
+
+    return result;
+  }
+
+  function getPropertyKeys(prop) {
+    if (!prop || !prop.getKeys) {
+      throw new Error("Scale does not expose keyframe inspection.");
+    }
+
+    var keys = prop.getKeys();
+
+    if (!keys) {
       return [];
     }
-  }
 
-  function writeMotionLedger(records) {
-    var file = motionLedgerPath();
-    if (!file) return;
-    try {
-      file.open("w");
-      file.write(JSON.stringify(records));
-      file.close();
-    } catch (_) {
-      try {
-        file.close();
-      } catch (_) {}
+    if (keys.length === undefined) {
+      throw new Error("Premiere returned an unsupported keyframe collection.");
     }
-  }
 
-  function persistMotionLedger(ref, component, preset, scaleKeyTimes) {
-    try {
-      var info = getClipInfo(ref.clip);
-      var componentIndex = -1;
-      for (var i = 0; i < ref.clip.components.numItems; i++) {
-        if (
-          ref.clip.components[i] === component ||
-          hasAutoCutTransformOwnership(ref.clip.components[i], ref)
-        ) {
-          componentIndex = i;
-          break;
-        }
-      }
-      if (componentIndex < 0) {
-        for (var fallback = ref.clip.components.numItems - 1; fallback >= 0; fallback--) {
-          if (isAutoCutTransformComponent(ref.clip.components[fallback])) {
-            componentIndex = fallback;
-            break;
-          }
-        }
-      }
-      if (componentIndex < 0) return;
-      var records = readMotionLedger();
-      var record = {
-        schemaVersion: 1,
-        projectFingerprint: info.mediaPath + "|" + info.projectItemNodeId,
-        sequenceId: info.sequenceId,
-        projectItemNodeId: info.projectItemNodeId,
-        originalTrackIndex: ref.trackIndex,
-        originalStartSeconds: info.startSeconds,
-        inPointSeconds: info.inPointSeconds,
-        outPointSeconds: info.outPointSeconds,
-        effectMatchName:
-          normalizedName(component && component.matchName) || "adbe transform",
-        componentIndex: componentIndex,
-        preset: preset || "",
-        generatedScaleKeys: scaleKeyTimes || [],
-        generatedPositionKeys: []
-      };
-      var next = [];
-      for (var r = 0; r < records.length; r++) {
-        if (
-          records[r].projectItemNodeId === record.projectItemNodeId &&
-          records[r].sequenceId === record.sequenceId &&
-          Math.abs(
-            Number(records[r].originalStartSeconds) -
-              record.originalStartSeconds
-          ) < 0.002
-        ) {
-          continue;
-        }
-        next.push(records[r]);
-      }
-      next.push(record);
-      // Cap ledger to 500 most recent records to prevent unbounded growth
-      if (next.length > 500) {
-        next = next.slice(next.length - 500);
-      }
-      writeMotionLedger(next);
-    } catch (_) {}
-  }
+    var result = [];
 
-  function persistedMotionRecord(ref) {
-    try {
-      var info = getClipInfo(ref.clip);
-      var records = readMotionLedger();
-      for (var i = 0; i < records.length; i++) {
-        var record = records[i];
-        if (
-          record.schemaVersion === 1 &&
-          record.projectItemNodeId === info.projectItemNodeId &&
-          record.sequenceId === info.sequenceId &&
-          Math.abs(Number(record.originalStartSeconds) - info.startSeconds) <
-            0.002 &&
-          Math.abs(Number(record.inPointSeconds) - info.inPointSeconds) <
-            0.002 &&
-          Math.abs(Number(record.outPointSeconds) - info.outPointSeconds) <
-            0.002
-        ) {
-          return record;
-        }
-      }
-    } catch (_) {}
-    return null;
-  }
-
-  function hasPersistedMotionLedger(ref) {
-    return !!persistedMotionRecord(ref);
-  }
-
-  function deleteMotionLedgerForRef(ref) {
-    try {
-      var info = getClipInfo(ref.clip);
-      var records = readMotionLedger();
-      var next = [];
-      for (var r = 0; r < records.length; r++) {
-        if (
-          records[r].projectItemNodeId === info.projectItemNodeId &&
-          records[r].sequenceId === info.sequenceId
-        ) {
-          continue;
-        }
-        next.push(records[r]);
-      }
-      if (next.length !== records.length) {
-        writeMotionLedger(next);
-      }
-    } catch (_) {}
-  }
-
-  function hasAutoCutTransformOwnership(component, ref) {
-    try {
-      var ownership = component && component.__autocutstudioOwnership;
-      var info = getClipInfo(ref.clip);
-      return (
-        !!ownership &&
-        ownership.schemaVersion === 1 &&
-        ownership.identity === info.identity &&
-        ownership.projectItemNodeId === info.projectItemNodeId &&
-        ownership.sequenceId === info.sequenceId &&
-        Math.abs(Number(ownership.inPointSeconds) - info.inPointSeconds) <
-          0.002 &&
-        Math.abs(Number(ownership.outPointSeconds) - info.outPointSeconds) <
-          0.002
-      );
-    } catch (_) {
-      return false;
+    for (var i = 0; i < keys.length; i++) {
+      result.push(keys[i]);
     }
+
+    return result;
   }
 
-  function findOwnedTransformComponent(ref) {
-    var clip = ref && ref.clip;
-    if (!clip || !clip.components) {
-      return null;
-    }
-    // 1. Exact ownership check (in-memory, rarely survives across calls)
-    for (var i = 0; i < clip.components.numItems; i++) {
-      var candidate = clip.components[i];
+  function findKeyBySeconds(keys, seconds) {
+    for (var i = 0; i < keys.length; i++) {
       if (
-        isAutoCutTransformComponent(candidate) &&
-        hasAutoCutTransformOwnership(candidate, ref)
+        sameNumber(timeToSeconds(keys[i]), seconds, TIME_EPSILON)
       ) {
-        return candidate;
+        return keys[i];
       }
     }
-    // 2. Ledger lookup (disk-persisted, fails if clip was moved/trimmed)
-    var record = persistedMotionRecord(ref);
-    if (record) {
-      var index = Number(record.componentIndex);
+
+    return null;
+  }
+
+  function setKeyframingEnabled(prop, enabled) {
+    if (!prop || !prop.setTimeVarying) {
+      throw new Error("Scale does not expose keyframing controls.");
+    }
+
+    requireHostSuccess(
+      prop.setTimeVarying(enabled),
+      enabled ? "Enable Scale keyframing" : "Disable Scale keyframing"
+    );
+  }
+
+  function assertGeneratedKeysUnchanged(owner, allowAdditionalKeys) {
+    var prop = owner.scale;
+    var existing = getPropertyKeys(prop);
+
+    if (!prop.getValueAtKey) {
+      throw new Error("Scale does not expose keyframe value inspection.");
+    }
+
+    for (var i = 0; i < owner.keys.length; i++) {
+      var expected = owner.keys[i];
+      var actualTime = findKeyBySeconds(existing, expected[0]);
+
+      if (!actualTime) {
+        throw new Error(
+          "Generated Scale keys were moved or removed. Existing edits " +
+          "were preserved."
+        );
+      }
+
+      var actualValue = prop.getValueAtKey(actualTime);
+
       if (
-        isFinite(index) &&
-        index >= 0 &&
-        index < clip.components.numItems &&
-        isAutoCutTransformComponent(clip.components[index])
-      ) {
-        return clip.components[index];
-      }
-    }
-    // 3. Fallback: find the LAST Transform component on the clip.
-    //    We are the only code that adds Transform effects; the built-in
-    //    Motion effect is not matched by isAutoCutTransformComponent.
-    var lastTransform = null;
-    for (var f = 0; f < clip.components.numItems; f++) {
-      if (isAutoCutTransformComponent(clip.components[f])) {
-        lastTransform = clip.components[f];
-      }
-    }
-    return lastTransform;
-  }
-
-  function ensureAutoCutTransformComponent(ref) {
-    var clip = ref.clip;
-    var before = clip && clip.components ? clip.components.numItems : 0;
-    var existing = findOwnedTransformComponent(ref);
-    if (existing) return existing;
-    applyVideoEffectToClipRef(ref, getAutoCutTransformEffect());
-    if (clip && clip.components) {
-      for (var j = before; j < clip.components.numItems; j++) {
-        if (isAutoCutTransformComponent(clip.components[j])) {
-          return clip.components[j];
-        }
-      }
-    }
-    throw new Error(
-      "Premiere Transform was added but could not be identified."
-    );
-  }
-
-  function componentName(component) {
-    return normalizedName(
-      (component && component.displayName) ||
-        (component && component.matchName) ||
-        ""
-    );
-  }
-
-  function isLumetriComponent(component) {
-    var name = componentName(component);
-    return name.indexOf("lumetri") >= 0;
-  }
-
-  function findLumetriComponent(clip) {
-    if (!clip || !clip.components) {
-      return null;
-    }
-    for (var c = 0; c < clip.components.numItems; c++) {
-      var component = clip.components[c];
-      if (isLumetriComponent(component)) {
-        return component;
-      }
-    }
-    return null;
-  }
-
-  function getAutoCutColorEffect() {
-    return getVideoEffectByNames(
-      ["AutoCutStudio Color Engine"],
-      "AutoCutStudio Color Engine"
-    );
-  }
-
-  function isAutoCutColorComponent(component) {
-    var name = componentName(component);
-    return (
-      name.indexOf("autocutstudio color engine") >= 0 ||
-      name.indexOf("autocutstudiocolorengine") >= 0 ||
-      name.indexOf("autocut color engine") >= 0 ||
-      name.indexOf("autocutcolorengine") >= 0 ||
-      name.indexOf("com.autocutstudio.color.engine") >= 0
-    );
-  }
-
-  function findAutoCutColorComponent(clip) {
-    if (!clip || !clip.components) {
-      return null;
-    }
-    for (var c = 0; c < clip.components.numItems; c++) {
-      var component = clip.components[c];
-      if (isAutoCutColorComponent(component)) {
-        return component;
-      }
-    }
-    return null;
-  }
-
-  var pendingAutoColorIdentity = "";
-  var pendingAutoColorStarted = 0;
-
-  function ensureAutoCutColorComponent(ref) {
-    var component = findAutoCutColorComponent(ref.clip);
-    if (component) {
-      pendingAutoColorIdentity = "";
-      pendingAutoColorStarted = 0;
-      return component;
-    }
-
-    var identity = getClipInfo(ref.clip).identity;
-    var now = new Date().getTime();
-    if (
-      pendingAutoColorIdentity === identity &&
-      now - pendingAutoColorStarted < 5000
-    ) {
-      return null;
-    }
-
-    try {
-      applyVideoEffectToClipRef(ref, getAutoCutColorEffect());
-      pendingAutoColorIdentity = identity;
-      pendingAutoColorStarted = now;
-    } catch (applyError) {
-      throw new Error(
-        "Could not add AutoCutStudio Color Engine. Restart Premiere after installing AutoCutStudioSetup.exe as Administrator. " +
-          (applyError.message || String(applyError))
-      );
-    }
-    component = findAutoCutColorComponent(ref.clip);
-    if (component) {
-      pendingAutoColorIdentity = "";
-      pendingAutoColorStarted = 0;
-    }
-    return component;
-  }
-
-  function selectedAutoColorRef() {
-    var seq = app.project.activeSequence;
-    if (!seq) {
-      throw new Error("No active sequence is open.");
-    }
-    var refs = getSelectedVideoClipRefs(seq);
-    if (refs.length !== 1) {
-      throw new Error(
-        refs.length < 1
-          ? "Select one video clip in the active sequence."
-          : "Select exactly one video clip for playhead-frame Auto Color."
-      );
-    }
-    return { sequence: seq, ref: refs[0] };
-  }
-
-  AutoCutStudio.prepareAutoColorAtPlayhead = function () {
-    try {
-      var selected = selectedAutoColorRef();
-      var playheadSeconds = sequencePlayheadSeconds(selected.sequence);
-      assertPlayheadInsideClip(selected.ref, playheadSeconds);
-      var existing = findAutoCutColorComponent(selected.ref.clip);
-      if (!existing) {
-        existing = ensureAutoCutColorComponent(selected.ref);
-      }
-      return ok({ ready: !!existing });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  function applyAutoCutColorValues(component, values) {
-    var applied = 0;
-    var missing = [];
-    var map = [
-      { key: "temperature", names: ["temperature"], value: values.temperature },
-      { key: "tint", names: ["tint"], value: values.tint },
-      { key: "exposure", names: ["exposure"], value: values.exposure },
-      { key: "contrast", names: ["contrast"], value: values.contrast },
-      { key: "highlights", names: ["highlights"], value: values.highlights },
-      { key: "shadows", names: ["shadows"], value: values.shadows },
-      { key: "whites", names: ["whites"], value: values.whites },
-      { key: "blacks", names: ["blacks"], value: values.blacks },
-      { key: "saturation", names: ["saturation"], value: values.saturation },
-      { key: "vibrance", names: ["vibrance"], value: values.vibrance },
-      {
-        key: "shadows_temp",
-        names: ["shadows temp", "shadows temp (lift)", "shadows_temp"],
-        value: values.shadows_temp
-      },
-      {
-        key: "shadows_tint",
-        names: ["shadows tint", "shadows tint (lift)", "shadows_tint"],
-        value: values.shadows_tint
-      },
-      {
-        key: "highlights_temp",
-        names: ["highlights temp", "highlights temp (gain)", "highlights_temp"],
-        value: values.highlights_temp
-      },
-      {
-        key: "highlights_tint",
-        names: ["highlights tint", "highlights tint (gain)", "highlights_tint"],
-        value: values.highlights_tint
-      }
-    ];
-
-    for (var i = 0; i < map.length; i++) {
-      if (map[i].value === undefined || map[i].value === null) {
-        continue;
-      }
-      if (setLumetriProperty(component, map[i].names, map[i].value)) {
-        applied++;
-      } else {
-        missing.push(map[i].key);
-      }
-    }
-
-    if (applied === 0) {
-      throw new Error(
-        "AutoCut Color Engine properties were not exposed by this Premiere version."
-      );
-    }
-    return missing;
-  }
-
-  function setAutoCutCaptureControls(component, token, localSeconds, autoAmount) {
-    var tokenSet = setLumetriProperty(
-      component,
-      ["frame capture token", "capture token"],
-      token
-    );
-    var secondsSet = setLumetriProperty(
-      component,
-      ["frame capture seconds", "capture seconds"],
-      localSeconds
-    );
-    var targetAmount =
-      typeof autoAmount === "number" ? autoAmount : 80.0;
-    var amountSet = setLumetriProperty(
-      component,
-      ["auto amount"],
-      targetAmount
-    );
-    return tokenSet && secondsSet && amountSet;
-  }
-
-  function sequencePlayheadSeconds(seq) {
-    if (!seq || !seq.getPlayerPosition) {
-      throw new Error("Premiere did not expose the active playhead position.");
-    }
-    return timeToSeconds(seq.getPlayerPosition());
-  }
-
-  function newCaptureToken() {
-    var millis = new Date().getTime();
-    var randomPart = Math.floor(Math.random() * 99999);
-    return Math.max(1, Math.min(999999, ((millis + randomPart) % 999999) + 1));
-  }
-
-  function clipSequenceStartSeconds(clip) {
-    return timeToSeconds(clip && clip.start);
-  }
-
-  function clipSequenceEndSeconds(clip) {
-    return timeToSeconds(clip && clip.end);
-  }
-
-  function clipTimelineRange(clip) {
-    var start = clipSequenceStartSeconds(clip);
-    var end = clipSequenceEndSeconds(clip);
-    var duration = end - start;
-    return {
-      start: start,
-      end: end,
-      duration: duration
-    };
-  }
-
-  function assertPlayheadInsideClip(ref, playheadSeconds) {
-    var start = clipSequenceStartSeconds(ref.clip);
-    var end = clipSequenceEndSeconds(ref.clip);
-    if (!isFinite(start) || !isFinite(end) || end <= start) {
-      throw new Error(
-        ref.name + ": selected clip has an invalid timeline range."
-      );
-    }
-    if (playheadSeconds < start || playheadSeconds >= end) {
-      throw new Error(
-        "Move the playhead over the selected clip before running Auto Color."
-      );
-    }
-  }
-
-  function clipLocalSecondsAtPlayhead(ref, playheadSeconds) {
-    return Math.max(0, playheadSeconds - clipSequenceStartSeconds(ref.clip));
-  }
-
-  function propertyName(prop) {
-    return normalizedName(
-      (prop && prop.displayName) || (prop && prop.matchName) || ""
-    );
-  }
-
-  function propertyMatches(prop, needles) {
-    var name = propertyName(prop);
-    for (var i = 0; i < needles.length; i++) {
-      if (name.indexOf(needles[i]) >= 0) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  function findPropertyRecursive(container, needles, depth) {
-    if (!container || !container.properties || depth > 8) {
-      return null;
-    }
-
-    for (var p = 0; p < container.properties.numItems; p++) {
-      var prop = container.properties[p];
-      if (propertyMatches(prop, needles) && prop.setValue) {
-        return prop;
-      }
-      var nested = findPropertyRecursive(prop, needles, depth + 1);
-      if (nested) {
-        return nested;
-      }
-    }
-    return null;
-  }
-
-  function setLumetriProperty(component, needles, value) {
-    var prop = findPropertyRecursive(component, needles, 0);
-    if (!prop) {
-      return false;
-    }
-    prop.setValue(Number(value), 1);
-    return true;
-  }
-
-  function getMediaPath(projectItem) {
-    if (!projectItem) {
-      return "";
-    }
-    if (projectItem.getMediaPath) {
-      return projectItem.getMediaPath();
-    }
-    return "";
-  }
-
-  function getClipInfo(clip) {
-    var mediaPath = getMediaPath(clip.projectItem);
-    if (!mediaPath) {
-      throw new Error("Could not read the selected clip's media path.");
-    }
-
-    var sourceDuration = Math.max(
-      0,
-      timeToSeconds(clip.outPoint) - timeToSeconds(clip.inPoint)
-    );
-    var timelineDuration = Math.max(
-      0,
-      timeToSeconds(clip.end) - timeToSeconds(clip.start)
-    );
-    var projectNodeId = "";
-    try {
-      projectNodeId = String(
-        clip.projectItem.nodeId ||
-          clip.projectItem.treePath ||
-          clip.projectItem.name ||
-          ""
-      );
-    } catch (_) {}
-    var playbackRate =
-      sourceDuration > 0 ? timelineDuration / sourceDuration : 1;
-    var reversed = false;
-    try {
-      reversed = Boolean(
-        clip.projectItem &&
-          clip.projectItem.getFootageInterpretation &&
-          clip.projectItem.getFootageInterpretation().reverse
-      );
-    } catch (_) {}
-    var identity = [
-      projectNodeId,
-      timeToSeconds(clip.start).toFixed(6),
-      timeToSeconds(clip.end).toFixed(6),
-      timeToSeconds(clip.inPoint).toFixed(6),
-      timeToSeconds(clip.outPoint).toFixed(6)
-    ].join("|");
-    return {
-      identity: identity,
-      name: clip.name || clip.projectItem.name || "Selected clip",
-      mediaPath: mediaPath,
-      projectItemNodeId: projectNodeId,
-      sequenceId: String(
-        (app.project.activeSequence &&
-          (app.project.activeSequence.sequenceID ||
-            app.project.activeSequence.name)) ||
-          ""
-      ),
-      startSeconds: timeToSeconds(clip.start),
-      endSeconds: timeToSeconds(clip.end),
-      inPointSeconds: timeToSeconds(clip.inPoint),
-      outPointSeconds: timeToSeconds(clip.outPoint),
-      sourceDurationSeconds: sourceDuration,
-      timelineDurationSeconds: timelineDuration,
-      durationSeconds: sourceDuration,
-      playbackRate: playbackRate,
-      reversed: reversed,
-      variableTimeRemap: Boolean(clip.timeRemappingEnabled)
-    };
-  }
-
-  function sameNumber(a, b, tolerance) {
-    return Math.abs((Number(a) || 0) - (Number(b) || 0)) <= tolerance;
-  }
-
-  function verifyClipInfo(payload, info) {
-    if (!payload || !info) {
-      return;
-    }
-    if (payload.mediaPath && payload.mediaPath !== info.mediaPath) {
-      throw new Error(
-        "Selection changed after analysis. Re-select the analyzed clip or run analysis again."
-      );
-    }
-    if (payload.identity && payload.identity !== info.identity) {
-      throw new Error(
-        "Selection changed after analysis. Re-select the analyzed clip or run analysis again."
-      );
-    }
-
-    var tolerance = 0.002;
-    var checks = [
-      ["startSeconds", info.startSeconds],
-      ["endSeconds", info.endSeconds],
-      ["inPointSeconds", info.inPointSeconds],
-      ["outPointSeconds", info.outPointSeconds]
-    ];
-
-    for (var i = 0; i < checks.length; i++) {
-      var key = checks[i][0];
-      if (
-        payload[key] !== undefined &&
-        !sameNumber(payload[key], checks[i][1], tolerance)
+        typeof actualValue !== "number" ||
+        !sameNumber(actualValue, expected[1], VALUE_EPSILON)
       ) {
         throw new Error(
-          "Selected clip timing changed after analysis. Re-select the analyzed clip or run analysis again."
+          "Generated Scale values were edited. Existing edits were preserved."
         );
       }
     }
+
+    if (!allowAdditionalKeys && existing.length !== owner.keys.length) {
+      throw new Error(
+        "Scale contains additional keyframes. Existing edits were preserved."
+      );
+    }
+
+    return existing;
   }
 
-  var AUTOCUT_BEAT_MARKER_SIGNATURE = "AutoCutStudio Beat Marker v1";
+  function writeScaleKey(prop, key, interpolationType, updateUI) {
+    var time = timeFromSeconds(key[0]);
 
-  function setMarkerFields(marker, colorIndex) {
-    if (!marker) {
+    requireHostSuccess(prop.addKey(time), "Add Scale keyframe");
+    requireHostSuccess(
+      prop.setValueAtKey(time, key[1], updateUI ? 1 : 0),
+      "Set Scale keyframe value"
+    );
+
+    if (prop.setInterpolationTypeAtKey) {
+      requireHostSuccess(
+        prop.setInterpolationTypeAtKey(
+          time,
+          interpolationType,
+          updateUI ? 1 : 0
+        ),
+        "Set Scale keyframe interpolation"
+      );
+    }
+  }
+
+  function removeKeyAtSeconds(prop, seconds) {
+    if (!prop.removeKey) {
+      throw new Error("Scale does not expose keyframe removal.");
+    }
+
+    var existing = getPropertyKeys(prop);
+    var time = findKeyBySeconds(existing, seconds);
+
+    if (!time) {
       return;
     }
-    marker.name = "";
-    marker.comments = AUTOCUT_BEAT_MARKER_SIGNATURE;
-    if (
-      marker.setColorByIndex &&
-      colorIndex !== null &&
-      colorIndex !== undefined
-    ) {
-      marker.setColorByIndex(colorIndex, 0);
+
+    requireHostSuccess(prop.removeKey(time), "Remove Scale keyframe");
+
+    if (findKeyBySeconds(getPropertyKeys(prop), seconds)) {
+      throw new Error("Premiere did not remove the Scale keyframe.");
     }
   }
 
-  function createClipMarker(clip, seconds) {
-    var collection = clipMarkerCollection(clip);
-    if (collection && collection.createMarker) {
-      return collection.createMarker(seconds);
-    }
-    throw new Error(
-      "This selected clip does not support clip marker creation. Try using Sequence Timeline Markers instead."
-    );
-  }
+  function configureOwnedTransform(owner, warnings) {
+    var component = owner.component;
+    var prop = owner.scale;
 
-  function beatMarkerColor() {
-    return 3;
-  }
+    if (!prop) {
+      prop = findScalePropertyOnComponent(component);
 
-  function isAutoCutStudioMarker(marker) {
-    if (!marker) {
-      return false;
-    }
-    var comments = marker.comments || "";
-    return comments === AUTOCUT_BEAT_MARKER_SIGNATURE;
-  }
+      if (!prop) {
+        throw new Error(
+          "Premiere Transform > Scale was not exposed. No property index " +
+          "fallback was used."
+        );
+      }
 
-  function markerTimeSeconds(marker) {
-    if (!marker) {
-      return 0;
-    }
-    if (marker.start) {
-      return timeToSeconds(marker.start);
-    }
-    if (marker.end) {
-      return timeToSeconds(marker.end);
-    }
-    return 0;
-  }
+      if (prop.areKeyframesSupported && !prop.areKeyframesSupported()) {
+        throw new Error("Transform Scale does not support keyframes.");
+      }
 
-  function collectMarkers(markerCollection, startSeconds, endSeconds) {
-    var found = [];
-    if (!markerCollection || !markerCollection.getFirstMarker) {
-      return found;
-    }
-
-    var marker = markerCollection.getFirstMarker();
-    while (marker) {
-      var seconds = markerTimeSeconds(marker);
       if (
-        isAutoCutStudioMarker(marker) &&
-        seconds >= startSeconds &&
-        seconds < endSeconds
+        !prop.getValue ||
+        !prop.addKey ||
+        !prop.setValueAtKey ||
+        !prop.getValueAtKey ||
+        !prop.removeKey
       ) {
-        found.push(marker);
+        throw new Error("Transform Scale keyframe API is incomplete.");
       }
-      if (!markerCollection.getNextMarker) {
-        break;
+
+      var baseline = prop.getValue();
+
+      if (typeof baseline !== "number" || !isFinite(baseline)) {
+        throw new Error("Transform Scale is not a scalar numeric property.");
       }
-      marker = markerCollection.getNextMarker(marker);
+
+      if (getPropertyKeys(prop).length) {
+        throw new Error("New Transform unexpectedly contains Scale keys.");
+      }
+
+      owner.scale = prop;
+      owner.baselineScale = baseline;
     }
-    return found;
+
+    var uniform = findUniformScalePropertyOnComponent(component);
+
+    if (uniform) {
+      requireHostSuccess(
+        uniform.setValue(1, 0),
+        "Enable uniform Transform Scale"
+      );
+    } else {
+      warnings.push(
+        "Uniform Scale was not exposed; the Transform default was preserved."
+      );
+    }
+
+    var useComp = findProperty(component, [
+      "Use Composition's Shutter Angle",
+      "Use Composition Shutter Angle",
+      "Use Composition's Shutter",
+      "Use Composition Shutter"
+    ]);
+
+    var shutter = findProperty(component, ["Shutter Angle"]);
+
+    if (useComp && shutter) {
+      requireHostSuccess(
+        useComp.setValue(0, 0),
+        "Disable composition shutter angle"
+      );
+      requireHostSuccess(
+        shutter.setValue(180, 1),
+        "Set Transform shutter angle"
+      );
+    } else {
+      warnings.push(
+        "Shutter controls were not fully exposed; motion blur defaults " +
+        "were preserved."
+      );
+    }
+
+    return prop;
   }
 
-  function deleteMarker(markerCollection, marker) {
-    if (!markerCollection || !marker) {
-      return false;
+  function replaceOwnedScaleKeys(owner, keys, interpolationType) {
+    var prop = owner.scale;
+
+    assertGeneratedKeysUnchanged(owner, false);
+
+    var previous = owner.keys.slice(0);
+    var previousInterpolation = owner.interpolationType;
+    var attempted = [];
+
+    try {
+      for (var i = previous.length - 1; i >= 0; i--) {
+        removeKeyAtSeconds(prop, previous[i][0]);
+      }
+
+      setKeyframingEnabled(prop, true);
+
+      for (i = 0; i < keys.length; i++) {
+        attempted.push(keys[i]);
+        writeScaleKey(
+          prop,
+          keys[i],
+          interpolationType,
+          i === keys.length - 1
+        );
+      }
+
+      owner.keys = keys.slice(0);
+      owner.interpolationType = interpolationType;
+      assertGeneratedKeysUnchanged(owner, false);
+    } catch (error) {
+      var rollbackErrors = [];
+
+      for (var r = attempted.length - 1; r >= 0; r--) {
+        try {
+          removeKeyAtSeconds(prop, attempted[r][0]);
+        } catch (removeError) {
+          rollbackErrors.push(errorMessage(removeError));
+        }
+      }
+
+      try {
+        if (previous.length) {
+          setKeyframingEnabled(prop, true);
+
+          for (r = 0; r < previous.length; r++) {
+            // Remove any surviving old key before restoring its value.
+            removeKeyAtSeconds(prop, previous[r][0]);
+            writeScaleKey(
+              prop,
+              previous[r],
+              previousInterpolation,
+              r === previous.length - 1
+            );
+          }
+        } else if (!getPropertyKeys(prop).length) {
+          setKeyframingEnabled(prop, false);
+          requireHostSuccess(
+            prop.setValue(owner.baselineScale, 1),
+            "Restore Scale baseline"
+          );
+        }
+      } catch (restoreError) {
+        rollbackErrors.push(errorMessage(restoreError));
+      }
+
+      owner.keys = previous;
+      owner.interpolationType = previousInterpolation;
+
+      throw new Error(
+        errorMessage(error) +
+        (rollbackErrors.length
+          ? " Rollback was incomplete: " + rollbackErrors.join("; ")
+          : " Previous Scale state was restored.")
+      );
     }
-    if (markerCollection.deleteMarker) {
-      markerCollection.deleteMarker(marker);
-      return true;
+  }
+
+  expose("applyGimbalZoom", function (payloadJson) {
+    var payload = parsePayload(payloadJson, true);
+    var style = payload.style === undefined
+      ? "smooth_in"
+      : String(payload.style);
+
+    if (!isSupportedZoomStyle(style)) {
+      throw new Error("Unsupported Scale movement: " + style);
     }
-    if (marker.remove) {
-      marker.remove();
-      return true;
+
+    var zoom = boundedZoom(
+      optionalNumber(payload.zoom, 110, "Zoom")
+    );
+
+    var autoRatio = payload.autoRatio !== false;
+    var interpolationType = optionalNumber(
+      payload.interpolationType,
+      0,
+      "Interpolation type"
+    );
+
+    if (
+      interpolationType !== Math.floor(interpolationType) ||
+      interpolationType < 0 ||
+      interpolationType > 5
+    ) {
+      throw new Error("Interpolation type must be an integer from 0 to 5.");
     }
-    return false;
+
+    var seq = requireActiveSequence();
+    var refs = requireSelectedVideoRefs(seq);
+    var frame = activeFrameDuration(seq);
+    var applied = 0;
+    var skipped = 0;
+    var errors = [];
+    var warnings = [];
+
+    for (var i = 0; i < refs.length; i++) {
+      var ref = refs[i];
+
+      try {
+        assertRefCurrent(ref);
+        assertNormalSpeed(ref.clip, seq, "Gimbal Zoom");
+
+        var range = clipTimelineRange(ref.clip);
+        var lastFrameIndex =
+          Math.ceil(range.duration / frame - TIME_EPSILON) - 1;
+
+        if (lastFrameIndex < 1) {
+          throw new Error("Clip must contain at least two video frames.");
+        }
+
+        var sourceStart = timeToSeconds(ref.clip.inPoint);
+        var sourceEnd = sourceStart + lastFrameIndex * frame;
+        var target = resolveZoomTarget(
+          zoom,
+          style,
+          range.duration,
+          autoRatio
+        );
+
+        var keys = frameAlignKeys(
+          buildZoomKeys(style, sourceStart, sourceEnd, target),
+          sourceStart,
+          sourceEnd,
+          frame
+        );
+
+        var owner = ensureMotionOwner(ref);
+        var localWarnings = [];
+
+        configureOwnedTransform(owner, localWarnings);
+        replaceOwnedScaleKeys(owner, keys, interpolationType);
+        owner.preset = style;
+
+        try {
+          persistMotionOwner(ref, owner);
+        } catch (ledgerError) {
+          localWarnings.push(
+            "Motion ledger was not saved: " + errorMessage(ledgerError)
+          );
+        }
+
+        for (var w = 0; w < localWarnings.length; w++) {
+          warnings.push(ref.name + ": " + localWarnings[w]);
+        }
+
+        applied++;
+      } catch (error) {
+        skipped++;
+        errors.push(ref.name + ": " + errorMessage(error));
+      }
+    }
+
+    if (!applied) {
+      throw new Error(errors.join(" | ") || "No zoom animation was applied.");
+    }
+
+    return {
+      applied: applied,
+      skipped: skipped,
+      errors: errors,
+      warnings: warnings,
+      ownershipPolicy: "current-session-only"
+    };
+  });
+
+  expose("clearGimbalZoom", function () {
+    var seq = requireActiveSequence();
+    var refs = requireSelectedVideoRefs(seq);
+    var cleared = 0;
+    var skipped = 0;
+    var errors = [];
+    var warnings = [];
+
+    for (var i = 0; i < refs.length; i++) {
+      var ref = refs[i];
+
+      try {
+        assertRefCurrent(ref);
+
+        var owner = findMotionOwner(ref);
+
+        if (!owner || !owner.scale || !owner.keys.length) {
+          skipped++;
+          errors.push(
+            ref.name + ": No current-session owned Scale animation was " +
+            "found. Existing Transform effects were preserved."
+          );
+          continue;
+        }
+
+        assertGeneratedKeysUnchanged(owner, true);
+
+        /*
+         * Keep ownership synchronized after every successful removal.
+         * A partial failure can then be retried without deleting unrelated keys.
+         */
+        for (var k = owner.keys.length - 1; k >= 0; k--) {
+          removeKeyAtSeconds(owner.scale, owner.keys[k][0]);
+          owner.keys.splice(k, 1);
+        }
+
+        var remaining = getPropertyKeys(owner.scale);
+
+        if (!remaining.length) {
+          setKeyframingEnabled(owner.scale, false);
+          requireHostSuccess(
+            owner.scale.setValue(owner.baselineScale, 1),
+            "Restore Scale baseline"
+          );
+        } else {
+          warnings.push(
+            ref.name + ": Additional Scale keys were preserved."
+          );
+        }
+
+        owner.preset = "";
+
+        try {
+          deleteMotionLedgerForRef(ref);
+        } catch (ledgerError) {
+          warnings.push(
+            ref.name + ": Ledger cleanup failed: " +
+            errorMessage(ledgerError)
+          );
+        }
+
+        cleared++;
+      } catch (error) {
+        skipped++;
+        errors.push(ref.name + ": " + errorMessage(error));
+      }
+    }
+
+    if (!cleared) {
+      throw new Error(errors.join(" | ") || "No zoom keyframes were cleared.");
+    }
+
+    return {
+      cleared: cleared,
+      skipped: skipped,
+      errors: errors,
+      warnings: warnings,
+      effectsRemoved: 0
+    };
+  });
+
+  expose("cleanMotionLedger", function () {
+    var currentProject = projectKey();
+    var records = readMotionLedger();
+    var validSequences = {};
+    var sequences = app.project.sequences;
+
+    if (!sequences) {
+      throw new Error("Premiere did not expose the project's sequences.");
+    }
+
+    for (var i = 0; i < sequences.numSequences; i++) {
+      validSequences["$" + sequenceKey(sequences[i])] = true;
+    }
+
+    var next = [];
+
+    for (i = 0; i < records.length; i++) {
+      var record = records[i];
+
+      if (!record || typeof record !== "object") {
+        continue;
+      }
+
+      // Never prune another project's records using this project's sequences.
+      if (
+        record.projectKey === currentProject &&
+        !owns(validSequences, "$" + String(record.sequenceId))
+      ) {
+        continue;
+      }
+
+      next.push(record);
+    }
+
+    var removed = records.length - next.length;
+
+    if (removed) {
+      writeMotionLedger(next);
+    }
+
+    return {
+      removed: removed,
+      remaining: next.length
+    };
+  });
+
+  /*
+   * Beat marker operations.
+   */
+
+  function markerTarget(payload) {
+    var target = payload.target === undefined
+      ? "sequence"
+      : String(payload.target);
+
+    if (target !== "clip" && target !== "sequence") {
+      throw new Error("Marker target must be 'clip' or 'sequence'.");
+    }
+
+    return target;
   }
 
   function clipMarkerCollection(clip) {
-    // Try clip-level markers first (timeline clip markers in newer Premiere versions)
-    if (clip && clip.markers) {
-      return clip.markers;
-    }
-    // Then try projectItem.getMarkers() - source/bin markers
-    if (clip && clip.projectItem && clip.projectItem.getMarkers) {
-      try {
-        var m = clip.projectItem.getMarkers();
-        if (m) return m;
-      } catch (_) {}
-    }
-    // Then try projectItem.markers
-    if (clip && clip.projectItem && clip.projectItem.markers) {
-      return clip.projectItem.markers;
-    }
-    return null;
-  }
+    /*
+     * Explicitly use source/project-item markers.
+     * Do not mix source-time coordinates with an undocumented clip.markers API.
+     */
+    var item = clip && clip.projectItem;
 
-  function activeFrameDuration(seq) {
-    var fallback = 1 / 30;
-    try {
-      var settings = seq && seq.getSettings ? seq.getSettings() : null;
-      if (
-        settings &&
-        settings.videoFrameRate &&
-        settings.videoFrameRate.seconds
-      ) {
-        return Number(settings.videoFrameRate.seconds) || fallback;
+    if (item && item.getMarkers) {
+      var collection = item.getMarkers();
+
+      if (collection) {
+        return collection;
       }
-    } catch (_) {}
-    return fallback;
-  }
-
-  function snapToFrame(seconds, seq) {
-    var frame = activeFrameDuration(seq);
-    if (!isFinite(frame) || frame <= 0) {
-      return seconds;
     }
-    return Math.round(seconds / frame) * frame;
-  }
 
-  function isClipSourceTimeInRange(seconds, info) {
-    var tolerance = 0.0005;
-    return (
-      isFinite(seconds) &&
-      seconds >= info.inPointSeconds - tolerance &&
-      seconds < info.outPointSeconds + tolerance
+    if (item && item.markers) {
+      return item.markers;
+    }
+
+    throw new Error(
+      "Source markers are unavailable for this media. Use sequence markers."
     );
   }
 
-  function clipSourceTimeToSequenceTime(seconds, info) {
+  function markerOwner(target, info) {
+    if (target === "clip") {
+      // Source markers are shared by all timeline uses of this project item.
+      return Codec.stringify([
+        info.projectKey,
+        info.projectItemNodeId,
+        info.mediaPath,
+        "source"
+      ]);
+    }
+
+    return Codec.stringify([
+      info.projectKey,
+      info.sequenceId,
+      info.identity,
+      "sequence"
+    ]);
+  }
+
+  function markerContext(payload) {
+    var seq = requireActiveSequence();
+    var clip = getExactlyOneSelectedClip();
+    var info = getClipInfo(clip);
+    var target = markerTarget(payload);
+
+    verifyClipInfo(payload, info);
+
+    var collection = target === "clip"
+      ? clipMarkerCollection(clip)
+      : seq.markers;
+
+    if (!collection || !collection.getFirstMarker) {
+      throw new Error("Marker collection is unavailable.");
+    }
+
+    return {
+      sequence: seq,
+      clip: clip,
+      info: info,
+      target: target,
+      collection: collection,
+      owner: markerOwner(target, info),
+      start: target === "clip" ? info.inPointSeconds : info.startSeconds,
+      end: target === "clip" ? info.outPointSeconds : info.endSeconds,
+      includeLegacy: payload.includeLegacy === true
+    };
+  }
+
+  function markerTimeSeconds(marker) {
+    return timeToSeconds(marker.start);
+  }
+
+  function markerOwnedByContext(marker, context) {
+    var comments = String(marker.comments || "");
+
+    if (comments === MARKER_PREFIX + context.owner) {
+      return true;
+    }
+
+    // Legacy markers had no per-clip ownership. Only touch them by opt-in.
+    return (
+      context.includeLegacy &&
+      comments === LEGACY_MARKER_SIGNATURE
+    );
+  }
+
+  function collectMarkers(context) {
+    var found = [];
+    var marker = context.collection.getFirstMarker();
+    var guard = 0;
+
+    while (marker) {
+      if (++guard > 1000000) {
+        throw new Error("Marker enumeration exceeded its safety limit.");
+      }
+
+      var seconds = markerTimeSeconds(marker);
+
+      if (
+        seconds >= context.start - TIME_EPSILON &&
+        seconds < context.end &&
+        markerOwnedByContext(marker, context)
+      ) {
+        found.push(marker);
+      }
+
+      if (!context.collection.getNextMarker) {
+        break;
+      }
+
+      var next = context.collection.getNextMarker(marker);
+
+      if (next === marker) {
+        throw new Error("Premiere returned a cyclic marker iterator.");
+      }
+
+      marker = next;
+    }
+
+    return found;
+  }
+
+  function deleteMarker(collection, marker) {
+    if (!collection.deleteMarker) {
+      throw new Error("Marker collection does not expose deletion.");
+    }
+
+    var result = collection.deleteMarker(marker);
+
+    if (result === false) {
+      throw new Error("Premiere rejected marker deletion.");
+    }
+  }
+
+  function sourceToSequenceTime(seconds, info) {
     if (info.reversed) {
       return (
-        info.endSeconds - (seconds - info.inPointSeconds) * info.playbackRate
+        info.endSeconds -
+        (seconds - info.inPointSeconds) * info.playbackRate
       );
     }
+
     return (
-      info.startSeconds + (seconds - info.inPointSeconds) * info.playbackRate
+      info.startSeconds +
+      (seconds - info.inPointSeconds) * info.playbackRate
     );
   }
 
-  function isSequenceTimeInClipRange(seconds, info) {
-    var tolerance = 0.0005;
-    return (
-      isFinite(seconds) &&
-      seconds >= info.startSeconds - tolerance &&
-      seconds < info.endSeconds + tolerance
+  function snapSequenceMarker(seconds, context) {
+    var frame = activeFrameDuration(context.sequence);
+    var first = Math.ceil(
+      context.info.startSeconds / frame - TIME_EPSILON
     );
+    var last = Math.ceil(
+      context.info.endSeconds / frame - TIME_EPSILON
+    ) - 1;
+
+    if (last < first) {
+      throw new Error("Selected clip contains no valid sequence frame.");
+    }
+
+    return clamp(Math.round(seconds / frame), first, last) * frame;
   }
 
-  function snapToLastValidFrame(seconds, seq, startSeconds, endSeconds) {
-    var frame = activeFrameDuration(seq);
-    if (!isFinite(frame) || frame <= 0) {
-      return Math.max(startSeconds, Math.min(endSeconds - 0.000001, seconds));
-    }
-    var lastValid = Math.max(startSeconds, endSeconds - frame);
-    return Math.max(
-      startSeconds,
-      Math.min(lastValid, snapToFrame(seconds, seq))
-    );
+  function markerTimeKey(seconds) {
+    return "$" + seconds.toFixed(6);
   }
 
-  AutoCutStudio.getSelectedClipInfo = function () {
-    try {
-      return ok({ clip: getClipInfo(getExactlyOneSelectedClip()) });
-    } catch (error) {
-      return fail(error.message || String(error));
+  expose("applyMarkersChunk", function (payloadJson) {
+    var payload = parsePayload(payloadJson, false);
+    var context = markerContext(payload);
+    var events = payload.events === undefined ? [] : payload.events;
+
+    if (!isArray(events)) {
+      throw new Error("Marker events must be an array.");
     }
-  };
 
-  AutoCutStudio.applyMarkersChunk = function (payloadJson) {
-    try {
-      var payload = parseJson(payloadJson);
-      var target = payload.target === "clip" ? "clip" : "sequence";
-      var events = payload.events || [];
-      var seq = app.project.activeSequence;
-      var clip = getExactlyOneSelectedClip();
-      var info = getClipInfo(clip);
-      var applied = 0;
-      var skipped = 0;
-      var createdTimes = [];
-
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      verifyClipInfo(payload, info);
-      if (target === "sequence" && info.variableTimeRemap) {
-        throw new Error(
-          "Sequence markers cannot be mapped safely on a variable time-remapped clip."
-        );
-      }
-
-      for (var i = 0; i < events.length; i++) {
-        var eventTime = Number(events[i].time);
-        if (!isClipSourceTimeInRange(eventTime, info)) {
-          skipped++;
-          continue;
-        }
-
-        var color = beatMarkerColor();
-
-        if (target === "clip") {
-          var clipTime = snapToLastValidFrame(
-            eventTime,
-            seq,
-            info.inPointSeconds,
-            info.outPointSeconds
-          );
-          setMarkerFields(createClipMarker(clip, clipTime), color);
-          createdTimes.push(clipTime);
-        } else {
-          var sequenceTime = clipSourceTimeToSequenceTime(eventTime, info);
-          sequenceTime = snapToLastValidFrame(
-            sequenceTime,
-            seq,
-            info.startSeconds,
-            info.endSeconds
-          );
-          if (!isSequenceTimeInClipRange(sequenceTime, info)) {
-            skipped++;
-            continue;
-          }
-          setMarkerFields(seq.markers.createMarker(sequenceTime), color);
-          createdTimes.push(sequenceTime);
-        }
-        applied++;
-      }
-
-      return ok({
-        applied: applied,
-        skipped: skipped,
-        createdTimes: createdTimes
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
+    if (events.length > MAX_MARKER_EVENTS) {
+      throw new Error(
+        "Too many marker events in one chunk. Maximum: " + MAX_MARKER_EVENTS
+      );
     }
-  };
 
-  AutoCutStudio.removeMarkers = function (payloadJson) {
-    try {
-      var payload = parseJson(payloadJson);
-      var target = payload.target === "clip" ? "clip" : "sequence";
-      var seq = app.project.activeSequence;
-      var clip = getExactlyOneSelectedClip();
-      var info = getClipInfo(clip);
-      var collection;
-      var startSeconds;
-      var endSeconds;
-
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      verifyClipInfo(payload, info);
-
-      if (target === "clip") {
-        collection = clipMarkerCollection(clip);
-        startSeconds = info.inPointSeconds;
-        endSeconds = info.outPointSeconds;
-        if (!collection) {
-          throw new Error(
-            "This selected clip does not expose a clip marker collection."
-          );
-        }
-      } else {
-        collection = seq.markers;
-        startSeconds = info.startSeconds;
-        endSeconds = info.endSeconds;
-      }
-
-      var markers = collectMarkers(collection, startSeconds, endSeconds);
-      var removed = 0;
-      for (var i = 0; i < markers.length; i++) {
-        if (deleteMarker(collection, markers[i])) {
-          removed++;
-        }
-      }
-
-      return ok({ removed: removed });
-    } catch (error) {
-      return fail(error.message || String(error));
+    if (!context.collection.createMarker) {
+      throw new Error("Marker creation is unavailable.");
     }
-  };
 
-  AutoCutStudio.applyGimbalZoom = function (payloadJson) {
-    try {
-      var payload = payloadJson
-        ? parseJson(payloadJson)
-        : { zoom: 110.0, style: "smooth_in" };
-      var payloadZoom = boundedZoom(payload.zoom);
-      var zoomStyle = payload.style || "smooth_in";
-      var autoRatio = payload.autoRatio !== false;
-      if (!isSupportedZoomStyle(zoomStyle)) {
-        throw new Error("Unsupported Scale movement: " + zoomStyle);
-      }
-
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-
-      var clips = getSelectedVideoClipRefs(seq);
-      if (clips.length === 0) {
-        throw new Error(
-          "Select at least one video clip in the active sequence."
-        );
-      }
-
-      var appliedCount = 0;
-      var skipped = 0;
-      var errors = [];
-      for (var i = 0; i < clips.length; i++) {
-        var ref = clips[i];
-        var clip = ref.clip;
-        var name = ref.name || clipName(clip, i);
-
-        try {
-          var transform = ensureAutoCutTransformComponent(ref);
-          var uniformScaleProp = findUniformScalePropertyOnComponent(transform);
-          if (uniformScaleProp && uniformScaleProp.setValue) {
-            try {
-              uniformScaleProp.setValue(1, 1);
-            } catch (_) {
-              try {
-                uniformScaleProp.setValue(true, 1);
-              } catch (_) {}
-            }
-          }
-          var useCompShutterProp = findUseCompShutterPropertyOnComponent(transform);
-          if (useCompShutterProp && useCompShutterProp.setValue) {
-            try {
-              useCompShutterProp.setValue(0, 1);
-            } catch (_) {
-              try {
-                useCompShutterProp.setValue(false, 1);
-              } catch (_) {}
-            }
-          }
-          var shutterAngleProp = findShutterAnglePropertyOnComponent(transform);
-          if (shutterAngleProp && shutterAngleProp.setValue) {
-            try {
-              shutterAngleProp.setValue(180, 1);
-            } catch (_) {}
-          }
-          var prop = findScalePropertyOnComponent(transform);
-          if (!prop) {
-            skipped++;
-            errors.push(name + ": Premiere Transform > Scale not found");
-            continue;
-          }
-          if (prop.areKeyframesSupported && !prop.areKeyframesSupported()) {
-            skipped++;
-            errors.push(name + ": Scale does not support keyframes");
-            continue;
-          }
-
-          setKeyframingEnabled(prop, true, "Scale");
-
-          var range = clipTimelineRange(clip);
-          var inTime = range.start;
-          var rawOutTime = range.end;
-          var duration = range.duration;
-          if (!isFinite(duration) || duration <= 0.001) {
-            skipped++;
-            errors.push(name + ": clip duration is too short");
-            continue;
-          }
-          var zoomTarget = resolveZoomTarget(
-            payloadZoom,
-            zoomStyle,
-            duration,
-            autoRatio
-          );
-
-          var frameDuration = 1 / 30;
-          try {
-            var settings = seq.getSettings ? seq.getSettings() : null;
-            if (
-              settings &&
-              settings.videoFrameRate &&
-              settings.videoFrameRate.seconds
-            ) {
-              frameDuration =
-                Number(settings.videoFrameRate.seconds) || frameDuration;
-            }
-          } catch (_) {}
-
-          var safeEndTime = rawOutTime;
-          var softTarget = 100.0 + (zoomTarget - 100.0) * 0.45;
-          var driftTarget = 100.0 + (zoomTarget - 100.0) * 0.3;
-          var breathTarget = 100.0 + (zoomTarget - 100.0) * 0.22;
-          var overshootTarget = boundedZoom(
-            100.0 + (zoomTarget - 100.0) * 1.18
-          );
-          removeKeysInRange(prop, inTime, rawOutTime);
-
-          var writtenKeyTimes;
-          if (zoomStyle === "smooth_out") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, zoomTarget],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "punch_in") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, duration, 0.08), zoomTarget],
-              [timeAt(inTime, duration, 0.28), softTarget],
-              [safeEndTime, softTarget]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "punch_out") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, zoomTarget],
-              [timeAt(inTime, duration, 0.10), 100.0],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "pulse") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, duration, 0.18), zoomTarget],
-              [timeAt(inTime, duration, 0.38), 100.0],
-              [timeAt(inTime, duration, 0.62), softTarget],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "snap_back") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, duration, 0.10), zoomTarget],
-              [timeAt(inTime, duration, 0.30), 100.0],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "breath") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, duration, 0.5), breathTarget],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "reveal") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, zoomTarget],
-              [timeAt(inTime, duration, 0.62), zoomTarget],
-              [safeEndTime, 100.0]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "settle_in") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [timeAt(inTime, duration, 0.22), overshootTarget],
-              [timeAt(inTime, duration, 0.55), softTarget],
-              [safeEndTime, zoomTarget]
-            ], undefined, frameDuration);
-          } else if (zoomStyle === "drift") {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [safeEndTime, driftTarget]
-            ], undefined, frameDuration);
-          } else {
-            writtenKeyTimes = setScaleKeys(prop, [
-              [inTime, 100.0],
-              [safeEndTime, zoomTarget]
-            ], undefined, frameDuration);
-          }
-
-          // Verify at least 2 keyframes were actually written
-          if (writtenKeyTimes && writtenKeyTimes.length >= 2) {
-            var verifyKeys = prop.getKeys ? prop.getKeys() : null;
-            if (verifyKeys && verifyKeys.length < 2) {
-              errors.push(
-                name +
-                  ": Warning — only " +
-                  verifyKeys.length +
-                  " keyframe(s) detected after write"
-              );
-            }
-          }
-
-          markAutoCutTransformOwnership(transform, ref, zoomStyle);
-          persistMotionLedger(ref, transform, zoomStyle, writtenKeyTimes);
-          appliedCount++;
-        } catch (err) {
-          skipped++;
-          errors.push(name + ": " + (err.message || String(err)));
-        }
-      }
-
-      if (appliedCount === 0) {
-        throw new Error(
-          errors.length
-            ? errors.join(" | ")
-            : "Could not apply Motion Scale keyframes to selected clips."
-        );
-      }
-
-      return ok({ applied: appliedCount, skipped: skipped, errors: errors });
-    } catch (error) {
-      return fail(error.message || String(error));
+    if (
+      context.target === "sequence" &&
+      context.info.variableTimeRemap
+    ) {
+      throw new Error(
+        "Sequence marker mapping is unavailable for variable time remapping."
+      );
     }
-  };
 
-  AutoCutStudio.clearGimbalZoom = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
+    var planned = [];
+    var existing = collectMarkers(context);
+    var seen = {};
+    var skipped = 0;
+    var duplicates = 0;
+    var i;
 
-      var clips = getSelectedVideoClipRefs(seq);
-      if (clips.length === 0) {
-        throw new Error(
-          "Select at least one video clip in the active sequence."
-        );
-      }
-
-      var cleared = 0;
-      var skipped = 0;
-      var errors = [];
-
-      for (var i = 0; i < clips.length; i++) {
-        var ref = clips[i];
-        var clip = ref.clip;
-        var name = ref.name || clipName(clip, i);
-        try {
-          var transform = findOwnedTransformComponent(ref);
-          if (!transform) {
-            skipped++;
-            errors.push(
-              name +
-                ": owned Premiere Transform not found; built-in Motion was preserved"
-            );
-            continue;
-          }
-          if (
-            !hasAutoCutTransformOwnership(transform, ref) &&
-            !hasPersistedMotionLedger(ref)
-          ) {
-            skipped++;
-            errors.push(
-              name +
-                ": Transform ownership could not be verified; no keys were cleared"
-            );
-            continue;
-          }
-          var scale = findScalePropertyOnComponent(transform);
-          var position = findPositionPropertyOnComponent(transform);
-          var range = clipTimelineRange(clip);
-          var record = persistedMotionRecord(ref);
-          var surgicalScale =
-            record &&
-            record.generatedScaleKeys &&
-            record.generatedScaleKeys.length > 0;
-          if (scale) {
-            if (surgicalScale) {
-              // Surgically remove only the keyframes we wrote
-              for (var sk = 0; sk < record.generatedScaleKeys.length; sk++) {
-                var keySeconds = Number(record.generatedScaleKeys[sk]);
-                if (isFinite(keySeconds)) {
-                  try {
-                    var keyTime = timeFromSeconds(keySeconds);
-                    prop_removeKey_safe(scale, keyTime);
-                  } catch (_) {}
-                }
-              }
-              setKeyframingEnabled(scale, false, "Scale");
-              if (scale.setValue) {
-                try { scale.setValue(100.0, 1); } catch (_) {}
-              }
-            } else {
-              resetAnimatedProperty(
-                scale,
-                range.start,
-                range.end,
-                100.0,
-                "Scale"
-              );
-            }
-          }
-          if (position) {
-            var neutralPosition = positionValueForProperty(
-              position,
-              [0.5, 0.5],
-              getSequenceSize(seq)
-            );
-            resetAnimatedProperty(
-              position,
-              range.start,
-              range.end,
-              neutralPosition,
-              "Position"
-            );
-          }
-          if (scale || position) {
-            // Fully remove the Transform effect from the clip
-            removeEffectViaQE(ref, [
-              "Transform",
-              "ADBE Transform",
-              "Transformieren",
-              "Transformation"
-            ]);
-            deleteMotionLedgerForRef(ref);
-            cleared++;
-          } else {
-            skipped++;
-            errors.push(name + ": Transform keyframes not found");
-          }
-        } catch (error) {
-          skipped++;
-          errors.push(name + ": " + (error.message || String(error)));
-        }
-      }
-
-      if (cleared === 0) {
-        throw new Error(
-          errors.length ? errors.join(" | ") : "No zoom keyframes were cleared."
-        );
-      }
-
-      return ok({ cleared: cleared, skipped: skipped, errors: errors });
-    } catch (error) {
-      return fail(error.message || String(error));
+    for (i = 0; i < existing.length; i++) {
+      seen[markerTimeKey(markerTimeSeconds(existing[i]))] = true;
     }
-  };
 
-  AutoCutStudio.cleanMotionLedger = function () {
-    try {
-      var records = readMotionLedger();
-      if (!records.length) {
-        return ok({ removed: 0, remaining: 0 });
+    // Validate the entire chunk before creating any markers.
+    for (i = 0; i < events.length; i++) {
+      if (!events[i] || typeof events[i] !== "object") {
+        throw new Error("Marker event " + i + " must be an object.");
       }
 
-      // Collect valid sequence IDs from the current project
-      var validSequenceIds = {};
+      var sourceTime = finiteNumber(
+        events[i].time,
+        "Marker event " + i + " time"
+      );
+
+      if (
+        sourceTime < context.info.inPointSeconds ||
+        sourceTime >= context.info.outPointSeconds
+      ) {
+        skipped++;
+        continue;
+      }
+
+      /*
+       * Source markers preserve analysis precision. They are not snapped
+       * using a potentially unrelated sequence frame rate.
+       */
+      var markerTime = context.target === "clip"
+        ? sourceTime
+        : snapSequenceMarker(
+          sourceToSequenceTime(sourceTime, context.info),
+          context
+        );
+
+      var key = markerTimeKey(markerTime);
+
+      if (owns(seen, key)) {
+        skipped++;
+        duplicates++;
+        continue;
+      }
+
+      seen[key] = true;
+      planned.push(markerTime);
+    }
+
+    var applied = 0;
+    var createdTimes = [];
+    var errors = [];
+    var warnings = [];
+
+    for (i = 0; i < planned.length; i++) {
+      var marker = null;
+
       try {
-        if (app.project && app.project.sequences) {
-          for (var s = 0; s < app.project.sequences.numSequences; s++) {
-            var seq = app.project.sequences[s];
-            if (seq && seq.sequenceID) {
-              validSequenceIds[String(seq.sequenceID)] = true;
-            }
+        marker = context.collection.createMarker(planned[i]);
+
+        if (!marker) {
+          throw new Error("Premiere did not return the created marker.");
+        }
+
+        marker.comments = MARKER_PREFIX + context.owner;
+        marker.name = "";
+
+        if (String(marker.comments || "") !== MARKER_PREFIX + context.owner) {
+          throw new Error("Could not verify marker ownership metadata.");
+        }
+
+        if (marker.setColorByIndex) {
+          try {
+            marker.setColorByIndex(3, 0);
+          } catch (colorError) {
+            warnings.push(
+              "Marker " + planned[i] + ": " + errorMessage(colorError)
+            );
           }
         }
-      } catch (_) {}
 
-      var hasSequenceCheck = false;
-      for (var key in validSequenceIds) {
-        if (validSequenceIds.hasOwnProperty(key)) {
-          hasSequenceCheck = true;
+        applied++;
+        createdTimes.push(planned[i]);
+      } catch (error) {
+        if (marker) {
+          try {
+            deleteMarker(context.collection, marker);
+          } catch (cleanupError) {
+            warnings.push(
+              "An incompletely configured marker may remain at " +
+              planned[i] + ": " + errorMessage(cleanupError)
+            );
+          }
+        }
+
+        errors.push(errorMessage(error));
+        skipped += planned.length - i;
+        break;
+      }
+    }
+
+    return {
+      applied: applied,
+      skipped: skipped,
+      duplicates: duplicates,
+      createdTimes: createdTimes,
+      errors: errors,
+      warnings: warnings,
+      partial: errors.length > 0,
+      target: context.target,
+      sharedSourceMarkers: context.target === "clip"
+    };
+  });
+
+  expose("scanMarkers", function (payloadJson) {
+    var payload = parsePayload(payloadJson, true);
+    var context = markerContext(payload);
+    var markers = collectMarkers(context);
+    var times = [];
+
+    for (var i = 0; i < markers.length; i++) {
+      times.push(markerTimeSeconds(markers[i]));
+    }
+
+    return {
+      count: times.length,
+      times: times,
+      target: context.target,
+      sharedSourceMarkers: context.target === "clip"
+    };
+  });
+
+  function removeMarkerList(context, markers) {
+    var removed = 0;
+    var errors = [];
+
+    for (var i = markers.length - 1; i >= 0; i--) {
+      try {
+        deleteMarker(context.collection, markers[i]);
+        removed++;
+      } catch (error) {
+        errors.push(errorMessage(error));
+      }
+    }
+
+    return {
+      removed: removed,
+      failed: errors.length,
+      errors: errors,
+      partial: errors.length > 0
+    };
+  }
+
+  expose("removeMarkers", function (payloadJson) {
+    var payload = parsePayload(payloadJson, true);
+    var context = markerContext(payload);
+
+    return removeMarkerList(context, collectMarkers(context));
+  });
+
+  expose("removeMarkersExactTimes", function (payloadJson) {
+    var payload = parsePayload(payloadJson, false);
+    var context = markerContext(payload);
+    var wanted = payload.times === undefined ? [] : payload.times;
+
+    if (!isArray(wanted)) {
+      throw new Error("Marker times must be an array.");
+    }
+
+    if (wanted.length > MAX_MARKER_EVENTS) {
+      throw new Error("Too many marker times in one request.");
+    }
+
+    var sorted = [];
+
+    for (var i = 0; i < wanted.length; i++) {
+      sorted.push(finiteNumber(wanted[i], "Marker time " + i));
+    }
+
+    sorted.sort(function (a, b) {
+      return a - b;
+    });
+
+    var markers = collectMarkers(context);
+    var matches = [];
+
+    for (i = 0; i < markers.length; i++) {
+      var seconds = markerTimeSeconds(markers[i]);
+      var low = 0;
+      var high = sorted.length - 1;
+      var found = false;
+
+      while (low <= high) {
+        var middle = Math.floor((low + high) / 2);
+        var delta = sorted[middle] - seconds;
+
+        if (Math.abs(delta) < 0.0005) {
+          found = true;
           break;
         }
-      }
 
-      var next = [];
-      for (var r = 0; r < records.length; r++) {
-        var rec = records[r];
-        // Remove entries whose sequence no longer exists
-        if (
-          hasSequenceCheck &&
-          rec.sequenceId &&
-          !validSequenceIds[String(rec.sequenceId)]
-        ) {
-          continue;
+        if (delta < 0) {
+          low = middle + 1;
+        } else {
+          high = middle - 1;
         }
-        next.push(rec);
       }
 
-      // Cap to 500 most recent records
-      if (next.length > 500) {
-        next = next.slice(next.length - 500);
+      if (found) {
+        matches.push(markers[i]);
       }
-
-      var removed = records.length - next.length;
-      writeMotionLedger(next);
-      return ok({ removed: removed, remaining: next.length });
-    } catch (error) {
-      return fail(error.message || String(error));
     }
-  };
+
+    return removeMarkerList(context, matches);
+  });
+
+  /*
+   * Native Auto Color.
+   */
+
+  var COLOR_PROPERTIES = [
+    { key: "temperature", names: ["temperature"] },
+    { key: "tint", names: ["tint"] },
+    { key: "exposure", names: ["exposure"] },
+    { key: "contrast", names: ["contrast"] },
+    { key: "highlights", names: ["highlights"] },
+    { key: "shadows", names: ["shadows"] },
+    { key: "whites", names: ["whites"] },
+    { key: "blacks", names: ["blacks"] },
+    { key: "saturation", names: ["saturation"] },
+    { key: "vibrance", names: ["vibrance"] },
+    {
+      key: "shadows_temp",
+      names: ["shadows temp", "shadows temp (lift)", "shadows_temp"]
+    },
+    {
+      key: "shadows_tint",
+      names: ["shadows tint", "shadows tint (lift)", "shadows_tint"]
+    },
+    {
+      key: "highlights_temp",
+      names: [
+        "highlights temp",
+        "highlights temp (gain)",
+        "highlights_temp"
+      ]
+    },
+    {
+      key: "highlights_tint",
+      names: [
+        "highlights tint",
+        "highlights tint (gain)",
+        "highlights_tint"
+      ]
+    }
+  ];
 
   function defaultAutoCutColorValues() {
     return {
@@ -2320,600 +2904,677 @@ if (!JSON.parse) {
     };
   }
 
-  function getClipColorScience(clip) {
-    var colorSpaceName = "Rec. 709 (Default)";
-    var detectedColorScience = "SDR Standard";
+  function getLookModifiers(look, intensity) {
+    var amount = clamp(
+      optionalNumber(intensity, 1, "Look intensity"),
+      0,
+      2
+    );
 
-    try {
-      var projectItem = clip && clip.projectItem;
-      if (projectItem && projectItem.getColorSpace) {
-        var cs = projectItem.getColorSpace();
-        if (cs) {
-          colorSpaceName = cs.name || "Unknown";
-          var lowerName = colorSpaceName.toLowerCase();
-          var transfer = String(cs.transferCharacteristic || "").toLowerCase();
-          if (lowerName.indexOf("log") >= 0 || transfer.indexOf("log") >= 0) {
-            detectedColorScience = "Camera Log Curve (" + colorSpaceName + ")";
-          } else if (
-            lowerName.indexOf("hlg") >= 0 ||
-            lowerName.indexOf("hdr") >= 0 ||
-            transfer.indexOf("hlg") >= 0 ||
-            transfer.indexOf("pq") >= 0
-          ) {
-            detectedColorScience =
-              "High Dynamic Range (" + colorSpaceName + ")";
-          } else {
-            detectedColorScience = "SDR Standard (" + colorSpaceName + ")";
-          }
-        }
+    var values = defaultAutoCutColorValues();
+    var offsets;
+
+    if (look === "wedding_cinema" || look === "cinematic_warm") {
+      offsets = {
+        temperature: 14,
+        tint: 3,
+        contrast: 12,
+        highlights: -6,
+        shadows: 8,
+        whites: 5,
+        blacks: -4,
+        saturation: 10,
+        vibrance: 15,
+        highlights_temp: 12,
+        shadows_temp: -4,
+        shadows_tint: -6
+      };
+    } else if (look === "skin_tone") {
+      offsets = {
+        contrast: 8,
+        highlights: -4,
+        shadows: 4,
+        whites: 2,
+        blacks: -2,
+        vibrance: 10,
+        saturation: 4,
+        highlights_temp: 2,
+        shadows_tint: -2
+      };
+    } else {
+      throw new Error("Unsupported color look: " + look);
+    }
+
+    for (var key in offsets) {
+      if (owns(offsets, key)) {
+        values[key] += Math.round(offsets[key] * amount);
       }
-    } catch (_) {}
+    }
+
+    return values;
+  }
+
+  function buildColorPlan(component, values) {
+    var writes = [];
+    var missing = [];
+
+    for (var i = 0; i < COLOR_PROPERTIES.length; i++) {
+      var entry = COLOR_PROPERTIES[i];
+
+      if (values[entry.key] === undefined) {
+        continue;
+      }
+
+      var value = finiteNumber(values[entry.key], entry.key);
+      var prop = findProperty(component, entry.names);
+
+      if (!prop) {
+        missing.push(entry.key);
+      } else {
+        writes.push({
+          prop: prop,
+          value: value,
+          label: entry.key
+        });
+      }
+    }
+
+    if (!writes.length) {
+      throw new Error("Color Engine grading properties were not exposed.");
+    }
 
     return {
-      colorSpace: colorSpaceName,
-      colorScience: detectedColorScience
+      writes: writes,
+      missing: missing
     };
   }
 
-  function getLookModifiers(look, intensity) {
-    intensity = Math.max(0.2, Math.min(2.0, Number(intensity) || 1.0));
-    var defaults = defaultAutoCutColorValues();
-    if (look === "wedding_cinema" || look === "cinematic_warm") {
-      // Cinematic Wedding Preset: rich warm film glow, creamy skin, gentle shadow lift
-      defaults.temperature = Math.round(14 * intensity);
-      defaults.tint = Math.round(3 * intensity);
-      defaults.contrast = Math.round(12 * intensity);
-      defaults.highlights = Math.round(-6 * intensity);
-      defaults.shadows = Math.round(8 * intensity);
-      defaults.whites = Math.round(5 * intensity);
-      defaults.blacks = Math.round(-4 * intensity);
-      defaults.saturation = Math.round(100 + 10 * intensity);
-      defaults.vibrance = Math.round(15 * intensity);
-      defaults.highlights_temp = Math.round(12 * intensity);
-      defaults.shadows_temp = Math.round(-4 * intensity);
-      defaults.shadows_tint = Math.round(-6 * intensity);
-    } else {
-      // Skin Tone & Balance (default): natural skin balance, clean highlights, true color tone
-      defaults.contrast = Math.round(8 * intensity);
-      defaults.highlights = Math.round(-4 * intensity);
-      defaults.shadows = Math.round(4 * intensity);
-      defaults.whites = Math.round(2 * intensity);
-      defaults.blacks = Math.round(-2 * intensity);
-      defaults.vibrance = Math.round(10 * intensity);
-      defaults.saturation = Math.round(100 + 4 * intensity);
-      defaults.highlights_temp = Math.round(2 * intensity);
-      defaults.shadows_tint = Math.round(-2 * intensity);
+  function buildCapturePlan(component, token, seconds, autoAmount) {
+    var definitions = [
+      {
+        names: ["frame capture seconds", "capture seconds"],
+        value: finiteNumber(seconds, "Capture seconds"),
+        label: "capture seconds"
+      },
+      {
+        names: ["auto amount"],
+        value: finiteNumber(autoAmount, "Auto amount"),
+        label: "auto amount"
+      },
+      {
+        names: ["frame capture token", "capture token"],
+        value: finiteNumber(token, "Capture token"),
+        label: "capture token"
+      }
+    ];
+
+    if (definitions[0].value < 0) {
+      throw new Error("Capture seconds cannot be negative.");
     }
-    return defaults;
+
+    var writes = [];
+
+    for (var i = 0; i < definitions.length; i++) {
+      var definition = definitions[i];
+      var prop = findProperty(component, definition.names);
+
+      if (!prop) {
+        throw new Error(
+          "Color Engine did not expose " + definition.label + "."
+        );
+      }
+
+      writes.push({
+        prop: prop,
+        value: definition.value,
+        label: definition.label
+      });
+    }
+
+    // Capture token is last: configure first, trigger last.
+    return writes;
   }
 
-  function applyNativeAutoColor(ref, captureFrameSeconds, captureToken, options) {
+  function applyPropertyWrites(writes) {
+    var snapshots = [];
+    var i;
+
+    // Validate and snapshot all controls before any mutation.
+    for (i = 0; i < writes.length; i++) {
+      var write = writes[i];
+
+      if (write.prop.isTimeVarying && write.prop.isTimeVarying()) {
+        throw new Error(
+          write.label + " is animated. Existing keyframes were preserved."
+        );
+      }
+
+      if (!write.prop.getValue) {
+        throw new Error(write.label + " cannot be read for safe rollback.");
+      }
+
+      snapshots.push(write.prop.getValue());
+    }
+
+    var attempted = -1;
+
+    try {
+      for (i = 0; i < writes.length; i++) {
+        attempted = i;
+
+        requireHostSuccess(
+          writes[i].prop.setValue(
+            writes[i].value,
+            i === writes.length - 1 ? 1 : 0
+          ),
+          "Set " + writes[i].label
+        );
+      }
+    } catch (error) {
+      var rollbackErrors = [];
+
+      for (i = attempted; i >= 0; i--) {
+        try {
+          requireHostSuccess(
+            writes[i].prop.setValue(snapshots[i], 1),
+            "Restore " + writes[i].label
+          );
+        } catch (rollbackError) {
+          rollbackErrors.push(errorMessage(rollbackError));
+        }
+      }
+
+      throw new Error(
+        errorMessage(error) +
+        (rollbackErrors.length
+          ? " Rollback was incomplete: " + rollbackErrors.join("; ")
+          : " Previous parameter values were restored.") +
+        " Native analysis side effects, if already triggered, may not be reversible."
+      );
+    }
+  }
+
+  function newCaptureToken() {
+    var token =
+      ((new Date().getTime() + Math.floor(Math.random() * 99999)) %
+        999999) + 1;
+
+    token = Math.floor(token);
+
+    if (token === lastCaptureToken) {
+      token = token % 999999 + 1;
+    }
+
+    lastCaptureToken = token;
+    return token;
+  }
+
+  function getClipColorScience(clip) {
+    var colorSpace = "Unknown";
+    var colorScience = "Unknown";
+
+    try {
+      var item = clip.projectItem;
+      var space = item && item.getColorSpace ? item.getColorSpace() : null;
+
+      if (space) {
+        colorSpace = String(space.name || "Unknown");
+        var name = normalizedName(colorSpace);
+        var transfer = normalizedName(space.transferCharacteristic);
+
+        if (name.indexOf("log") >= 0 || transfer.indexOf("log") >= 0) {
+          colorScience = "Camera Log Curve (" + colorSpace + ")";
+        } else if (
+          name.indexOf("hlg") >= 0 ||
+          name.indexOf("hdr") >= 0 ||
+          name.indexOf("pq") >= 0 ||
+          transfer.indexOf("hlg") >= 0 ||
+          transfer.indexOf("pq") >= 0
+        ) {
+          colorScience = "High Dynamic Range (" + colorSpace + ")";
+        } else {
+          colorScience = "SDR / other (" + colorSpace + ")";
+        }
+      }
+    } catch (_) { }
+
+    return {
+      colorSpace: colorSpace,
+      colorScience: colorScience
+    };
+  }
+
+  function selectedAutoColorRef() {
+    var seq = requireActiveSequence();
+    var refs = getSelectedVideoClipRefs(seq);
+
+    if (refs.length !== 1) {
+      throw new Error(
+        refs.length
+          ? "Select exactly one video clip for playhead-frame Auto Color."
+          : "Select one video clip in the active sequence."
+      );
+    }
+
+    return {
+      sequence: seq,
+      ref: refs[0]
+    };
+  }
+
+  expose("prepareAutoColorAtPlayhead", function () {
+    var selected = selectedAutoColorRef();
+    var seconds = sequencePlayheadSeconds(selected.sequence);
+
+    assertPlayheadInsideClip(selected.ref, seconds);
+    assertNormalSpeed(
+      selected.ref.clip,
+      selected.sequence,
+      "Playhead-frame Auto Color"
+    );
+
+    var component = ensureAutoCutColorComponent(selected.ref);
+
+    return {
+      ready: !!component,
+      pending: !component
+    };
+  });
+
+  expose("autoColorSelectedClips", function (payloadJson) {
+    var options = parsePayload(payloadJson, true);
+    var look = options.look === undefined
+      ? "skin_tone"
+      : String(options.look);
+
+    var modifiers = getLookModifiers(look, options.intensity);
+    var autoAmount = clamp(
+      optionalNumber(options.autoAmount, 80, "Auto amount"),
+      0,
+      100
+    );
+
+    var selected = selectedAutoColorRef();
+    var ref = selected.ref;
+    var seq = selected.sequence;
+    var seconds = sequencePlayheadSeconds(seq);
+
+    assertPlayheadInsideClip(ref, seconds);
+    assertNormalSpeed(ref.clip, seq, "Playhead-frame Auto Color");
+
     var component = ensureAutoCutColorComponent(ref);
 
     if (!component) {
       throw new Error(
-        "AutoCutStudio Color Engine is not installed or not exposed to Premiere."
+        "Color Engine insertion is pending. Wait for Effect Controls to " +
+        "update, then retry. No duplicate engine was added."
       );
     }
 
-    try {
-      component.enabled = true;
-    } catch (_) {}
-
-    var captureLocalSeconds = clipLocalSecondsAtPlayhead(
-      ref,
-      captureFrameSeconds
+    /*
+     * Native plugin contract retained from the original bridge:
+     * capture seconds are relative to the timeline clip start.
+     */
+    var localSeconds = seconds - timeToSeconds(ref.clip.start);
+    var token = newCaptureToken();
+    var colorPlan = buildColorPlan(component, modifiers);
+    var capturePlan = buildCapturePlan(
+      component,
+      token,
+      localSeconds,
+      autoAmount
     );
-    var missing = [];
-    var warnings = [];
 
-    if (
-      !setAutoCutCaptureControls(component, captureToken, captureLocalSeconds)
-    ) {
-      throw new Error(
-        "Native capture controls were not exposed; cannot lock Auto Color to the playhead frame."
-      );
-    }
-
-    if (options && options.look) {
-      try {
-        var mods = getLookModifiers(options.look, options.intensity);
-        applyAutoCutColorValues(component, mods);
-      } catch (modErr) {
-        warnings.push("Look preset: " + (modErr.message || String(modErr)));
-      }
-    }
+    // Write look parameters before triggering native frame capture.
+    applyPropertyWrites(colorPlan.writes.concat(capturePlan));
 
     var colorInfo = getClipColorScience(ref.clip);
+    var warnings = [];
 
-    return {
+    if (colorPlan.missing.length) {
+      warnings.push(
+        "Unavailable look controls: " + colorPlan.missing.join(", ")
+      );
+    }
+
+    var clipResult = {
       name: ref.name,
       trackIndex: ref.trackIndex,
       clipIndex: ref.clipIndex,
       engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
       usedNativeAuto: true,
-      missing: missing,
+      missing: colorPlan.missing,
       warnings: warnings,
-      autoAmount: 80,
-      look: (options && options.look) || "skin_tone",
-      captureFrameSeconds: captureFrameSeconds,
-      captureLocalSeconds: captureLocalSeconds,
+      autoAmount: autoAmount,
+      look: look,
+      captureToken: token,
+      captureFrameSeconds: seconds,
+      captureLocalSeconds: localSeconds,
       colorSpace: colorInfo.colorSpace,
-      colorScience: colorInfo.colorScience
+      colorScience: colorInfo.colorScience,
+      captureRequested: true
     };
-  }
 
-  AutoCutStudio.autoColorSelectedClips = function (payloadJson) {
-    try {
-      var options = {};
-      if (payloadJson) {
-        try {
-          options = typeof payloadJson === "string" ? JSON.parse(payloadJson) : payloadJson;
-        } catch (_) {}
-      }
+    return {
+      applied: 1,
+      skipped: 0,
+      errors: [],
+      warnings: warnings,
+      clips: [clipResult],
+      engine: clipResult.engine,
+      usedNativeAuto: true,
+      autoAmount: autoAmount,
+      look: look,
+      name: ref.name,
+      captureFrameSeconds: seconds,
+      colorScience: colorInfo.colorScience,
+      captureRequested: true
+    };
+  });
 
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
+  expose("resetColorGrade", function () {
+    var seq = requireActiveSequence();
+    var refs = requireSelectedVideoRefs(seq);
+    var defaults = defaultAutoCutColorValues();
+    var reset = 0;
+    var skipped = 0;
+    var errors = [];
+    var warnings = [];
 
-      var refs = getSelectedVideoClipRefs(seq);
-      if (refs.length !== 1) {
-        throw new Error(
-          refs.length < 1
-            ? "Select one video clip in the active sequence."
-            : "Select exactly one video clip for playhead-frame Auto Color."
-        );
-      }
+    for (var i = 0; i < refs.length; i++) {
+      var ref = refs[i];
 
-      var playheadSeconds = sequencePlayheadSeconds(seq);
-      assertPlayheadInsideClip(refs[0], playheadSeconds);
-      var captureToken = newCaptureToken();
-      var applied = 0;
-      var skipped = 0;
-      var errors = [];
-      var warnings = [];
-      var clips = [];
-
-      for (var i = 0; i < refs.length; i++) {
-        var ref = refs[i];
-        try {
-          var clipResult = applyNativeAutoColor(
-            ref,
-            playheadSeconds,
-            captureToken,
-            options
-          );
-          clips.push(clipResult);
-          if (clipResult.warnings && clipResult.warnings.length) {
-            warnings.push(ref.name + ": " + clipResult.warnings.join("; "));
-          }
-          applied++;
-        } catch (error) {
-          skipped++;
-          errors.push(ref.name + ": " + (error.message || String(error)));
-        }
-      }
-
-      if (applied === 0) {
-        throw new Error(
-          errors.length
-            ? errors.join(" | ")
-            : "Could not load the AutoCutStudio Color Engine plugin. Run AutoCutStudioSetup.exe as Administrator to install native C++ assets."
-        );
-      }
-
-      return ok({
-        applied: applied,
-        skipped: skipped,
-        errors: errors.concat(warnings),
-        clips: clips,
-        engine: clips[0].engine,
-        usedNativeAuto: true,
-        autoAmount: clips[0].autoAmount,
-        look: clips[0].look,
-        name: applied === 1 ? clips[0].name : applied + " selected clips",
-        captureFrameSeconds: playheadSeconds,
-        colorScience:
-          applied === 1 ? clips[0].colorScience : "mixed selected clips"
-      });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  function removeEffectViaQE(ref, effectNames) {
-    // Try to remove effects via QE DOM (works when ExtendScript can't see the component)
-    try {
-      if (!app.enableQE) return false;
-      app.enableQE();
-      var qeSeq = qe.project.getActiveSequence();
-      if (!qeSeq) return false;
-      var qeTrack = qeSeq.getVideoTrackAt(ref.trackIndex);
-      if (!qeTrack) return false;
-
-      // Time-based lookup to avoid index mismatch caused by gaps/transitions in QE DOM
-      var qeClip = null;
-      var targetStart = clipSequenceStartSeconds(ref.clip);
-      var targetEnd = clipSequenceEndSeconds(ref.clip);
-      if (qeTrack.numItems !== undefined) {
-        for (var k = 0; k < qeTrack.numItems; k++) {
-          var item = qeTrack.getItemAt(k);
-          if (item) {
-            var itemStart = timeToSeconds(item.start);
-            var itemEnd = timeToSeconds(item.end);
-            if (
-              Math.abs(itemStart - targetStart) < 0.05 &&
-              Math.abs(itemEnd - targetEnd) < 0.05
-            ) {
-              qeClip = item;
-              break;
-            }
-          }
-        }
-      }
-      if (!qeClip) {
-        qeClip = qeTrack.getItemAt(ref.clipIndex); // fallback to index
-      }
-      if (!qeClip) return false;
-
-      // Try to remove effects by iterating QE clip's effects
-      if (qeClip.numComponents) {
-        var numComp = typeof qeClip.numComponents === "function" ? qeClip.numComponents() : qeClip.numComponents;
-        var removed = false;
-        for (var c = numComp - 1; c >= 0; c--) {
-          try {
-            var comp = qeClip.getComponentAt(c);
-            if (comp) {
-              var compName = (comp.name || comp.displayName || comp.matchName || "").toLowerCase();
-              for (var n = 0; n < effectNames.length; n++) {
-                if (compName.indexOf(effectNames[n].toLowerCase()) >= 0) {
-                  qeClip.removeComponentAt(c);
-                  removed = true;
-                  break;
-                }
-              }
-            }
-          } catch (_) {}
-        }
-        return removed;
-      }
-    } catch (_) {}
-    return false;
-  }
-
-  AutoCutStudio.resetColorGrade = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-
-      var refs = getSelectedVideoClipRefs(seq);
-      if (refs.length === 0) {
-        throw new Error(
-          "Select at least one video clip in the active sequence."
-        );
-      }
-
-      var defaults = defaultAutoCutColorValues();
-      var reset = 0;
-      var skipped = 0;
-      var errors = [];
-      var effectTargetNames = [
-        "AutoCutStudio Color Engine",
-        "com.autocutstudio.color.engine",
-        "AutoCut Color Engine",
-        "AutoCutStudioColorEngine",
-        "AutoCutColorEngine",
-        "Color Engine"
-      ];
-
-      for (var i = 0; i < refs.length; i++) {
-        var ref = refs[i];
-        try {
-          var appliedToThisClip = false;
-
-          // 1. Try full QE removal first (completely removes from Effect Controls)
-          var qeRemoved = removeEffectViaQE(ref, effectTargetNames);
-          if (qeRemoved) {
-            appliedToThisClip = true;
-          }
-
-          // 2. Also find via ExtendScript and thoroughly zero out all properties & disable
-          var autocutComponent = findAutoCutColorComponent(ref.clip);
-          if (autocutComponent) {
-            try {
-              autocutComponent.enabled = false;
-            } catch (_) {}
-            try {
-              setAutoCutCaptureControls(autocutComponent, 0, 0, 0.0);
-              setLumetriProperty(
-                autocutComponent,
-                ["analysis confidence", "confidence"],
-                0.0
-              );
-              setLumetriProperty(
-                autocutComponent,
-                ["auto trigger"],
-                0.0
-              );
-              setLumetriProperty(
-                autocutComponent,
-                ["auto amount"],
-                0.0
-              );
-              applyAutoCutColorValues(autocutComponent, defaults);
-            } catch (_) {}
-
-            // Zero out any remaining properties on the component
-            try {
-              if (autocutComponent.properties) {
-                for (var p = 0; p < autocutComponent.properties.numItems; p++) {
-                  var prop = autocutComponent.properties[p];
-                  if (prop && prop.setValue) {
-                    var pName = (prop.displayName || prop.matchName || "").toLowerCase();
-                    if (pName.indexOf("saturation") >= 0) {
-                      try { prop.setValue(100.0, 1); } catch (_) {}
-                    } else if (pName.indexOf("confidence") >= 0 || pName.indexOf("amount") >= 0 || pName.indexOf("token") >= 0 || pName.indexOf("second") >= 0 || pName.indexOf("trigger") >= 0) {
-                      try { prop.setValue(0.0, 1); } catch (_) {}
-                    } else {
-                      try { prop.setValue(0.0, 1); } catch (_) {}
-                    }
-                  }
-                }
-              }
-            } catch (_) {}
-
-            // Try QE removal again if it wasn't removed yet
-            if (!qeRemoved) {
-              qeRemoved = removeEffectViaQE(ref, effectTargetNames);
-            }
-            appliedToThisClip = true;
-          }
-
-          if (appliedToThisClip) {
-            reset++;
-          } else {
-            skipped++;
-            errors.push(ref.name + ": No color engine effects found to reset");
-          }
-        } catch (error) {
-          skipped++;
-          errors.push(ref.name + ": " + (error.message || String(error)));
-        }
-      }
-
-      if (reset === 0) {
-        throw new Error(
-          errors.length ? errors.join(" | ") : "No color controls were reset."
-        );
-      }
-
-      return ok({ reset: reset, skipped: skipped, errors: errors });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.getSelectedVideoClipCount = function () {
-    try {
-      var seq = app.project.activeSequence;
-      if (!seq) {
-        throw new Error("No active sequence is open.");
-      }
-      return ok({ count: getSelectedVideoClipRefs(seq).length });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.scanMarkers = function (payloadJson) {
-    try {
-      var payload = payloadJson ? parseJson(payloadJson) : {};
-      var seq = app.project.activeSequence;
-      if (!seq) throw new Error("No active sequence is open.");
-      var clip = getExactlyOneSelectedClip();
-      var info = getClipInfo(clip);
-      verifyClipInfo(payload, info);
-      var target = payload.target === "clip" ? "clip" : "sequence";
-      var collection =
-        target === "clip" ? clipMarkerCollection(clip) : seq.markers;
-      var start = target === "clip" ? info.inPointSeconds : info.startSeconds;
-      var end = target === "clip" ? info.outPointSeconds : info.endSeconds;
-      var markers = collectMarkers(collection, start, end);
-      var times = [];
-      for (var i = 0; i < markers.length; i++)
-        times.push(markerTimeSeconds(markers[i]));
-      return ok({ count: times.length, times: times });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.removeMarkersExactTimes = function (payloadJson) {
-    try {
-      var payload = payloadJson ? parseJson(payloadJson) : {};
-      var seq = app.project.activeSequence;
-      if (!seq) throw new Error("No active sequence is open.");
-      var clip = getExactlyOneSelectedClip();
-      var info = getClipInfo(clip);
-      verifyClipInfo(payload, info);
-      var target = payload.target === "clip" ? "clip" : "sequence";
-      var collection =
-        target === "clip" ? clipMarkerCollection(clip) : seq.markers;
-      var wanted = payload.times || [];
-      var removed = 0;
-      if (!collection) throw new Error("Marker collection is unavailable.");
-      for (
-        var marker = collection.getFirstMarker
-          ? collection.getFirstMarker()
-          : null;
-        marker;
-
-      ) {
-        var next = collection.getNextMarker
-          ? collection.getNextMarker(marker)
-          : null;
-        var time = markerTimeSeconds(marker);
-        var owned = isAutoCutStudioMarker(marker);
-        var match = false;
-        for (var i = 0; i < wanted.length; i++) {
-          if (Math.abs(time - Number(wanted[i])) < 0.0005) {
-            match = true;
-            break;
-          }
-        }
-        if (owned && match && deleteMarker(collection, marker)) removed++;
-        marker = next;
-      }
-      return ok({ removed: removed });
-    } catch (error) {
-      return fail(error.message || String(error));
-    }
-  };
-
-  AutoCutStudio.runDiagnostics = function () {
-    var diagnostics = [];
-    try {
-      diagnostics.push("Premiere bridge: OK");
-      diagnostics.push("Premiere version: " + (app.version || "unknown"));
-      if (!app.project) {
-        diagnostics.push("Project: FAIL - app.project unavailable");
-        return ok({ diagnostics: diagnostics });
-      }
-      if (!app.project.activeSequence) {
-        diagnostics.push("Sequence: FAIL - no active sequence");
-        return ok({ diagnostics: diagnostics });
-      }
-      var seq = app.project.activeSequence;
-      diagnostics.push("Sequence: OK - " + seq.name);
       try {
-        var clip = getSelectedClip();
-        var info = getClipInfo(clip);
-        diagnostics.push("Selection: OK - " + info.name);
-        diagnostics.push("Media path: " + info.mediaPath);
-        diagnostics.push(
-          "Sequence marker API: " +
-            (seq.markers && seq.markers.createMarker ? "OK" : "FAIL")
-        );
-        var clipMarkers = clipMarkerCollection(clip);
-        diagnostics.push(
-          "Clip marker API: " +
-            (clipMarkers && clipMarkers.createMarker ? "OK" : "Unavailable")
-        );
-        diagnostics.push("clip.markers: " + (clip.markers ? "exists" : "null"));
-        diagnostics.push(
-          "projectItem.getMarkers: " +
-            (clip.projectItem && clip.projectItem.getMarkers
-              ? "exists"
-              : "null")
-        );
-        diagnostics.push(
-          "projectItem.markers: " +
-            (clip.projectItem && clip.projectItem.markers ? "exists" : "null")
+        assertRefCurrent(ref);
+
+        var components = findComponents(
+          ref.clip,
+          isAutoCutColorComponent
         );
 
-        // Dump ALL components on the clip for debugging
-        diagnostics.push("--- ALL CLIP COMPONENTS ---");
-        if (clip.components) {
-          diagnostics.push("Total components: " + clip.components.numItems);
-          for (var c = 0; c < clip.components.numItems; c++) {
-            var comp = clip.components[c];
-            var dn = "";
-            var mn = "";
-            try {
-              dn = comp.displayName || "";
-            } catch (_) {}
-            try {
-              mn = comp.matchName || "";
-            } catch (_) {}
-            diagnostics.push(
-              "  Component " +
-                c +
-                ": dn='" +
-                dn +
-                "', mn='" +
-                mn +
-                "', enabled=" +
-                (comp.enabled !== undefined ? comp.enabled : "?")
+        if (!components.length) {
+          skipped++;
+          errors.push(ref.name + ": No AutoCutStudio Color Engine found.");
+          continue;
+        }
+
+        var plans = [];
+
+        // Preflight all matching engine instances before changing this clip.
+        for (var c = 0; c < components.length; c++) {
+          var component = components[c];
+          var colorPlan = buildColorPlan(component, defaults);
+          var capturePlan = buildCapturePlan(component, 0, 0, 0);
+          var writes = colorPlan.writes.slice(0);
+
+          var confidence = findProperty(component, [
+            "analysis confidence",
+            "confidence"
+          ]);
+
+          var trigger = findProperty(component, ["auto trigger"]);
+
+          if (confidence) {
+            writes.push({
+              prop: confidence,
+              value: 0,
+              label: "analysis confidence"
+            });
+          }
+
+          if (trigger) {
+            writes.push({
+              prop: trigger,
+              value: 0,
+              label: "auto trigger"
+            });
+          }
+
+          writes = writes.concat(capturePlan);
+          plans.push(writes);
+
+          if (colorPlan.missing.length) {
+            warnings.push(
+              ref.name + ": Unavailable reset controls: " +
+              colorPlan.missing.join(", ")
             );
-            // Dump first-level properties of each component
-            if (comp.properties) {
-              try {
-                for (
-                  var p = 0;
-                  p < Math.min(comp.properties.numItems, 8);
-                  p++
-                ) {
-                  var prop = comp.properties[p];
-                  var pdn = "";
-                  try {
-                    pdn = prop.displayName || "";
-                  } catch (_) {}
-                  diagnostics.push(
-                    "    - Prop " +
-                      p +
-                      ": '" +
-                      pdn +
-                      "' hasSetValue=" +
-                      Boolean(prop.setValue)
-                  );
-                }
-                if (comp.properties.numItems > 8) {
-                  diagnostics.push(
-                    "    ... (" +
-                      (comp.properties.numItems - 8) +
-                      " more properties)"
-                  );
-                }
-              } catch (_) {}
-            }
           }
-        } else {
-          diagnostics.push("No components collection on clip");
         }
 
-        // Print AutoCut Color Engine status
-        var autocutComponent = findAutoCutColorComponent(clip);
-        diagnostics.push(
-          "AutoCut Color Engine via findAutoCutColorComponent: " +
-            (autocutComponent ? "FOUND" : "NOT FOUND")
-        );
+        for (c = 0; c < plans.length; c++) {
+          applyPropertyWrites(plans[c]);
+        }
 
-        // Print Lumetri Color status
-        var lumetriComponent = findLumetriComponent(clip);
-        diagnostics.push(
-          "Lumetri Color via findLumetriComponent: " +
-            (lumetriComponent ? "FOUND" : "NOT FOUND")
-        );
+        delete pendingEffects["color:" + ref.identity];
+        reset++;
+      } catch (error) {
+        skipped++;
+        errors.push(ref.name + ": " + errorMessage(error));
+      }
+    }
 
-        // QE DOM check
+    if (!reset) {
+      throw new Error(errors.join(" | ") || "No color controls were reset.");
+    }
+
+    return {
+      reset: reset,
+      skipped: skipped,
+      errors: errors,
+      warnings: warnings,
+      effectsRemoved: 0
+    };
+  });
+
+  /*
+   * Information and diagnostics.
+   */
+
+  expose("hostInfo", function () {
+    var available = typeof app !== "undefined";
+
+    return {
+      bridgeVersion: BRIDGE_VERSION,
+      extensionVersion: AUTOCUT_EXTENSION_VERSION,
+      hostName: available
+        ? String(safeRead(app, "name", "Premiere Pro"))
+        : "Unavailable",
+      hostVersion: available
+        ? String(safeRead(app, "version", "unknown"))
+        : "unknown",
+      projectAvailable: !!(available && app.project),
+      motionOwnershipPolicy: "current-session-only",
+      ledgerSchemaVersion: LEDGER_SCHEMA_VERSION,
+      markerSchemaVersion: 2
+    };
+  });
+
+  expose("getSelectedClipInfo", function () {
+    return {
+      clip: getClipInfo(getExactlyOneSelectedClip())
+    };
+  });
+
+  expose("getSelectedVideoClipCount", function () {
+    var seq = requireActiveSequence();
+
+    return {
+      count: getSelectedVideoClipRefs(seq).length
+    };
+  });
+
+  expose("runDiagnostics", function () {
+    var diagnostics = [];
+
+    diagnostics.push("Premiere bridge: OK");
+    diagnostics.push("Extension version: " + AUTOCUT_EXTENSION_VERSION);
+    diagnostics.push("JSON codec: strict local implementation");
+    diagnostics.push("Motion ownership: current session only");
+    diagnostics.push("QE removal: disabled for safety");
+
+    if (typeof app === "undefined") {
+      diagnostics.push("Host: FAIL - app unavailable");
+      return { diagnostics: diagnostics };
+    }
+
+    diagnostics.push(
+      "Premiere version: " + String(safeRead(app, "version", "unknown"))
+    );
+
+    if (!app.project) {
+      diagnostics.push("Project: FAIL - app.project unavailable");
+      return { diagnostics: diagnostics };
+    }
+
+    diagnostics.push("Project key: " + projectKey());
+
+    var seq = app.project.activeSequence;
+
+    if (!seq) {
+      diagnostics.push("Sequence: FAIL - no active sequence");
+      return { diagnostics: diagnostics };
+    }
+
+    diagnostics.push("Sequence: OK - " + String(seq.name));
+    diagnostics.push("Sequence ID: " + sequenceKey(seq));
+
+    try {
+      diagnostics.push(
+        "Frame duration: " + activeFrameDuration(seq) + " seconds"
+      );
+    } catch (frameError) {
+      diagnostics.push("Frame duration: FAIL - " + errorMessage(frameError));
+    }
+
+    diagnostics.push(
+      "Sequence marker API: " +
+      (seq.markers && seq.markers.createMarker ? "OK" : "Unavailable")
+    );
+
+    try {
+      var videoRefs = getSelectedVideoClipRefs(seq);
+
+      diagnostics.push("Selected video clips: " + videoRefs.length);
+
+      var allRefs = getSelectedClipRefs(seq, false);
+
+      if (!allRefs.length) {
+        diagnostics.push("Selection: no clips selected");
+      } else {
+        var clip = allRefs[0].clip;
+
+        diagnostics.push("Inspected clip: " + allRefs[0].name);
+        diagnostics.push("TrackItem node ID: " + trackItemId(clip));
+        diagnostics.push("ProjectItem node ID: " + projectItemId(clip));
+
         try {
-          if (app.enableQE) {
-            app.enableQE();
-            var qeSeq = qe.project.getActiveSequence();
-            diagnostics.push("QE DOM: OK");
-            if (qeSeq) {
-              diagnostics.push("QE Sequence: OK");
-            }
-          } else {
-            diagnostics.push("QE DOM: UNAVAILABLE");
-          }
-        } catch (qeErr) {
+          var info = getClipInfo(clip);
+
+          diagnostics.push("Media path: " + info.mediaPath);
           diagnostics.push(
-            "QE DOM: ERROR - " + (qeErr.message || String(qeErr))
+            "Timeline range: " + info.startSeconds + " - " + info.endSeconds
           );
+          diagnostics.push(
+            "Source range: " + info.inPointSeconds + " - " + info.outPointSeconds
+          );
+          diagnostics.push("Reverse: " + info.reversed);
+          diagnostics.push(
+            "Variable time remap flag: " + info.variableTimeRemap
+          );
+        } catch (infoError) {
+          diagnostics.push("Clip info: " + errorMessage(infoError));
         }
-      } catch (selectionError) {
+
+        try {
+          var markers = clipMarkerCollection(clip);
+
+          diagnostics.push(
+            "Source marker API: " +
+            (markers && markers.createMarker ? "OK" : "Unavailable")
+          );
+        } catch (markerError) {
+          diagnostics.push("Source marker API: " + errorMessage(markerError));
+        }
+
+        diagnostics.push("--- CLIP COMPONENTS ---");
+
+        if (clip.components) {
+          diagnostics.push(
+            "Component count: " + clip.components.numItems
+          );
+
+          for (var c = 0; c < clip.components.numItems; c++) {
+            var component = clip.components[c];
+
+            diagnostics.push(
+              "Component " + c +
+              ": display='" + safeRead(component, "displayName", "") +
+              "', match='" + safeRead(component, "matchName", "") + "'"
+            );
+
+            if (!component.properties) {
+              continue;
+            }
+
+            var count = Math.min(component.properties.numItems, 20);
+
+            for (var p = 0; p < count; p++) {
+              var prop = component.properties[p];
+
+              diagnostics.push(
+                "  Property " + p +
+                ": display='" + safeRead(prop, "displayName", "") +
+                "', match='" + safeRead(prop, "matchName", "") +
+                "', writable=" + !!safeRead(prop, "setValue", false)
+              );
+            }
+
+            if (component.properties.numItems > count) {
+              diagnostics.push(
+                "  ... " +
+                (component.properties.numItems - count) +
+                " additional properties"
+              );
+            }
+          }
+        }
+
         diagnostics.push(
-          "Selection: FAIL - " +
-            (selectionError.message || String(selectionError))
+          "AutoCut Color Engine instances: " +
+          findComponents(clip, isAutoCutColorComponent).length
         );
       }
-      return ok({ diagnostics: diagnostics });
-    } catch (error) {
-      return fail(error.message || String(error));
+    } catch (selectionError) {
+      diagnostics.push("Selection: FAIL - " + errorMessage(selectionError));
     }
-  };
+
+    try {
+      var qeProject = enableQEProject();
+      var qeSeq = qeProject.getActiveSequence();
+
+      diagnostics.push("QE DOM: OK");
+      diagnostics.push("QE active sequence: " + (qeSeq ? "OK" : "Unavailable"));
+    } catch (qeError) {
+      diagnostics.push("QE DOM: " + errorMessage(qeError));
+    }
+
+    try {
+      diagnostics.push("Motion ledger: " + motionLedgerPath().fsName);
+      diagnostics.push("Motion ledger records: " + readMotionLedger().length);
+    } catch (ledgerError) {
+      diagnostics.push("Motion ledger: " + errorMessage(ledgerError));
+    }
+
+    diagnostics.push(
+      "Legacy marker removal requires payload.includeLegacy = true."
+    );
+    diagnostics.push(
+      "Native capture completion is asynchronous; a successful request " +
+      "does not itself verify rendered analysis completion."
+    );
+
+    return {
+      diagnostics: diagnostics
+    };
+  });
 })();

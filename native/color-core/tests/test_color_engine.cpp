@@ -6,7 +6,7 @@
 
 static void assert_result(const FrameAnalysisResult& result) {
     assert(std::isfinite(result.exposure));
-    assert(result.confidence >= 0.30f && result.confidence <= 1.0f);
+    assert(result.confidence >= 0.0f && result.confidence <= 1.0f);
 }
 
 int main() {

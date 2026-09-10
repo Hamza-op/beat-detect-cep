@@ -12,10 +12,9 @@ test("panel DOM has a ready application and style boundaries", async ({
     "border-top-color",
     /.+/,
   );
-  await expect(page.locator(".key-node").first()).toHaveCSS(
-    "background-color",
-    /.+/,
-  );
+  await expect(
+    page.locator("#previewKeyframeTrack svg circle").first(),
+  ).toHaveAttribute("fill", /.+/);
 });
 
 test("the shipped marker workflow analyzes and applies through the chunked CEP host API", async ({
@@ -138,11 +137,9 @@ test("Auto Color uses the canonical prepare and apply host functions", async ({
   await page.locator("#mainTabColorButton").click();
   await page.locator("#autoColorButton").click();
   await expect(page.locator("#status")).toContainText(
-    "Editable starting grade applied",
+    "color correction for 1 clip",
   );
-  await expect(page.locator("#status")).toContainText(
-    "Refine it in Effect Controls",
-  );
+  await expect(page.locator("#status")).toContainText("Color science");
 
   const calls = await page.evaluate(
     () =>
@@ -166,12 +163,12 @@ test("the motion toolbox exposes only ten reliable Scale movements", async ({
 }) => {
   await page.goto("http://127.0.0.1:4173/");
   await page.locator("#mainTabToolsButton").click();
-  await expect(page.locator(".movement-btn")).toHaveCount(10);
+  await expect(page.locator(".movement-btn[data-mode]")).toHaveCount(10);
   await expect(page.locator("#mainTabDollyButton")).toHaveCount(0);
   await expect(page.locator("#warpStabilizerButton")).toHaveCount(0);
 
   const modes = await page
-    .locator(".movement-btn")
+    .locator(".movement-btn[data-mode]")
     .evaluateAll((buttons) =>
       buttons.map((button) => button.getAttribute("data-mode")),
     );

@@ -48,7 +48,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       analyzerProcess: null,
       previewAnimationClass: "",
       disabledSnapshot: [],
-      operationId: 0
+      operationId: 0,
     };
 
     var elementIds = [
@@ -95,7 +95,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       "previewEndLabel",
       "selectedMomentLabel",
       "selectedMomentMeta",
-      "githubLink"
+      "githubLink",
     ];
 
     var dom = {};
@@ -105,15 +105,15 @@ import { PRODUCT_VERSION } from "./version.ts";
     });
 
     var colorLookButtons = Array.prototype.slice.call(
-      document.querySelectorAll(".color-look-btn")
+      document.querySelectorAll(".color-look-btn"),
     );
 
     var movementButtons = Array.prototype.slice.call(
-      document.querySelectorAll(".movement-btn")
+      document.querySelectorAll(".movement-btn"),
     );
 
     var presetButtons = Array.prototype.slice.call(
-      document.querySelectorAll(".btn-preset")
+      document.querySelectorAll(".btn-preset"),
     );
 
     var actionIds = [
@@ -125,7 +125,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       "clearZoomButton",
       "autoColorButton",
       "resetColorButton",
-      "clearLogsButton"
+      "clearLogsButton",
     ];
 
     var inputIds = [
@@ -135,7 +135,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       "beatSelectionSlider",
       "zoomSlider",
       "zoomMode",
-      "autoZoomRatio"
+      "autoZoomRatio",
     ];
 
     var lockedControls = [];
@@ -147,7 +147,7 @@ import { PRODUCT_VERSION } from "./version.ts";
     lockedControls = lockedControls.concat(
       colorLookButtons,
       movementButtons,
-      presetButtons
+      presetButtons,
     );
 
     var presetById = {};
@@ -229,10 +229,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
     function getNodeRequire() {
       try {
-        if (
-          window.cep_node &&
-          typeof window.cep_node.require === "function"
-        ) {
+        if (window.cep_node && typeof window.cep_node.require === "function") {
           return function (name) {
             return window.cep_node.require(name);
           };
@@ -241,7 +238,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         if (typeof require === "function") {
           return require;
         }
-      } catch (_) { }
+      } catch (_) {}
 
       return null;
     }
@@ -272,7 +269,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           path: req("path"),
           os: req("os"),
           process: req("process"),
-          childProcess: req("child_process")
+          childProcess: req("child_process"),
         };
       } catch (_) {
         nodeServices = null;
@@ -316,10 +313,10 @@ import { PRODUCT_VERSION } from "./version.ts";
             return nodeCall(services.fs, "mkdir", [directory]).catch(
               function (mkdirError) {
                 if (mkdirError.code !== "EEXIST") throw mkdirError;
-              }
+              },
             );
           });
-        }
+        },
       );
     }
 
@@ -336,12 +333,13 @@ import { PRODUCT_VERSION } from "./version.ts";
       var root;
 
       if (platform === "win32") {
-        root = environment.APPDATA ||
-          services.path.join(home, "AppData", "Roaming");
+        root =
+          environment.APPDATA || services.path.join(home, "AppData", "Roaming");
       } else if (platform === "darwin") {
         root = services.path.join(home, "Library", "Logs");
       } else {
-        root = environment.XDG_STATE_HOME ||
+        root =
+          environment.XDG_STATE_HOME ||
           services.path.join(home, ".local", "state");
       }
 
@@ -351,7 +349,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         services: services,
         directory: directory,
         file: services.path.join(directory, "panel.log"),
-        backup: services.path.join(directory, "panel.log.1")
+        backup: services.path.join(directory, "panel.log.1"),
       };
     }
 
@@ -387,26 +385,16 @@ import { PRODUCT_VERSION } from "./version.ts";
           });
         })
         .then(function (stats) {
-          if (
-            !stats ||
-            stats.size + batch.length * 4 <= MAX_LOG_BYTES
-          ) {
+          if (!stats || stats.size + batch.length * 4 <= MAX_LOG_BYTES) {
             return;
           }
 
           return removeFileIfPresent(fs, location.backup).then(function () {
-            return nodeCall(fs, "rename", [
-              location.file,
-              location.backup
-            ]);
+            return nodeCall(fs, "rename", [location.file, location.backup]);
           });
         })
         .then(function () {
-          return nodeCall(fs, "appendFile", [
-            location.file,
-            batch,
-            "utf8"
-          ]);
+          return nodeCall(fs, "appendFile", [location.file, batch, "utf8"]);
         });
     }
 
@@ -444,7 +432,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
       if (logTimer === null && !state.disposed) {
         logTimer = window.setTimeout(function () {
-          flushLogs().catch(function () { });
+          flushLogs().catch(function () {});
         }, 200);
       }
     }
@@ -479,7 +467,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           if ("disabled" in element) {
             state.disabledSnapshot.push({
               element: element,
-              disabled: !!element.disabled
+              disabled: !!element.disabled,
             });
           }
         });
@@ -500,20 +488,18 @@ import { PRODUCT_VERSION } from "./version.ts";
         lockedControls.forEach(function (element) {
           element.setAttribute(
             "aria-disabled",
-            "disabled" in element && element.disabled ? "true" : "false"
+            "disabled" in element && element.disabled ? "true" : "false",
           );
         });
       }
 
       if (dom.applyButton) {
         dom.applyButton.disabled =
-          locked ||
-          !state.clip ||
-          state.markerEvents.length === 0;
+          locked || !state.clip || state.markerEvents.length === 0;
 
         dom.applyButton.setAttribute(
           "aria-disabled",
-          dom.applyButton.disabled ? "true" : "false"
+          dom.applyButton.disabled ? "true" : "false",
         );
       }
     }
@@ -524,11 +510,7 @@ import { PRODUCT_VERSION } from "./version.ts";
     }
 
     function runOperation(label, operation) {
-      if (
-        state.disposed ||
-        state.isBusy ||
-        state.bridgeUncertain
-      ) {
+      if (state.disposed || state.isBusy || state.bridgeUncertain) {
         return Promise.resolve();
       }
 
@@ -585,14 +567,14 @@ import { PRODUCT_VERSION } from "./version.ts";
       prepareAutoColorAtPlayhead: true,
       autoColorSelectedClips: true,
       resetColorGrade: true,
-      cleanMotionLedger: true
+      cleanMotionLedger: true,
     };
 
     function parseBridgeResult(raw) {
       if (raw === null || raw === undefined || !String(raw).trim()) {
         throw makeError(
           "Premiere returned an empty response.",
-          "BRIDGE_RESPONSE"
+          "BRIDGE_RESPONSE",
         );
       }
 
@@ -601,8 +583,8 @@ import { PRODUCT_VERSION } from "./version.ts";
       if (/^EvalScript error/i.test(text)) {
         throw makeError(
           "Premiere could not execute the bridge request. Verify the host " +
-          "script installation and reopen the panel.",
-          "BRIDGE_RESPONSE"
+            "script installation and reopen the panel.",
+          "BRIDGE_RESPONSE",
         );
       }
 
@@ -613,21 +595,21 @@ import { PRODUCT_VERSION } from "./version.ts";
       } catch (_) {
         throw makeError(
           "Premiere returned invalid bridge data: " + text.slice(0, 240),
-          "BRIDGE_RESPONSE"
+          "BRIDGE_RESPONSE",
         );
       }
 
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
         throw makeError(
           "Premiere returned an invalid bridge payload.",
-          "BRIDGE_RESPONSE"
+          "BRIDGE_RESPONSE",
         );
       }
 
       if (parsed.ok !== true) {
         throw makeError(
           parsed.error || "Premiere operation failed.",
-          "HOST_OPERATION"
+          "HOST_OPERATION",
         );
       }
 
@@ -645,11 +627,13 @@ import { PRODUCT_VERSION } from "./version.ts";
         throw new Error("Unsupported host method: " + method);
       }
 
-      return "AutoCutStudio." + method + "(" +
-        (payload === undefined
-          ? ""
-          : scriptLiteral(JSON.stringify(payload))) +
-        ")";
+      return (
+        "AutoCutStudio." +
+        method +
+        "(" +
+        (payload === undefined ? "" : scriptLiteral(JSON.stringify(payload))) +
+        ")"
+      );
     }
 
     function evalScriptOnce(method, payload, timeoutMs) {
@@ -659,17 +643,19 @@ import { PRODUCT_VERSION } from "./version.ts";
         if (!cs || typeof cs.evalScript !== "function") {
           reject(
             csInitializationError ||
-            new Error("CSInterface is unavailable. Verify CSInterface.js.")
+              new Error("CSInterface is unavailable. Verify CSInterface.js."),
           );
           return;
         }
 
         if (state.bridgeUncertain) {
-          reject(makeError(
-            "A previous Premiere request is still unresolved. Wait for " +
-            "Premiere to finish before retrying.",
-            "BRIDGE_UNCERTAIN"
-          ));
+          reject(
+            makeError(
+              "A previous Premiere request is still unresolved. Wait for " +
+                "Premiere to finish before retrying.",
+              "BRIDGE_UNCERTAIN",
+            ),
+          );
           return;
         }
 
@@ -686,15 +672,19 @@ import { PRODUCT_VERSION } from "./version.ts";
           hostReadyPromise = null;
           syncControls();
 
-          reject(makeError(
-            "Premiere bridge timed out during " + method + ". " +
-            (mutating
-              ? "The edit may still be running; its outcome is unknown. "
-              : "The host request may still be running. ") +
-            "Do not repeat the action. Wait for Premiere to respond and " +
-            "inspect the timeline.",
-            "BRIDGE_TIMEOUT"
-          ));
+          reject(
+            makeError(
+              "Premiere bridge timed out during " +
+                method +
+                ". " +
+                (mutating
+                  ? "The edit may still be running; its outcome is unknown. "
+                  : "The host request may still be running. ") +
+                "Do not repeat the action. Wait for Premiere to respond and " +
+                "inspect the timeline.",
+              "BRIDGE_TIMEOUT",
+            ),
+          );
         }, timeoutMs);
 
         try {
@@ -708,22 +698,25 @@ import { PRODUCT_VERSION } from "./version.ts";
               try {
                 var lateResult = parseBridgeResult(raw);
                 appendLog(
-                  "LATE BRIDGE RESPONSE: " + method + " " +
-                  JSON.stringify(lateResult).slice(0, 4000)
+                  "LATE BRIDGE RESPONSE: " +
+                    method +
+                    " " +
+                    JSON.stringify(lateResult).slice(0, 4000),
                 );
 
                 setStatus(
-                  "Premiere finished the previously timed-out " + method +
-                  " request. Inspect its result before running another action.",
-                  true
+                  "Premiere finished the previously timed-out " +
+                    method +
+                    " request. Inspect its result before running another action.",
+                  true,
                 );
               } catch (lateError) {
                 logError(lateError);
                 setStatus(
                   "The timed-out Premiere request returned: " +
-                  messageOf(lateError) +
-                  " Inspect the timeline before retrying.",
-                  true
+                    messageOf(lateError) +
+                    " Inspect the timeline before retrying.",
+                  true,
                 );
               }
 
@@ -768,14 +761,14 @@ import { PRODUCT_VERSION } from "./version.ts";
         if (state.bridgeUncertain) {
           throw makeError(
             "The previous Premiere request has not completed.",
-            "BRIDGE_UNCERTAIN"
+            "BRIDGE_UNCERTAIN",
           );
         }
 
         return evalScriptOnce(method, payload, timeoutMs);
       });
 
-      bridgeTail = task.catch(function () { });
+      bridgeTail = task.catch(function () {});
       return task;
     }
 
@@ -783,7 +776,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       if (previewMode) {
         return Promise.resolve({
           ok: true,
-          hostVersion: "browser-preview"
+          hostVersion: "browser-preview",
         });
       }
 
@@ -792,7 +785,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       hostReadyPromise = enqueueHostRequest(
         "hostInfo",
         undefined,
-        BRIDGE_READ_TIMEOUT
+        BRIDGE_READ_TIMEOUT,
       ).catch(function (error) {
         hostReadyPromise = null;
         throw error;
@@ -810,9 +803,10 @@ import { PRODUCT_VERSION } from "./version.ts";
       var snapshot;
 
       try {
-        snapshot = payload === undefined
-          ? undefined
-          : JSON.parse(JSON.stringify(payload));
+        snapshot =
+          payload === undefined
+            ? undefined
+            : JSON.parse(JSON.stringify(payload));
       } catch (error) {
         return Promise.reject(error);
       }
@@ -828,9 +822,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         return enqueueHostRequest(
           method,
           snapshot,
-          hostMethods[method]
-            ? BRIDGE_WRITE_TIMEOUT
-            : BRIDGE_READ_TIMEOUT
+          hostMethods[method] ? BRIDGE_WRITE_TIMEOUT : BRIDGE_READ_TIMEOUT,
         );
       });
     }
@@ -857,22 +849,34 @@ import { PRODUCT_VERSION } from "./version.ts";
       durationSeconds: 24,
       playbackRate: 1,
       reversed: false,
-      variableTimeRemap: false
+      variableTimeRemap: false,
     };
 
     var previewMarkers = {
       sequence: [],
-      clip: []
+      clip: [],
     };
 
     function previewHostCall(method, payload) {
       payload = payload || {};
 
+      // Record the call for browser test assertions (mirrors CSInterface.js
+      // recording used when not in preview mode).
+      var callRecord =
+        "AutoCutStudio." +
+        method +
+        "(" +
+        JSON.stringify(JSON.stringify(payload)) +
+        ")";
+      if (window.__autocutPreviewCalls) {
+        window.__autocutPreviewCalls.push(callRecord);
+      }
+
       if (method === "hostInfo") {
         return {
           ok: true,
           hostVersion: "browser-preview",
-          extensionVersion: APP_VERSION
+          extensionVersion: APP_VERSION,
         };
       }
 
@@ -891,8 +895,8 @@ import { PRODUCT_VERSION } from "./version.ts";
             "Browser preview: no Premiere connection",
             "Analyzer: simulated events",
             "Marker edits: in-memory simulation",
-            "Zoom and Color: simulated acknowledgements"
-          ]
+            "Zoom and Color: simulated acknowledgements",
+          ],
         };
       }
 
@@ -927,7 +931,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         return {
           ok: true,
           removed: markers.length - kept.length,
-          errors: []
+          errors: [],
         };
       }
 
@@ -952,9 +956,11 @@ import { PRODUCT_VERSION } from "./version.ts";
             time = clamp(Math.round(time * 30) / 30, 0, 24 - 1 / 30);
           }
 
-          if (markers.some(function (existing) {
-            return Math.abs(existing - time) < 0.000001;
-          })) {
+          if (
+            markers.some(function (existing) {
+              return Math.abs(existing - time) < 0.000001;
+            })
+          ) {
             skipped++;
             duplicates++;
             return;
@@ -964,7 +970,9 @@ import { PRODUCT_VERSION } from "./version.ts";
           created.push(time);
         });
 
-        markers.sort(function (a, b) { return a - b; });
+        markers.sort(function (a, b) {
+          return a - b;
+        });
 
         return {
           ok: true,
@@ -973,7 +981,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           duplicates: duplicates,
           createdTimes: created,
           errors: [],
-          warnings: []
+          warnings: [],
         };
       }
 
@@ -993,7 +1001,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           captureRequested: true,
           colorScience: "Preview only",
           errors: [],
-          warnings: []
+          warnings: [],
         };
       }
 
@@ -1051,14 +1059,15 @@ import { PRODUCT_VERSION } from "./version.ts";
         throw new Error("Node.js is not enabled in this CEP panel.");
       }
 
-      var executable = services.os.platform() === "win32"
-        ? "beat_analyzer.exe"
-        : "beat_analyzer";
+      var executable =
+        services.os.platform() === "win32"
+          ? "beat_analyzer.exe"
+          : "beat_analyzer";
 
       var root = getExtensionRoot();
       var candidates = [
         services.path.join(root, "bin", executable),
-        services.path.join(root, "analyzer", "target", "release", executable)
+        services.path.join(root, "analyzer", "target", "release", executable),
       ];
 
       for (var i = 0; i < candidates.length; i++) {
@@ -1066,12 +1075,12 @@ import { PRODUCT_VERSION } from "./version.ts";
           if (services.fs.statSync(candidates[i]).isFile()) {
             return candidates[i];
           }
-        } catch (_) { }
+        } catch (_) {}
       }
 
       throw new Error(
         "The beat analyzer executable is missing. Reinstall AutoCut Studio " +
-        "or build the analyzer for this operating system."
+          "or build the analyzer for this operating system.",
       );
     }
 
@@ -1084,13 +1093,15 @@ import { PRODUCT_VERSION } from "./version.ts";
       var end = finiteNumber(clip.outPointSeconds, "Source out point");
 
       if (start < 0 || end <= start) {
-        throw new Error("The selected clip has an invalid source in/out range.");
+        throw new Error(
+          "The selected clip has an invalid source in/out range.",
+        );
       }
 
       return {
         start: start,
         end: end,
-        duration: end - start
+        duration: end - start,
       };
     }
 
@@ -1104,7 +1115,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         !clip.identity
       ) {
         throw new Error(
-          "Premiere returned incomplete clip identity or media path information."
+          "Premiere returned incomplete clip identity or media path information.",
         );
       }
 
@@ -1145,7 +1156,8 @@ import { PRODUCT_VERSION } from "./version.ts";
 
         if (
           (typeof event.time !== "number" && typeof event.time !== "string") ||
-          (typeof event.score !== "number" && typeof event.score !== "string") ||
+          (typeof event.score !== "number" &&
+            typeof event.score !== "string") ||
           event.time === "" ||
           event.score === ""
         ) {
@@ -1190,7 +1202,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
         events.push({
           time: Number(time.toFixed(6)),
-          score: beat % 8 === 0 ? 0.88 : beat % 4 === 0 ? 0.76 : 0.64
+          score: beat % 8 === 0 ? 0.88 : beat % 4 === 0 ? 0.76 : 0.64,
         });
       }
 
@@ -1242,7 +1254,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           range.start.toFixed(6),
           "--duration",
           range.duration.toFixed(6),
-          mediaPath
+          mediaPath,
         ];
 
         var child;
@@ -1256,7 +1268,7 @@ import { PRODUCT_VERSION } from "./version.ts";
               shell: false,
               encoding: "utf8",
               maxBuffer: MAX_ANALYZER_BUFFER,
-              timeout: ANALYZER_TIMEOUT
+              timeout: ANALYZER_TIMEOUT,
             },
             function (error, stdout, stderr) {
               if (state.analyzerProcess === child) {
@@ -1273,25 +1285,31 @@ import { PRODUCT_VERSION } from "./version.ts";
                   error.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
                   /maxBuffer/i.test(messageOf(error))
                 ) {
-                  reject(new Error(
-                    "Analyzer output exceeded the size limit. Analyze a shorter cut."
-                  ));
+                  reject(
+                    new Error(
+                      "Analyzer output exceeded the size limit. Analyze a shorter cut.",
+                    ),
+                  );
                   return;
                 }
 
                 if (error.killed) {
-                  reject(new Error(
-                    "The analyzer timed out or was terminated. Try a shorter " +
-                    "clip or transcode the audio first."
-                  ));
+                  reject(
+                    new Error(
+                      "The analyzer timed out or was terminated. Try a shorter " +
+                        "clip or transcode the audio first.",
+                    ),
+                  );
                   return;
                 }
 
-                reject(new Error(
-                  String(stderr || error.message || "Analyzer failed.")
-                    .trim()
-                    .slice(0, 4000)
-                ));
+                reject(
+                  new Error(
+                    String(stderr || error.message || "Analyzer failed.")
+                      .trim()
+                      .slice(0, 4000),
+                  ),
+                );
                 return;
               }
 
@@ -1313,23 +1331,29 @@ import { PRODUCT_VERSION } from "./version.ts";
 
                 if (parsed.length !== events.length) {
                   appendLog(
-                    "Analyzer validation: " + parsed.length +
-                    " records received; " + events.length +
-                    " valid unique records retained."
+                    "Analyzer validation: " +
+                      parsed.length +
+                      " records received; " +
+                      events.length +
+                      " valid unique records retained.",
                   );
                 }
 
                 if (String(stderr || "").trim()) {
-                  appendLog("Analyzer stderr: " + String(stderr).slice(0, 4000));
+                  appendLog(
+                    "Analyzer stderr: " + String(stderr).slice(0, 4000),
+                  );
                 }
 
                 resolve(events);
               } catch (parseError) {
-                reject(new Error(
-                  "Invalid analyzer output: " + messageOf(parseError)
-                ));
+                reject(
+                  new Error(
+                    "Invalid analyzer output: " + messageOf(parseError),
+                  ),
+                );
               }
-            }
+            },
           );
 
           state.analyzerProcess = child;
@@ -1345,12 +1369,14 @@ import { PRODUCT_VERSION } from "./version.ts";
 
     function beatSelectionPercentage() {
       return clamp(
-        Math.round(numberOr(
-          dom.beatSelectionSlider ? dom.beatSelectionSlider.value : 100,
-          100
-        )),
+        Math.round(
+          numberOr(
+            dom.beatSelectionSlider ? dom.beatSelectionSlider.value : 100,
+            100,
+          ),
+        ),
         5,
-        100
+        100,
       );
     }
 
@@ -1358,9 +1384,9 @@ import { PRODUCT_VERSION } from "./version.ts";
       if (!events.length) return [];
 
       var count = clamp(
-        Math.round(events.length * percentage / 100),
+        Math.round((events.length * percentage) / 100),
         1,
-        events.length
+        events.length,
       );
 
       if (count === events.length) return events.slice();
@@ -1369,7 +1395,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       var result = [];
 
       for (var i = 0; i < count; i++) {
-        var index = Math.round(i * (events.length - 1) / (count - 1));
+        var index = Math.round((i * (events.length - 1)) / (count - 1));
         result.push(events[index]);
       }
 
@@ -1383,17 +1409,20 @@ import { PRODUCT_VERSION } from "./version.ts";
       setText(dom.filteredCount, state.markerEvents.length);
       setText(
         dom.totalCount,
-        "of " + state.allEvents.length + " detected beat markers"
+        "of " + state.allEvents.length + " detected beat markers",
       );
 
       setText(
         dom.beatSelectionSummary,
         state.allEvents.length
-          ? "Keeps " + state.markerEvents.length + " of " +
-          state.allEvents.length + " detected beats."
+          ? "Keeps " +
+              state.markerEvents.length +
+              " of " +
+              state.allEvents.length +
+              " detected beats."
           : percentage === 100
             ? "Uses every detected beat."
-            : "Will keep approximately " + percentage + "% of detected beats."
+            : "Will keep approximately " + percentage + "% of detected beats.",
       );
 
       syncControls();
@@ -1436,15 +1465,13 @@ import { PRODUCT_VERSION } from "./version.ts";
             throw new Error("Beat selector returned an empty selection.");
           }
         } catch (error) {
-          appendLog(
-            "Beat selector fallback: " + messageOf(error)
-          );
+          appendLog("Beat selector fallback: " + messageOf(error));
           selected = null;
         }
       }
 
-      state.markerEvents = selected ||
-        evenlySelect(state.allEvents, percentage);
+      state.markerEvents =
+        selected || evenlySelect(state.allEvents, percentage);
 
       updateBeatSelectionUI();
     }
@@ -1462,11 +1489,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         maximum = 500;
       }
 
-      return clamp(
-        Math.round(numberOr(slider.value, 0)),
-        minimum,
-        maximum
-      );
+      return clamp(Math.round(numberOr(slider.value, 0)), minimum, maximum);
     }
 
     function updateMarkerTimingOffsetLabel() {
@@ -1474,14 +1497,17 @@ import { PRODUCT_VERSION } from "./version.ts";
 
       setText(
         dom.markerTimingOffsetLabel,
-        (offset > 0 ? "+" : "") + offset + " ms"
+        (offset > 0 ? "+" : "") + offset + " ms",
       );
     }
 
     function markerTimingDescription(offset) {
       return offset
-        ? " (" + Math.abs(offset) + " ms " +
-        (offset < 0 ? "earlier" : "later") + ")"
+        ? " (" +
+            Math.abs(offset) +
+            " ms " +
+            (offset < 0 ? "earlier" : "later") +
+            ")"
         : "";
     }
 
@@ -1504,10 +1530,13 @@ import { PRODUCT_VERSION } from "./version.ts";
           var range = clipAnalysisRange(clip);
 
           setStatus(
-            "Analyzing the selected cut (" + formatSeconds(range.duration) +
-            ") from " + clip.name + "...",
+            "Analyzing the selected cut (" +
+              formatSeconds(range.duration) +
+              ") from " +
+              clip.name +
+              "...",
             false,
-            true
+            true,
           );
 
           var analyzed = await runAnalyzer(clip.mediaPath, clip);
@@ -1526,20 +1555,29 @@ import { PRODUCT_VERSION } from "./version.ts";
           }
 
           appendLog(
-            "Beat range: " + analyzed.length + " analyzer events; " +
-            cropped.length + " inside the selected source range."
+            "Beat range: " +
+              analyzed.length +
+              " analyzer events; " +
+              cropped.length +
+              " inside the selected source range.",
           );
 
           setStatus(
-            "Analysis complete: " + cropped.length +
-            " beats detected; keeping " + state.markerEvents.length +
-            " at " + beatSelectionPercentage() + "% selection" +
-            (previewMode ? " using simulated events." : " using the Rust analyzer."),
+            "Analysis complete: " +
+              cropped.length +
+              " beats detected; keeping " +
+              state.markerEvents.length +
+              " at " +
+              beatSelectionPercentage() +
+              "% selection" +
+              (previewMode
+                ? " using simulated events."
+                : " using the Rust analyzer."),
             false,
             false,
-            true
+            true,
           );
-        }
+        },
       );
     }
 
@@ -1575,7 +1613,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         "startSeconds",
         "endSeconds",
         "inPointSeconds",
-        "outPointSeconds"
+        "outPointSeconds",
       ];
 
       fields.forEach(function (field) {
@@ -1612,8 +1650,9 @@ import { PRODUCT_VERSION } from "./version.ts";
         errors.length
       ) {
         throw new Error(
-          label + " was incomplete." +
-          (errors.length ? " " + errors.join(" | ") : "")
+          label +
+            " was incomplete." +
+            (errors.length ? " " + errors.join(" | ") : ""),
         );
       }
     }
@@ -1646,7 +1685,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         var events = state.markerEvents.map(function (event) {
           return {
             time: Number((event.time + offset / 1000).toFixed(6)),
-            score: event.score
+            score: event.score,
           };
         });
 
@@ -1659,7 +1698,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         if (!applicable.length) {
           throw new Error(
             "The timing offset moves every selected beat outside the clip. " +
-            "No markers were changed."
+              "No markers were changed.",
           );
         }
 
@@ -1677,7 +1716,8 @@ import { PRODUCT_VERSION } from "./version.ts";
 
           if (existingCount > 0) {
             var question =
-              "Replace " + existingCount +
+              "Replace " +
+              existingCount +
               " AutoCut Studio markers in the selected range?\n\n" +
               "Premiere cannot make this replacement atomic. If applying " +
               "new markers fails, removed markers are not automatically restored.";
@@ -1701,7 +1741,7 @@ import { PRODUCT_VERSION } from "./version.ts";
             target === "clip" &&
             !window.confirm(
               "Add source markers to this media?\n\nSource markers are " +
-              "shared by all timeline instances of the project item."
+                "shared by all timeline instances of the project item.",
             )
           ) {
             throw makeError("Marker apply cancelled.", "CANCELLED");
@@ -1715,17 +1755,18 @@ import { PRODUCT_VERSION } from "./version.ts";
             assertActive();
 
             var payload = copyObject(base);
-            payload.events = applicable.slice(
-              index,
-              index + MARKER_CHUNK_SIZE
-            );
+            payload.events = applicable.slice(index, index + MARKER_CHUNK_SIZE);
 
             setStatus(
-              "Applying markers " + (index + 1) + "–" +
-              Math.min(index + MARKER_CHUNK_SIZE, applicable.length) +
-              " of " + applicable.length + "...",
+              "Applying markers " +
+                (index + 1) +
+                "–" +
+                Math.min(index + MARKER_CHUNK_SIZE, applicable.length) +
+                " of " +
+                applicable.length +
+                "...",
               false,
-              true
+              true,
             );
 
             mutationAttempted = true;
@@ -1737,9 +1778,7 @@ import { PRODUCT_VERSION } from "./version.ts";
             duplicates += numberOr(result.duplicates, 0);
 
             if (Array.isArray(result.createdTimes)) {
-              acknowledgedTimes = acknowledgedTimes.concat(
-                result.createdTimes
-              );
+              acknowledgedTimes = acknowledgedTimes.concat(result.createdTimes);
             }
 
             if (Array.isArray(result.warnings)) {
@@ -1756,14 +1795,17 @@ import { PRODUCT_VERSION } from "./version.ts";
 
           setStatus(
             (removed ? "Removed " + removed + " previous markers. " : "") +
-            "Applied " + totalApplied +
-            "; skipped " + totalSkipped +
-            (duplicates ? " (" + duplicates + " duplicates)" : "") +
-            markerTimingDescription(offset) + "." +
-            (warnings.length ? " Warnings: " + warnings.join(" | ") : ""),
+              "Applied " +
+              totalApplied +
+              "; skipped " +
+              totalSkipped +
+              (duplicates ? " (" + duplicates + " duplicates)" : "") +
+              markerTimingDescription(offset) +
+              "." +
+              (warnings.length ? " Warnings: " + warnings.join(" | ") : ""),
             false,
             false,
-            warnings.length === 0
+            warnings.length === 0,
           );
         } catch (error) {
           if (error.code === "CANCELLED") throw error;
@@ -1771,21 +1813,25 @@ import { PRODUCT_VERSION } from "./version.ts";
           if (!mutationAttempted) throw error;
 
           appendLog(
-            "MARKER PARTIAL STATE: removed=" + removed +
-            ", acknowledgedApplied=" + totalApplied +
-            ", acknowledgedTimes=" +
-            JSON.stringify(acknowledgedTimes).slice(0, 8000)
+            "MARKER PARTIAL STATE: removed=" +
+              removed +
+              ", acknowledgedApplied=" +
+              totalApplied +
+              ", acknowledgedTimes=" +
+              JSON.stringify(acknowledgedTimes).slice(0, 8000),
           );
 
           var partialError = makeError(
             messageOf(error) +
-            "\nConfirmed changes: removed " + removed +
-            " previous markers; created " + totalApplied +
-            " new markers. No automatic rollback was attempted. " +
-            "Existing removals cannot be restored by this panel. " +
-            "Inspect Premiere before retrying; an unacknowledged request " +
-            "may have made additional changes.",
-            error.code || "MARKER_PARTIAL"
+              "\nConfirmed changes: removed " +
+              removed +
+              " previous markers; created " +
+              totalApplied +
+              " new markers. No automatic rollback was attempted. " +
+              "Existing removals cannot be restored by this panel. " +
+              "Inspect Premiere before retrying; an unacknowledged request " +
+              "may have made additional changes.",
+            error.code || "MARKER_PARTIAL",
           );
 
           throw partialError;
@@ -1811,7 +1857,8 @@ import { PRODUCT_VERSION } from "./version.ts";
           }
 
           var question =
-            "Remove " + count +
+            "Remove " +
+            count +
             " AutoCut Studio markers from the selected range?";
 
           if (target === "clip") {
@@ -1834,9 +1881,9 @@ import { PRODUCT_VERSION } from "./version.ts";
             "Removed " + removed + " AutoCut Studio markers.",
             false,
             false,
-            true
+            true,
           );
-        }
+        },
       );
     }
 
@@ -1848,7 +1895,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       return clamp(
         numberOr(dom.zoomSlider ? dom.zoomSlider.value : 110, 110),
         101,
-        150
+        150,
       );
     }
 
@@ -1870,10 +1917,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       if (!autoZoomEnabled()) return;
 
       var preset = presetById[state.activeZoomMode];
-      setZoomRatio(
-        preset ? numberOr(preset.autoRatio, 110) : 110,
-        true
-      );
+      setZoomRatio(preset ? numberOr(preset.autoRatio, 110) : 110, true);
     }
 
     function syncMovementButtons() {
@@ -1907,22 +1951,31 @@ import { PRODUCT_VERSION } from "./version.ts";
 
     function keyframePreviewPoints(mode, ratio) {
       var preset = getPreset(mode) || getPreset("smooth_in");
-      var points = preset && typeof preset.keyframePattern === "function"
-        ? preset.keyframePattern(ratio)
-        : [[0, 100], [100, ratio]];
+      var points =
+        preset && typeof preset.keyframePattern === "function"
+          ? preset.keyframePattern(ratio)
+          : [
+              [0, 100],
+              [100, ratio],
+            ];
 
       if (!Array.isArray(points) || !points.length) {
-        return [[0, 100], [100, ratio]];
+        return [
+          [0, 100],
+          [100, ratio],
+        ];
       }
 
-      return points.map(function (point) {
-        return [
-          clamp(finiteNumber(point[0], "Preview keyframe time"), 0, 100),
-          finiteNumber(point[1], "Preview keyframe scale")
-        ];
-      }).sort(function (a, b) {
-        return a[0] - b[0];
-      });
+      return points
+        .map(function (point) {
+          return [
+            clamp(finiteNumber(point[0], "Preview keyframe time"), 0, 100),
+            finiteNumber(point[1], "Preview keyframe scale"),
+          ];
+        })
+        .sort(function (a, b) {
+          return a[0] - b[0];
+        });
     }
 
     function renderKeyframePreview(mode, ratio) {
@@ -1931,11 +1984,19 @@ import { PRODUCT_VERSION } from "./version.ts";
       var points = keyframePreviewPoints(mode, ratio);
       var minScale = Math.min.apply(
         Math,
-        [100].concat(points.map(function (point) { return point[1]; }))
+        [100].concat(
+          points.map(function (point) {
+            return point[1];
+          }),
+        ),
       );
       var maxScale = Math.max.apply(
         Math,
-        [150].concat(points.map(function (point) { return point[1]; }))
+        [150].concat(
+          points.map(function (point) {
+            return point[1];
+          }),
+        ),
       );
 
       var ns = "http://www.w3.org/2000/svg";
@@ -1945,13 +2006,12 @@ import { PRODUCT_VERSION } from "./version.ts";
       var svg = document.createElementNS(ns, "svg");
 
       function xFor(time) {
-        return pad + time / 100 * (width - pad * 2);
+        return pad + (time / 100) * (width - pad * 2);
       }
 
       function yFor(scale) {
         var normalized = (scale - minScale) / (maxScale - minScale || 1);
-        return height - pad -
-          clamp(normalized, 0, 1) * (height - pad * 2);
+        return height - pad - clamp(normalized, 0, 1) * (height - pad * 2);
       }
 
       svg.setAttribute("viewBox", "0 0 " + width + " " + height);
@@ -1988,20 +2048,17 @@ import { PRODUCT_VERSION } from "./version.ts";
 
       while (dom.previewKeyframeTrack.firstChild) {
         dom.previewKeyframeTrack.removeChild(
-          dom.previewKeyframeTrack.firstChild
+          dom.previewKeyframeTrack.firstChild,
         );
       }
 
       dom.previewKeyframeTrack.appendChild(svg);
 
-      setText(
-        dom.previewStartLabel,
-        Math.round(points[0][1]) + "% start"
-      );
+      setText(dom.previewStartLabel, Math.round(points[0][1]) + "% start");
 
       setText(
         dom.previewEndLabel,
-        Math.round(points[points.length - 1][1]) + "% end"
+        Math.round(points[points.length - 1][1]) + "% end",
       );
     }
 
@@ -2010,7 +2067,8 @@ import { PRODUCT_VERSION } from "./version.ts";
       var preset = presetById[mode];
       var ratio = zoomRatio();
       var auto = autoZoomEnabled();
-      var displayName = state.activeMovementLabel ||
+      var displayName =
+        state.activeMovementLabel ||
         (preset ? preset.name : mode.replace(/_/g, " "));
 
       if (dom.previewSubject) {
@@ -2021,7 +2079,8 @@ import { PRODUCT_VERSION } from "./version.ts";
         state.previewAnimationClass = "animate-" + mode.replace(/_/g, "-");
         dom.previewSubject.classList.add("preview-subject");
 
-        var reduceMotion = window.matchMedia &&
+        var reduceMotion =
+          window.matchMedia &&
           window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
         if (!reduceMotion) {
@@ -2030,7 +2089,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
         dom.previewSubject.style.setProperty(
           "--autocut-preview-scale",
-          String(ratio / 100)
+          String(ratio / 100),
         );
       }
 
@@ -2040,12 +2099,14 @@ import { PRODUCT_VERSION } from "./version.ts";
       setText(dom.selectedMomentLabel, displayName);
       setText(
         dom.selectedMomentMeta,
-        (preset ? preset.description : "Scale movement across the selected clip.") +
-        (auto ? " Auto strength also depends on clip duration." : "")
+        (preset
+          ? preset.description
+          : "Scale movement across the selected clip.") +
+          (auto ? " Auto strength also depends on clip duration." : ""),
       );
       setText(
         dom.previewRatioLabel,
-        (auto ? "AUTO BASE " : "MANUAL ") + ratio + "%"
+        (auto ? "AUTO BASE " : "MANUAL ") + ratio + "%",
       );
 
       renderKeyframePreview(mode, ratio);
@@ -2062,12 +2123,17 @@ import { PRODUCT_VERSION } from "./version.ts";
       });
 
       setStatus(
-        label + " " + count + " clip" + (count === 1 ? "" : "s") +
-        (skipped ? "; skipped " + skipped : "") + "." +
-        (issues.length ? " Details: " + issues.join(" | ") : ""),
+        label +
+          " " +
+          count +
+          " clip" +
+          (count === 1 ? "" : "s") +
+          (skipped ? "; skipped " + skipped : "") +
+          "." +
+          (issues.length ? " Details: " + issues.join(" | ") : ""),
         count === 0 && issues.length > 0,
         false,
-        clean
+        clean,
       );
     }
 
@@ -2078,12 +2144,12 @@ import { PRODUCT_VERSION } from "./version.ts";
           var payload = {
             zoom: zoomRatio(),
             style: state.activeZoomMode,
-            autoRatio: autoZoomEnabled()
+            autoRatio: autoZoomEnabled(),
           };
 
           var result = await callHost("applyGimbalZoom", payload);
           showBatchResult(result, "applied", "Applied zoom keyframes to");
-        }
+        },
       );
     }
 
@@ -2093,7 +2159,7 @@ import { PRODUCT_VERSION } from "./version.ts";
         async function () {
           var result = await callHost("clearGimbalZoom");
           showBatchResult(result, "cleared", "Cleared owned zoom keyframes on");
-        }
+        },
       );
     }
 
@@ -2105,10 +2171,10 @@ import { PRODUCT_VERSION } from "./version.ts";
       return clamp(
         numberOr(
           dom.colorIntensitySlider ? dom.colorIntensitySlider.value : 100,
-          100
+          100,
         ),
         0,
-        200
+        200,
       );
     }
 
@@ -2116,7 +2182,7 @@ import { PRODUCT_VERSION } from "./version.ts";
       var names = {
         skin_tone: "Skin Tone & Balance",
         wedding_cinema: "Wedding Cinema",
-        cinematic_warm: "Cinematic Warm"
+        cinematic_warm: "Cinematic Warm",
       };
 
       return owns(names, look) ? names[look] : look.replace(/_/g, " ");
@@ -2152,7 +2218,7 @@ import { PRODUCT_VERSION } from "./version.ts";
             if (Date.now() - started >= 10000) {
               throw new Error(
                 "Color Engine insertion is still pending. Check Effect " +
-                "Controls and the native plugin installation before retrying."
+                  "Controls and the native plugin installation before retrying.",
               );
             }
 
@@ -2162,7 +2228,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
           var result = await callHost("autoColorSelectedClips", {
             look: look,
-            intensity: intensity / 100
+            intensity: intensity / 100,
           });
 
           var applied = countValue(result, "applied");
@@ -2175,29 +2241,33 @@ import { PRODUCT_VERSION } from "./version.ts";
           setText(
             dom.colorStatusLabel,
             (requested ? "capture requested at " : "applied at ") +
-            intensity + "% intensity"
+              intensity +
+              "% intensity",
           );
 
           setStatus(
             (requested ? "Requested " : "Applied ") +
-            label + " color correction for " + applied +
-            " clip" + (applied === 1 ? "" : "s") +
-            (result.captureFrameSeconds !== undefined
-              ? " at playhead " + formatSeconds(result.captureFrameSeconds)
-              : "") +
-            "." +
-            (requested
-              ? " Native analysis may finish asynchronously; inspect the rendered frame."
-              : "") +
-            (result.colorScience
-              ? " Color science: " + result.colorScience + "."
-              : "") +
-            (issues.length ? " Details: " + issues.join(" | ") : ""),
+              label +
+              " color correction for " +
+              applied +
+              " clip" +
+              (applied === 1 ? "" : "s") +
+              (result.captureFrameSeconds !== undefined
+                ? " at playhead " + formatSeconds(result.captureFrameSeconds)
+                : "") +
+              "." +
+              (requested
+                ? " Native analysis may finish asynchronously; inspect the rendered frame."
+                : "") +
+              (result.colorScience
+                ? " Color science: " + result.colorScience + "."
+                : "") +
+              (issues.length ? " Details: " + issues.join(" | ") : ""),
             false,
             false,
-            !requested && issues.length === 0
+            !requested && issues.length === 0,
           );
-        }
+        },
       );
     }
 
@@ -2218,7 +2288,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           }
 
           showBatchResult(result, "reset", "Reset color controls on");
-        }
+        },
       );
     }
 
@@ -2264,7 +2334,7 @@ import { PRODUCT_VERSION } from "./version.ts";
 
       if (!services || previewMode) {
         return Promise.reject(
-          new Error("Native clipboard access is unavailable.")
+          new Error("Native clipboard access is unavailable."),
         );
       }
 
@@ -2275,7 +2345,9 @@ import { PRODUCT_VERSION } from "./version.ts";
       else if (platform === "darwin") command = "/usr/bin/pbcopy";
       else {
         return Promise.reject(
-          new Error("Native clipboard fallback is unsupported on this platform.")
+          new Error(
+            "Native clipboard fallback is unsupported on this platform.",
+          ),
         );
       }
 
@@ -2297,11 +2369,13 @@ import { PRODUCT_VERSION } from "./version.ts";
           child = services.childProcess.spawn(command, [], {
             shell: false,
             windowsHide: true,
-            stdio: ["pipe", "ignore", "ignore"]
+            stdio: ["pipe", "ignore", "ignore"],
           });
 
           timer = window.setTimeout(function () {
-            try { child.kill(); } catch (_) { }
+            try {
+              child.kill();
+            } catch (_) {}
             finish(new Error("Clipboard helper timed out."));
           }, 5000);
 
@@ -2311,7 +2385,7 @@ import { PRODUCT_VERSION } from "./version.ts";
             finish(
               code === 0
                 ? null
-                : new Error("Clipboard helper exited with code " + code + ".")
+                : new Error("Clipboard helper exited with code " + code + "."),
             );
           });
 
@@ -2330,12 +2404,13 @@ import { PRODUCT_VERSION } from "./version.ts";
     }
 
     function copyToClipboard(text) {
-      var browserCopy = navigator.clipboard &&
+      var browserCopy =
+        navigator.clipboard &&
         typeof navigator.clipboard.writeText === "function"
-        ? Promise.resolve().then(function () {
-          return navigator.clipboard.writeText(text);
-        })
-        : Promise.reject(new Error("Clipboard API unavailable."));
+          ? Promise.resolve().then(function () {
+              return navigator.clipboard.writeText(text);
+            })
+          : Promise.reject(new Error("Clipboard API unavailable."));
 
       return browserCopy
         .catch(function () {
@@ -2353,7 +2428,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           var checks = [
             "AutoCut Studio: v" + APP_VERSION,
             "Mode: " + (previewMode ? "browser preview" : "Premiere CEP"),
-            "CEP Node: " + (getNodeServices() ? "available" : "unavailable")
+            "CEP Node: " + (getNodeServices() ? "available" : "unavailable"),
           ];
 
           if (!previewMode) {
@@ -2390,17 +2465,25 @@ import { PRODUCT_VERSION } from "./version.ts";
             bridgeFailed
               ? "Diagnostics completed with a bridge error."
               : "Diagnostics complete.",
-            bridgeFailed
+            bridgeFailed,
           );
 
-          if (window.confirm(
-            "DIAGNOSTICS REPORT\n\n" + report +
-            "\n\nThis report may contain local file paths. Copy it to the clipboard?"
-          )) {
+          if (
+            window.confirm(
+              "DIAGNOSTICS REPORT\n\n" +
+                report +
+                "\n\nThis report may contain local file paths. Copy it to the clipboard?",
+            )
+          ) {
             await copyToClipboard(report);
-            setStatus("Diagnostics copied to the clipboard.", false, false, true);
+            setStatus(
+              "Diagnostics copied to the clipboard.",
+              false,
+              false,
+              true,
+            );
           }
-        }
+        },
       );
     }
 
@@ -2427,14 +2510,11 @@ import { PRODUCT_VERSION } from "./version.ts";
               return nodeCall(location.services.fs, "writeFile", [
                 location.file,
                 "",
-                "utf8"
+                "utf8",
               ]);
             })
             .then(function () {
-              return removeFileIfPresent(
-                location.services.fs,
-                location.backup
-              );
+              return removeFileIfPresent(location.services.fs, location.backup);
             });
         });
 
@@ -2451,27 +2531,32 @@ import { PRODUCT_VERSION } from "./version.ts";
       {
         name: "markers",
         button: dom.mainTabMarkersButton,
-        panel: dom.mainTabMarkers
+        panel: dom.mainTabMarkers,
       },
       {
         name: "color",
         button: dom.mainTabColorButton,
-        panel: dom.mainTabColor
+        panel: dom.mainTabColor,
       },
       {
         name: "tools",
         button: dom.mainTabToolsButton,
-        panel: dom.mainTabTools
+        panel: dom.mainTabTools,
       },
       {
         name: "diagnostics",
         button: dom.mainTabDiagnosticsButton,
-        panel: dom.mainTabDiagnostics
-      }
+        panel: dom.mainTabDiagnostics,
+      },
     ];
 
     function activateMainTab(name, focus) {
-      if (!tabs.some(function (tab) { return tab.name === name; })) return;
+      if (
+        !tabs.some(function (tab) {
+          return tab.name === name;
+        })
+      )
+        return;
 
       tabs.forEach(function (tab) {
         var active = tab.name === name;
@@ -2534,115 +2619,147 @@ import { PRODUCT_VERSION } from "./version.ts";
       clearZoomButton: clearGimbalZoom,
       autoColorButton: autoColorSelectedClips,
       resetColorButton: resetColorGrade,
-      clearLogsButton: clearLogs
+      clearLogsButton: clearLogs,
     };
 
     Object.keys(actions).forEach(function (id) {
-      listen(dom[id], "click", guardedControl(function (event) {
-        event.preventDefault();
-        return actions[id]();
-      }));
+      listen(
+        dom[id],
+        "click",
+        guardedControl(function (event) {
+          event.preventDefault();
+          return actions[id]();
+        }),
+      );
     });
 
     colorLookButtons.forEach(function (button) {
-      listen(button, "click", guardedControl(function (event) {
-        event.preventDefault();
+      listen(
+        button,
+        "click",
+        guardedControl(function (event) {
+          event.preventDefault();
 
-        var look = button.getAttribute("data-look") || "skin_tone";
+          var look = button.getAttribute("data-look") || "skin_tone";
 
-        if (
-          look !== "skin_tone" &&
-          look !== "wedding_cinema" &&
-          look !== "cinematic_warm"
-        ) {
-          throw new Error("Unsupported color look: " + look);
-        }
+          if (
+            look !== "skin_tone" &&
+            look !== "wedding_cinema" &&
+            look !== "cinematic_warm"
+          ) {
+            throw new Error("Unsupported color look: " + look);
+          }
 
-        state.selectedColorLook = look;
-        syncColorLookButtons();
-        return autoColorSelectedClips();
-      }));
+          state.selectedColorLook = look;
+          syncColorLookButtons();
+          return autoColorSelectedClips();
+        }),
+      );
     });
 
-    listen(dom.colorIntensitySlider, "input", guardedControl(function () {
-      setText(dom.colorIntensityLabel, colorIntensity() + "%");
-    }));
+    listen(
+      dom.colorIntensitySlider,
+      "input",
+      guardedControl(function () {
+        setText(dom.colorIntensityLabel, colorIntensity() + "%");
+      }),
+    );
 
-    listen(dom.colorIntensitySlider, "change", guardedControl(function () {
-      return autoColorSelectedClips();
-    }));
+    listen(
+      dom.colorIntensitySlider,
+      "change",
+      guardedControl(function () {
+        return autoColorSelectedClips();
+      }),
+    );
 
     listen(
       dom.markerTimingOffsetSlider,
       "input",
-      guardedControl(updateMarkerTimingOffsetLabel)
+      guardedControl(updateMarkerTimingOffsetLabel),
+    );
+
+    listen(dom.beatSelectionSlider, "input", guardedControl(filterEvents));
+
+    listen(
+      dom.zoomSlider,
+      "input",
+      guardedControl(function () {
+        if (dom.autoZoomRatio) dom.autoZoomRatio.checked = false;
+        refreshZoomPreview();
+      }),
     );
 
     listen(
-      dom.beatSelectionSlider,
-      "input",
-      guardedControl(filterEvents)
+      dom.zoomMode,
+      "change",
+      guardedControl(function () {
+        selectZoomMode(dom.zoomMode.value, false, "");
+      }),
     );
 
-    listen(dom.zoomSlider, "input", guardedControl(function () {
-      if (dom.autoZoomRatio) dom.autoZoomRatio.checked = false;
-      refreshZoomPreview();
-    }));
-
-    listen(dom.zoomMode, "change", guardedControl(function () {
-      selectZoomMode(dom.zoomMode.value, false, "");
-    }));
-
-    listen(dom.autoZoomRatio, "change", guardedControl(function () {
-      if (autoZoomEnabled()) applyAutoRatioForMode();
-      refreshZoomPreview();
-    }));
+    listen(
+      dom.autoZoomRatio,
+      "change",
+      guardedControl(function () {
+        if (autoZoomEnabled()) applyAutoRatioForMode();
+        refreshZoomPreview();
+      }),
+    );
 
     movementButtons.forEach(function (button) {
-      listen(button, "click", guardedControl(function (event) {
-        event.preventDefault();
+      listen(
+        button,
+        "click",
+        guardedControl(function (event) {
+          event.preventDefault();
 
-        selectZoomMode(
-          button.getAttribute("data-mode"),
-          false,
-          String(button.textContent || "").trim()
-        );
+          selectZoomMode(
+            button.getAttribute("data-mode"),
+            false,
+            String(button.textContent || "").trim(),
+          );
 
-        var ratio = button.getAttribute("data-ratio");
+          var ratio = button.getAttribute("data-ratio");
 
-        if (ratio !== null && ratio !== "") {
-          // An explicit shortcut ratio is manual, not silently ignored by auto mode.
-          setZoomRatio(ratio, false);
-        }
+          if (ratio !== null && ratio !== "") {
+            // An explicit shortcut ratio is manual, not silently ignored by auto mode.
+            setZoomRatio(ratio, false);
+          }
 
-        return applyGimbalZoom();
-      }));
+          return applyGimbalZoom();
+        }),
+      );
     });
 
     presetButtons.forEach(function (button) {
       // Avoid binding the same shortcut twice.
       if (movementButtons.indexOf(button) >= 0) return;
 
-      listen(button, "click", guardedControl(function (event) {
-        event.preventDefault();
+      listen(
+        button,
+        "click",
+        guardedControl(function (event) {
+          event.preventDefault();
 
-        var mode = button.getAttribute("data-mode");
-        var ratio = button.getAttribute("data-ratio");
+          var mode = button.getAttribute("data-mode");
+          var ratio = button.getAttribute("data-ratio");
 
-        if (mode) {
-          selectZoomMode(
-            mode,
-            false,
-            String(button.textContent || "").trim()
-          );
-        }
+          if (mode) {
+            selectZoomMode(
+              mode,
+              false,
+              String(button.textContent || "").trim(),
+            );
+          }
 
-        if (ratio !== null && ratio !== "") {
-          setZoomRatio(ratio, false);
-        }
+          if (ratio !== null && ratio !== "") {
+            setZoomRatio(ratio, false);
+          }
 
-        return applyGimbalZoom();
-      }));
+          return applyGimbalZoom();
+        }),
+      );
     });
 
     tabs.forEach(function (tab) {
@@ -2698,14 +2815,23 @@ import { PRODUCT_VERSION } from "./version.ts";
         if (opened) opened.opener = null;
       } catch (error) {
         logError(error);
-        setStatus("Could not open the project website: " + messageOf(error), true);
+        setStatus(
+          "Could not open the project website: " + messageOf(error),
+          true,
+        );
       }
     });
 
     window.addEventListener("error", function (event) {
       appendLog(
-        "WINDOW ERROR: " + event.message +
-        " at " + event.filename + ":" + event.lineno + ":" + event.colno
+        "WINDOW ERROR: " +
+          event.message +
+          " at " +
+          event.filename +
+          ":" +
+          event.lineno +
+          ":" +
+          event.colno,
       );
 
       if (event.error) logError(event.error);
@@ -2714,9 +2840,9 @@ import { PRODUCT_VERSION } from "./version.ts";
     window.addEventListener("unhandledrejection", function (event) {
       appendLog(
         "UNHANDLED PROMISE: " +
-        (event.reason && event.reason.stack
-          ? event.reason.stack
-          : messageOf(event.reason))
+          (event.reason && event.reason.stack
+            ? event.reason.stack
+            : messageOf(event.reason)),
       );
     });
 
@@ -2727,12 +2853,12 @@ import { PRODUCT_VERSION } from "./version.ts";
       if (state.analyzerProcess) {
         try {
           state.analyzerProcess.kill();
-        } catch (_) { }
+        } catch (_) {}
         state.analyzerProcess = null;
       }
 
       // Best effort only; browsers do not guarantee async work on unload.
-      flushLogs().catch(function () { });
+      flushLogs().catch(function () {});
     });
 
     /*
@@ -2765,7 +2891,10 @@ import { PRODUCT_VERSION } from "./version.ts";
 
     if (owns(presetById, initialMode)) {
       state.activeZoomMode = initialMode;
-    } else if (!owns(presetById, state.activeZoomMode) && MOVEMENT_PRESETS.length) {
+    } else if (
+      !owns(presetById, state.activeZoomMode) &&
+      MOVEMENT_PRESETS.length
+    ) {
       state.activeZoomMode = MOVEMENT_PRESETS[0].id;
     }
 
@@ -2791,14 +2920,14 @@ import { PRODUCT_VERSION } from "./version.ts";
     if (previewMode) {
       setStatus(
         "Browser preview mode. Analysis is simulated; Premiere actions " +
-        "only update in-memory preview data."
+          "only update in-memory preview data.",
       );
     } else {
       ensureHostReady().then(
         function (info) {
           appendLog(
             "Premiere host bridge ready: " +
-            (info.hostVersion || "unknown version")
+              (info.hostVersion || "unknown version"),
           );
 
           if (!state.isBusy && !state.disposed) {
@@ -2811,8 +2940,10 @@ import { PRODUCT_VERSION } from "./version.ts";
             String(info.extensionVersion) !== String(APP_VERSION)
           ) {
             appendLog(
-              "VERSION NOTICE: panel=" + APP_VERSION +
-              ", host=" + info.extensionVersion
+              "VERSION NOTICE: panel=" +
+                APP_VERSION +
+                ", host=" +
+                info.extensionVersion,
             );
           }
         },
@@ -2822,7 +2953,7 @@ import { PRODUCT_VERSION } from "./version.ts";
           if (!state.disposed) {
             setStatus(messageOf(error), true);
           }
-        }
+        },
       );
     }
   }

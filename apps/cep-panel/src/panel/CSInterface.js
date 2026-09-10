@@ -11,7 +11,7 @@
 
   if (!window.SystemPath) {
     window.SystemPath = {
-      EXTENSION: "extension"
+      EXTENSION: "extension",
     };
   }
 
@@ -27,7 +27,10 @@
   };
 
   CSInterface.prototype.evalScript = function (script, callback) {
-    if (window.__adobe_cep__ && typeof window.__adobe_cep__.evalScript === "function") {
+    if (
+      window.__adobe_cep__ &&
+      typeof window.__adobe_cep__.evalScript === "function"
+    ) {
       window.__adobe_cep__.evalScript(script, callback);
       return;
     }
@@ -36,17 +39,19 @@
 
     if (typeof callback === "function") {
       if (script.indexOf("AutoCutStudio.getSelectedClipInfo") === 0) {
-        callback(JSON.stringify({
-          ok: true,
-          clip: {
-            name: "Browser Preview Track",
-            mediaPath: "__autocut_studio_preview__",
-            startSeconds: 0,
-            endSeconds: 42,
-            inPointSeconds: 0,
-            outPointSeconds: 42
-          }
-        }));
+        callback(
+          JSON.stringify({
+            ok: true,
+            clip: {
+              name: "Browser Preview Track",
+              mediaPath: "__autocut_studio_preview__",
+              startSeconds: 0,
+              endSeconds: 42,
+              inPointSeconds: 0,
+              outPointSeconds: 42,
+            },
+          }),
+        );
         return;
       }
 
@@ -86,7 +91,9 @@
       }
 
       if (script.indexOf("AutoCutStudio.clearGimbalZoom") === 0) {
-        callback(JSON.stringify({ ok: true, cleared: 3, skipped: 0, errors: [] }));
+        callback(
+          JSON.stringify({ ok: true, cleared: 3, skipped: 0, errors: [] }),
+        );
         return;
       }
 
@@ -96,25 +103,27 @@
       }
 
       if (script.indexOf("AutoCutStudio.autoColorSelectedClips") === 0) {
-        callback(JSON.stringify({
-          ok: true,
-          applied: 1,
-          skipped: 0,
-          errors: [],
-          clips: [
-            { name: "Preview Clip", trackIndex: 0, clipIndex: 0 }
-          ],
-          engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
-          usedNativeAuto: true,
-          autoAmount: 80,
-          captureFrameSeconds: 12.5,
-          colorScience: "SDR Standard (Preview)"
-        }));
+        callback(
+          JSON.stringify({
+            ok: true,
+            applied: 1,
+            skipped: 0,
+            errors: [],
+            clips: [{ name: "Preview Clip", trackIndex: 0, clipIndex: 0 }],
+            engine: "AutoCutStudio Native Color Engine (Playhead Frame Grade)",
+            usedNativeAuto: true,
+            autoAmount: 80,
+            captureFrameSeconds: 12.5,
+            colorScience: "SDR Standard (Preview)",
+          }),
+        );
         return;
       }
 
       if (script.indexOf("AutoCutStudio.resetColorGrade") === 0) {
-        callback(JSON.stringify({ ok: true, reset: 1, skipped: 0, errors: [] }));
+        callback(
+          JSON.stringify({ ok: true, reset: 1, skipped: 0, errors: [] }),
+        );
         return;
       }
 
@@ -124,21 +133,27 @@
       }
 
       if (script.indexOf("AutoCutStudio.runDiagnostics") === 0) {
-        callback(JSON.stringify({
-          ok: true,
-          diagnostics: [
-            "Browser preview: OK",
-            "Premiere bridge: simulated",
-            "Selection: simulated"
-          ]
-        }));
+        callback(
+          JSON.stringify({
+            ok: true,
+            diagnostics: [
+              "Browser preview: OK",
+              "Premiere bridge: simulated",
+              "Selection: simulated",
+            ],
+          }),
+        );
         return;
       }
 
-      callback(JSON.stringify({ ok: false, error: "Adobe CEP bridge is unavailable." }));
+      callback(
+        JSON.stringify({
+          ok: false,
+          error: "Adobe CEP bridge is unavailable.",
+        }),
+      );
     }
   };
 
   window.CSInterface = CSInterface;
 })();
-

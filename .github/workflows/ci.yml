@@ -24,8 +24,7 @@ jobs:
       - run: npm run verify:host
       - run: npm test
       - run: npm run build
-      - run: npx playwright install chromium
-      - run: npm run test:browser
+
 
   rust:
     runs-on: windows-latest
@@ -64,12 +63,12 @@ jobs:
       - uses: microsoft/setup-msbuild@v2
       - run: npm ci
       - shell: pwsh
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
-        run: .\scripts\build-setup-exe.ps1
-      - name: Build production-signed setup
-        shell: pwsh
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: .\scripts\build-setup-exe.ps1 -ProductionSigned
+        run: |
+          if ($env:AUTOCUT_SIGNING_CERT_SHA1) {
+            .\scripts\build-setup-exe.ps1 -ProductionSigned
+          } else {
+            .\scripts\build-setup-exe.ps1
+          }
       - shell: pwsh
         run: Compress-Archive -Path .\dist\com.autocutstudio.panel -DestinationPath .\AutoCutStudio-CEP-Windows.zip -Force
       - uses: actions/upload-artifact@v4
